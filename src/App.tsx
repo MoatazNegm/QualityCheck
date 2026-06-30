@@ -5,6 +5,7 @@ import LoginScreen from './components/LoginScreen';
 import Dashboard from './components/Dashboard';
 import TestExecution from './components/TestExecution';
 import Header from './components/Header';
+import VersionFooter from './components/VersionFooter';
 
 const AppContent: React.FC = () => {
   const { user, isLoading } = useAuth();
@@ -14,15 +15,18 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       {user && <Header />}
-      <Routes>
-        <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
-        <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
-        <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
-        <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
-      </Routes>
-    </>
+      <div style={{ flex: 1 }}>
+        <Routes>
+          <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
+          <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
+          <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
+          <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
+        </Routes>
+      </div>
+      <VersionFooter />
+    </div>
   );
 };
 

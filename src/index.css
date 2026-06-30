@@ -620,3 +620,15 @@ body {
     transform: scale(1);
   }
 }
+
+/* Version Footer */
+.version-footer {
+  text-align: center;
+  padding: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  background: rgba(11, 15, 25, 0.4);
+  width: 100%;
+  margin-top: auto;
+}
