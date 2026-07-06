@@ -4,6 +4,7 @@ const { testsDb, usersDb } = require('../db/db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { authenticateToken } = require('../middleware/auth');
 
 // Configure uploads
 const uploadDir = path.join(__dirname, '../../uploads');
@@ -85,34 +86,45 @@ router.get('/user/:userId/test/:testId', (req, res) => {
   }
 });
 
-// Submit test result
-router.post('/:testId/steps/:stepId', upload.single('configFile'), async (req, res) => {
+// Submit test result (userId from auth token)
+router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFile'), async (req, res) => {
   try {
     const { testId, stepId } = req.params;
-    const userId = req.body.userId || 1; // In real app, get from auth token
+    const userId = req.user.userId; // always from JWT — never trust client-supplied userId
     const { result, comment } = req.body;
-    
+
     if (!result || !['pass', 'fail'].includes(result)) {
       return res.status(400).json({ error: 'Result must be pass or fail' });
     }
-    
-    // Get user from database (for validation)
-    const user = usersDb.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
+
     let configFilePath = null;
     if (req.file) {
       configFilePath = `/uploads/${req.file.filename}`;
     }
-    
+
+    // Upsert: remove any previous result for this user/test/step before inserting
+    testsDb.prepare(
+      'DELETE FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
+    ).run(userId, testId, stepId);
+
     const resultId = testsDb.prepare(`
       INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(userId, testId, stepId, result, comment || null, configFilePath);
-    
+
     res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Clear all results for a user+test (restart)
+router.delete('/user/:userId/test/:testId', authenticateToken, (req, res) => {
+  try {
+    testsDb.prepare(
+      'DELETE FROM test_results WHERE user_id = ? AND test_id = ?'
+    ).run(req.params.userId, req.params.testId);
+    res.json({ message: 'Results cleared' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -124,7 +136,7 @@ router.get('/user/:userId', (req, res) => {
     const { userId } = req.params;
     
     const results = testsDb.prepare(`
-      SELECT tr.*, t.name as test_name, ts.description as step_description
+      SELECT tr.*, t.name as test_name, ts.step_number, ts.description as step_description
       FROM test_results tr
       JOIN tests t ON tr.test_id = t.id
       JOIN test_steps ts ON tr.step_id = ts.id
