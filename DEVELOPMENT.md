@@ -12,13 +12,14 @@ QualityCheck/
 │   ├── db/                 # Database initialization and connection (db.js)
 │   ├── googleDrive/        # Unused/partially implemented Google Drive sync (driveService.js)
 │   ├── middleware/         # Express middlewares (auth.js)
-│   └── routes/             # API routes (auth, users, tests, test-results, reports)
+│   └── routes/             # API routes (auth, users, tests, test-results, reports, backup)
 ├── src/                    # React frontend
 │   ├── components/         # React UI components (Dashboard, TestExecution, AdminPanel, etc.)
 │   ├── context/            # State contexts (AuthContext)
 │   ├── constants.ts        # Frontend constants (like APP_VERSION)
 │   └── App.tsx             # Main App entry point
 ├── uploads/                # Directory for uploaded compliance configuration files
+├── public/                 # Static assets (Q.png, quickstor-logo.png, etc.)
 ├── users.db, tests.db      # SQLite databases (generated at root on startup)
 ├── seed.js                 # Database seeding script (populates tests.db)
 ├── .env                    # Environment variables file
@@ -41,7 +42,9 @@ The application supports two roles:
    - Can manage users (create, delete, update roles).
    - Can assign/unassign tests to/from users.
    - Can view user execution history and performance reports.
-   - Can dynamically import new tests and steps from Excel spreadsheets (`.xlsx` or `.xls`).
+    - Can dynamically import new tests and steps from Excel spreadsheets (`.xlsx` or `.xls`).
+    - Can backup and restore all application data (users, tests, results, assignments) via the **Backup / Restore** tab in the admin panel.
+    - Backup exports a JSON file containing all database records. Restore replaces all current data with the uploaded backup.
 
 ## Database Structure
 
@@ -102,6 +105,11 @@ NODE_ENV=development
 > 1. `driveService.js` is not imported anywhere in the backend server.
 > 2. It contains broken imports (`const auth = require('./auth')` but `./auth` does not exist in the googleDrive directory).
 > 3. No cron/scheduled jobs or auto-backups are configured.
+
+## SPA Serving Note
+
+> [!WARNING]
+> The production server uses `fs.readFileSync` instead of `res.sendFile` for the SPA catch-all route. This is a workaround for an **Express 5 incompatibility** where `res.sendFile()` throws `NotFoundError` after `express.static()` fails to match a route. Do not revert this to `res.sendFile` unless the Express 5 bug is fixed.
 
 ## Rebuilding and Restarting on Port 4005
 
