@@ -8,9 +8,12 @@ const Header: React.FC = () => {
   return (
     <header className='header'>
       <div className='header-content'>
-        <NavLink to='/dashboard' className='logo'>
-          QualityCheck
-        </NavLink>
+        <div className='header-left'>
+          <img src='/Q.png' alt='Q logo' className='header-q-logo' />
+          <NavLink to='/dashboard' className='logo'>
+            QualityCheck
+          </NavLink>
+        </div>
         <div className='user-info'>
           {user && (
             <>

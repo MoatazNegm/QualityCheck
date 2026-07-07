@@ -39,7 +39,7 @@ const AdminPanel: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -49,6 +49,10 @@ const AdminPanel: React.FC = () => {
   const [userSuccess, setUserSuccess] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const backupFileRef = useRef<HTMLInputElement>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
+  const [backupError, setBackupError] = useState('');
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -179,6 +183,76 @@ const AdminPanel: React.FC = () => {
     fetchUsers();
   };
 
+  const handleBackupExport = async () => {
+    setBackupLoading(true);
+    setBackupError('');
+    setBackupMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/backup/export`, {
+        headers: authHeaders,
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Export failed');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const disposition = res.headers.get('Content-Disposition');
+      let filename = 'qualitycheck-backup.json';
+      if (disposition && disposition.includes('filename=')) {
+        filename = disposition.split('filename=')[1].replace(/"/g, '').trim();
+      }
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setBackupMessage('Backup downloaded successfully.');
+    } catch (err: any) {
+      setBackupError(err.message || 'Network error during export');
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleBackupImport = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const file = backupFileRef.current?.files?.[0];
+    if (!file) return;
+
+    if (!window.confirm('This will replace all current data with the backup. This cannot be undone. Continue?')) return;
+
+    setBackupLoading(true);
+    setBackupError('');
+    setBackupMessage('');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/backup/import`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBackupError(data.error || 'Restore failed');
+      } else {
+        setBackupMessage('Backup restored successfully.');
+        if (backupFileRef.current) backupFileRef.current.value = '';
+        fetchTests();
+        fetchUsers();
+      }
+    } catch {
+      setBackupError('Network error during restore');
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
   return (
     <div className="admin-panel">
       <h2>Admin Panel</h2>
@@ -201,6 +275,12 @@ const AdminPanel: React.FC = () => {
           onClick={() => setActiveTab('users')}
         >
           Users
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
+          onClick={() => setActiveTab('backup')}
+        >
+          Backup / Restore
         </button>
       </div>
 
@@ -315,6 +395,37 @@ const AdminPanel: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'backup' && (
+        <div className="admin-section">
+          <h3>Backup All Data</h3>
+          <p className="admin-hint">
+            Download a JSON backup containing all users, tests, steps, results, and assignments.
+          </p>
+          <button className="btn" onClick={handleBackupExport} disabled={backupLoading}>
+            {backupLoading ? 'Preparing...' : 'Download Backup'}
+          </button>
+
+          <h3 style={{ marginTop: '2rem' }}>Restore from Backup</h3>
+          <p className="admin-hint">
+            Upload a previously exported backup file to restore all data. This will replace all current data.
+          </p>
+          <form onSubmit={handleBackupImport} className="upload-form">
+            <input
+              ref={backupFileRef}
+              type="file"
+              accept=".json"
+              className="file-input"
+            />
+            <button type="submit" className="btn" disabled={backupLoading}>
+              {backupLoading ? 'Restoring...' : 'Restore Backup'}
+            </button>
+          </form>
+
+          {backupError && <p className="error-msg">{backupError}</p>}
+          {backupMessage && <p className="success-msg">{backupMessage}</p>}
         </div>
       )}
       {historyUser && (

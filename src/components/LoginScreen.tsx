@@ -23,6 +23,7 @@ const LoginScreen: React.FC = () => {
 
   return (
     <div className='login-container'>
+      <img src='/quickstor-logo.png' alt='Quickstor Logo' className='login-logo' />
       <h2>QualityCheck Login</h2>
       <form onSubmit={handleSubmit}>
         <div>
