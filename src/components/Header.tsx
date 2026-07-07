@@ -14,6 +14,18 @@ const Header: React.FC = () => {
             QualityCheck
           </NavLink>
         </div>
+        <div className='header-nav'>
+          {user?.isAdmin && (
+            <>
+              <NavLink to='/dashboard' className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+                Dashboard
+              </NavLink>
+              <NavLink to='/admin' className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+                Admin Panel
+              </NavLink>
+            </>
+          )}
+        </div>
         <div className='user-info'>
           {user && (
             <>
