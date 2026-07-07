@@ -70,6 +70,17 @@ try {
   console.error('Failed to initialize database tables:', err);
 }
 
+// Migration: add points column to test_steps if it doesn't exist
+try {
+  const cols = testsDb.prepare('PRAGMA table_info(test_steps)').all();
+  if (!cols.some(c => c.name === 'points')) {
+    testsDb.exec('ALTER TABLE test_steps ADD COLUMN points INTEGER DEFAULT 10');
+    console.log('Migration: added points column to test_steps');
+  }
+} catch (err) {
+  console.error('Migration failed:', err);
+}
+
 module.exports = {
   usersDb,
   testsDb,

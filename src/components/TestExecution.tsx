@@ -10,6 +10,7 @@ interface TestStep {
   success_symptom: string;
   value: number;
   on_failure: string;
+  points: number;
 }
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4006';
@@ -166,6 +167,9 @@ const TestExecution: React.FC = () => {
         {currentStep.success_symptom && (
           <p><strong>Expected Success:</strong> {currentStep.success_symptom}</p>
         )}
+        <p className='step-points'>
+          <span className='points-badge'>{currentStep.points ?? 10} pts</span>
+        </p>
         {isAlreadyDone && (
           <p className='step-redo-warning'>⚠ You already submitted a result for this step. Submitting again will replace it.</p>
         )}
