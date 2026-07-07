@@ -52,6 +52,15 @@ function initDB() {
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
     FOREIGN KEY (step_id) REFERENCES test_steps(id) ON DELETE CASCADE
   )`);
+
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS test_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
+    UNIQUE(test_id, user_id)
+  )`);
 }
 
 // Call initDB immediately to ensure tables are created on startup

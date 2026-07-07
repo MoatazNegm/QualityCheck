@@ -7,7 +7,7 @@ const { usersDb } = require('../db/db');
 router.get('/', (req, res) => {
   try {
     const users = usersDb.prepare(
-      'SELECT id, username, is_admin, created_at FROM users'
+      'SELECT id, username, is_admin FROM users'
     ).all();
     
     res.json(users);
