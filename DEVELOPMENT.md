@@ -77,6 +77,28 @@ Non-admin users must complete their assigned tests in a strict, sequential, repe
 - **Always advance the version before a rebuild/redeploy.** Run `node scripts/advance_version.js` from the project root, which increments the patch component of `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`).
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 
+## Admin: Manage Test Steps
+
+The **Manage Tests** tab in the admin panel lets an admin open any test and manage its steps in a table:
+
+- **Edit step description** inline (what the user must do for that step).
+- **Edit points** awarded per step (`value` / `points` column in `test_steps`).
+- **Set failure behavior** per step via `on_failure`:
+  - `continue` — a failed step lets the user proceed to the next step.
+  - `stop` — a failed step hard-stops the entire test (user is returned to the dashboard).
+- **Add a step** between existing steps (choose "After step N" or "At the end"); step numbers are re-sequenced automatically (1..n) after every insert/delete via the reorder endpoint.
+- **Delete a step** (also re-sequences the remaining steps).
+
+Backing endpoints (admin-authenticated) in `server/routes/tests.js`:
+- `GET /api/tests/:id` — test with its steps (ordered by `step_number`).
+- `POST /api/tests/:id/steps` — add a step.
+- `PUT /api/tests/:id/steps/:stepId` — update description, points, and `on_failure`.
+- `DELETE /api/tests/:id/steps/:stepId` — delete a step.
+- `PUT /api/tests/:id/steps/reorder` — re-number steps sequentially.
+
+> [!NOTE]
+> The `test_steps` table stores points in two columns, `value` (original) and `points` (added by migration). All step writes keep the two columns in sync, so either can be treated as the points value.
+
 ## Key Values and Locations
 
 ### Configuration

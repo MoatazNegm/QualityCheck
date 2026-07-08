@@ -227,8 +227,8 @@ router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, (
     if (isNaN(points) || points < 0) {
       return res.status(400).json({ error: 'Points must be a non-negative number' });
     }
-    testsDb.prepare('UPDATE test_steps SET points = ? WHERE id = ? AND test_id = ?')
-      .run(points, req.params.stepId, req.params.testId);
+    testsDb.prepare('UPDATE test_steps SET points = ?, value = ? WHERE id = ? AND test_id = ?')
+      .run(points, points, req.params.stepId, req.params.testId);
     res.json({ message: 'Points updated' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -289,12 +289,13 @@ router.post('/:id/steps', (req, res) => {
     const { id } = req.params;
     const { step_number, description, success_symptom, value, on_failure } = req.body;
     
+    const pointsVal = value || 0;
     const result = testsDb.prepare(`
-      INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, on_failure)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, success_symptom, value || 0, on_failure || 'continue');
+      INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, step_number, description, success_symptom, pointsVal, pointsVal, on_failure || 'continue');
     
-    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom, value, on_failure });
+    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom, value: pointsVal, points: pointsVal, on_failure });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -305,12 +306,13 @@ router.put('/:testId/steps/:stepId', (req, res) => {
   try {
     const { testId, stepId } = req.params;
     const { step_number, description, success_symptom, value, on_failure } = req.body;
-    
+    const pointsVal = value || 0;
+
     testsDb.prepare(`
-      UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, on_failure = ?
+      UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
       WHERE id = ? AND test_id = ?
-    `).run(step_number, description, success_symptom, value, on_failure, stepId, testId);
-    
+    `).run(step_number, description, success_symptom, pointsVal, pointsVal, on_failure, stepId, testId);
+
     res.json({ message: 'Step updated successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });

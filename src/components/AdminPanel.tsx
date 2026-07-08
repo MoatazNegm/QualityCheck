@@ -34,7 +34,9 @@ interface TestStepAdmin {
   step_number: number;
   description: string;
   success_symptom: string;
+  value: number;
   points: number;
+  on_failure: string;
 }
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4006';
@@ -47,7 +49,7 @@ const AdminPanel: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -197,8 +199,79 @@ const AdminPanel: React.FC = () => {
     });
     setManagedSteps(prev => ({
       ...prev,
-      [testId]: (prev[testId] || []).map(s => s.id === stepId ? { ...s, points } : s)
+      [testId]: (prev[testId] || []).map(s => s.id === stepId ? { ...s, points, value: points } : s)
     }));
+  };
+
+  // Renumber a test's steps sequentially (1..n) after an insert/delete.
+  const normalizeSteps = async (testId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/${testId}`, { headers: authHeaders });
+      if (!res.ok) { setManagedSteps(prev => ({ ...prev, [testId]: [] })); return; }
+      const data = await res.json();
+      const ordered = (data.steps || []).slice().sort((a: TestStepAdmin, b: TestStepAdmin) => a.step_number - b.step_number);
+      const stepOrder = ordered.map((s: TestStepAdmin, i: number) => ({ id: s.id, step_number: i + 1 }));
+      await fetch(`${API_BASE}/api/tests/${testId}/steps/reorder`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stepOrder })
+      });
+      setManagedSteps(prev => ({ ...prev, [testId]: ordered.map((s: TestStepAdmin, i: number) => ({ ...s, step_number: i + 1 })) }));
+    } catch {
+      fetchTestSteps(testId);
+    }
+  };
+
+  const saveStep = async (testId: number, step: TestStepAdmin) => {
+    const pointsVal = Number(step.value) || 0;
+    await fetch(`${API_BASE}/api/tests/${testId}/steps/${step.id}`, {
+      method: 'PUT',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        step_number: step.step_number,
+        description: step.description,
+        success_symptom: step.success_symptom || '',
+        value: pointsVal,
+        on_failure: step.on_failure
+      })
+    });
+    setManagedSteps(prev => ({
+      ...prev,
+      [testId]: (prev[testId] || []).map(s => s.id === step.id ? {
+        ...s,
+        description: step.description,
+        value: pointsVal,
+        points: pointsVal,
+        on_failure: step.on_failure
+      } : s)
+    }));
+  };
+
+  const deleteStep = async (testId: number, stepId: number) => {
+    if (!window.confirm('Delete this step? This cannot be undone.')) return;
+    await fetch(`${API_BASE}/api/tests/${testId}/steps/${stepId}`, { method: 'DELETE', headers: authHeaders });
+    await normalizeSteps(testId);
+  };
+
+  const addStep = async (
+    testId: number,
+    payload: { afterStepNumber: number | null; description: string; points: number; on_failure: string }
+  ) => {
+    const steps = managedSteps[testId] || [];
+    const maxStep = steps.length ? Math.max(...steps.map(s => s.step_number)) : 0;
+    const stepNumber = payload.afterStepNumber === null ? maxStep + 1 : payload.afterStepNumber + 0.5;
+    await fetch(`${API_BASE}/api/tests/${testId}/steps`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        step_number: stepNumber,
+        description: payload.description.trim(),
+        success_symptom: '',
+        value: payload.points,
+        on_failure: payload.on_failure
+      })
+    });
+    await normalizeSteps(testId);
   };
 
   const handleDeleteTest = async (testId: number, testName: string) => {
@@ -325,6 +398,12 @@ const AdminPanel: React.FC = () => {
         >
           Manage Tests
         </button>
+        <button
+          className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
+          onClick={() => setActiveTab('backup')}
+        >
+          Backup / Restore
+        </button>
       </div>
 
       {activeTab === 'upload' && (
@@ -421,8 +500,13 @@ const AdminPanel: React.FC = () => {
 
       {activeTab === 'manage' && (
         <div className="admin-section">
-          <h3>Edit Test Points</h3>
-          <p className="admin-hint">Expand a test to view and edit the points for each step.</p>
+          <h3>Manage Test Steps</h3>
+          <p className="admin-hint">
+            Expand a test to edit its steps. Change the description and the points awarded per step,
+            and choose what happens when a step fails: <strong>continue</strong> to the next step or
+            <strong> hard-stop</strong> the whole test. Insert a new step between existing ones, or delete a step.
+            Step numbers are kept sequential automatically.
+          </p>
           {tests.length === 0 ? (
             <p>No tests available. Upload an Excel file first.</p>
           ) : (
@@ -434,7 +518,9 @@ const AdminPanel: React.FC = () => {
                   steps={managedSteps[test.id]}
                   loading={loadingSteps.has(test.id)}
                   onExpand={() => fetchTestSteps(test.id)}
-                  onUpdatePoints={(stepId, points) => updatePoints(test.id, stepId, points)}
+                  onSaveStep={(step) => saveStep(test.id, step)}
+                  onDeleteStep={(stepId) => deleteStep(test.id, stepId)}
+                  onAddStep={(payload) => addStep(test.id, payload)}
                   onDelete={() => handleDeleteTest(test.id, test.name)}
                 />
               ))}
@@ -598,28 +684,69 @@ interface ManageTestRowProps {
   steps: TestStepAdmin[] | undefined;
   loading: boolean;
   onExpand: () => void;
-  onUpdatePoints: (stepId: number, points: number) => void;
+  onSaveStep: (step: TestStepAdmin) => void;
+  onDeleteStep: (stepId: number) => void;
+  onAddStep: (payload: { afterStepNumber: number | null; description: string; points: number; on_failure: string }) => void;
   onDelete: () => void;
 }
 
-const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onExpand, onUpdatePoints, onDelete }) => {
+const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onExpand, onSaveStep, onDeleteStep, onAddStep, onDelete }) => {
   const [open, setOpen] = useState(false);
-  const [localPoints, setLocalPoints] = useState<Record<number, string>>({});
+  const [drafts, setDrafts] = useState<Record<number, { description: string; points: string; on_failure: string }>>({});
+
+  // Add-step form state
+  const [newDesc, setNewDesc] = useState('');
+  const [newPoints, setNewPoints] = useState('0');
+  const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('continue');
+  const [insertAfter, setInsertAfter] = useState<string>('end');
+  const [adding, setAdding] = useState(false);
 
   const handleToggle = () => {
     if (!open) onExpand();
     setOpen(o => !o);
   };
 
-  const handlePointsBlur = (stepId: number) => {
-    const val = parseInt(localPoints[stepId] ?? '', 10);
-    if (!isNaN(val) && val >= 0) {
-      onUpdatePoints(stepId, val);
+  const getDraft = (step: TestStepAdmin) =>
+    drafts[step.id] || {
+      description: step.description,
+      points: String(step.points ?? step.value ?? 0),
+      on_failure: step.on_failure
+    };
+
+  const setDraft = (stepId: number, patch: Partial<{ description: string; points: string; on_failure: string }>) =>
+    setDrafts(prev => ({ ...prev, [stepId]: { ...(prev[stepId] || { description: '', points: '0', on_failure: 'continue' }), ...patch } }));
+
+  const handleSave = (step: TestStepAdmin) => {
+    const d = getDraft(step);
+    onSaveStep({
+      ...step,
+      description: d.description,
+      value: Number(d.points) || 0,
+      on_failure: d.on_failure
+    });
+  };
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDesc.trim()) return;
+    setAdding(true);
+    try {
+      await onAddStep({
+        afterStepNumber: insertAfter === 'end' ? null : parseFloat(insertAfter),
+        description: newDesc,
+        points: Number(newPoints) || 0,
+        on_failure: newOnFailure
+      });
+      setNewDesc('');
+      setNewPoints('0');
+      setNewOnFailure('continue');
+      setInsertAfter('end');
+    } finally {
+      setAdding(false);
     }
   };
 
-  const getDisplayPoints = (step: TestStepAdmin) =>
-    localPoints[step.id] !== undefined ? localPoints[step.id] : String(step.points ?? 10);
+  const sortedSteps = steps ? steps.slice().sort((a, b) => a.step_number - b.step_number) : steps;
 
   return (
     <div className="assignment-row">
@@ -641,7 +768,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
         <div className="manage-steps-body">
           {loading ? (
             <p className="admin-hint">Loading steps...</p>
-          ) : !steps || steps.length === 0 ? (
+          ) : !sortedSteps || sortedSteps.length === 0 ? (
             <p className="admin-hint">No steps found.</p>
           ) : (
             <table className="manage-steps-table">
@@ -650,28 +777,88 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
                   <th>#</th>
                   <th>Description</th>
                   <th>Points</th>
+                  <th>If Fails</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {steps.map(step => (
-                  <tr key={step.id}>
-                    <td className="step-num-cell">{step.step_number}</td>
-                    <td className="step-desc-cell">{step.description}</td>
-                    <td className="step-points-cell">
-                      <input
-                        type="number"
-                        min={0}
-                        className="points-input"
-                        value={getDisplayPoints(step)}
-                        onChange={e => setLocalPoints(prev => ({ ...prev, [step.id]: e.target.value }))}
-                        onBlur={() => handlePointsBlur(step.id)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {sortedSteps.map(step => {
+                  const d = getDraft(step);
+                  return (
+                    <tr key={step.id}>
+                      <td className="step-num-cell">{step.step_number}</td>
+                      <td className="step-desc-cell">
+                        <input
+                          type="text"
+                          className="step-desc-input"
+                          value={d.description}
+                          onChange={e => setDraft(step.id, { description: e.target.value })}
+                        />
+                      </td>
+                      <td className="step-points-cell">
+                        <input
+                          type="number"
+                          min={0}
+                          className="points-input"
+                          value={d.points}
+                          onChange={e => setDraft(step.id, { points: e.target.value })}
+                        />
+                      </td>
+                      <td className="step-failure-cell">
+                        <select
+                          className="failure-select"
+                          value={d.on_failure}
+                          onChange={e => setDraft(step.id, { on_failure: e.target.value })}
+                        >
+                          <option value="continue">Continue</option>
+                          <option value="stop">Hard Stop</option>
+                        </select>
+                      </td>
+                      <td className="step-actions-cell">
+                        <button className="btn-secondary" onClick={() => handleSave(step)}>Save</button>
+                        <button className="btn-danger" onClick={() => onDeleteStep(step.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
+
+          <form onSubmit={handleAdd} className="add-step-form">
+            <h4>Add Step</h4>
+            <div className="add-step-row">
+              <label>Insert after:</label>
+              <select value={insertAfter} onChange={e => setInsertAfter(e.target.value)}>
+                <option value="end">At the end</option>
+                {sortedSteps && sortedSteps.map(s => (
+                  <option key={s.id} value={s.step_number}>After step {s.step_number}</option>
+                ))}
+              </select>
+            </div>
+            <input
+              type="text"
+              placeholder="Step description"
+              className="user-input"
+              value={newDesc}
+              onChange={e => setNewDesc(e.target.value)}
+            />
+            <input
+              type="number"
+              min={0}
+              placeholder="Points"
+              className="user-input step-points-add"
+              value={newPoints}
+              onChange={e => setNewPoints(e.target.value)}
+            />
+            <select className="failure-select" value={newOnFailure} onChange={e => setNewOnFailure(e.target.value as 'continue' | 'stop')}>
+              <option value="continue">Continue on failure</option>
+              <option value="stop">Hard stop on failure</option>
+            </select>
+            <button type="submit" className="btn" disabled={adding || !newDesc.trim()}>
+              {adding ? 'Adding...' : 'Add Step'}
+            </button>
+          </form>
         </div>
       )}
     </div>
