@@ -24,7 +24,7 @@ export const useAuth = () => {
   return context;
 };
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4006';
+const API_BASE = process.env.REACT_APP_API_URL || '';
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);

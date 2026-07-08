@@ -211,6 +211,23 @@ git push origin main
 
 ---
 
+## Deployment (Render.com)
+
+The app is a single Node service: Express serves both the API and the React production build (same origin), so no separate frontend host is needed. A `render.yaml` (modeled on the sibling `NexusERP` app) is provided at the project root.
+
+- **Build**: `npm install && npm run build`
+- **Start**: `node server/server.js`
+- **Port**: the server listens on `process.env.PORT_API || process.env.PORT || 4006` and binds `0.0.0.0`, so Render's injected `PORT` is used automatically.
+- **API base**: the frontend uses **relative** API URLs (`/api/...`) by default (`REACT_APP_API_URL` falls back to `''`), which works on the Render URL/custom domain with no extra config.
+- **Required env vars** (set in `render.yaml` / Render dashboard):
+  - `NODE_ENV=production`
+  - `JWT_SECRET` — set a strong random value (sessions are signed with it).
+  - `NODE_VERSION` is pinned to `20` for `better-sqlite3` prebuilt binaries.
+- **Google Drive** is disabled and ignored; no `GOOGLE_*` credentials are required.
+
+### Ephemeral storage caveat
+Render's filesystem is **ephemeral** — `users.db`, `tests.db`, and `uploads/` are created at runtime in the service root and are **lost on every deploy/restart**. The DBs are recreated empty (seed data is not auto-applied), so an admin must re-import tests and recreate users after a reset. For durable data, attach a Render **Disk** (persistent storage) mounted at the service root, or back up/restore via the admin Backup / Restore tab.
+
 ## Security Notes
 - Passwords are hashed using `bcrypt` / `bcryptjs`.
 - Sessions are managed with JWT tokens.

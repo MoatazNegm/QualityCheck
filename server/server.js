@@ -57,8 +57,8 @@ if (process.env.NODE_ENV === 'production' || fs.existsSync(path.join(__dirname, 
   });
 }
 
-const PORT_API = process.env.PORT_API || 4006;
-app.listen(PORT_API, () => {
+const PORT_API = process.env.PORT_API || process.env.PORT || 4006;
+app.listen(PORT_API, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT_API}`);
 });
 

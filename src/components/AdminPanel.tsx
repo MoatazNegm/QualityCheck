@@ -39,7 +39,7 @@ interface TestStepAdmin {
   on_failure: string;
 }
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4006';
+const API_BASE = process.env.REACT_APP_API_URL || '';
 
 const AdminPanel: React.FC = () => {
   const { token } = useAuth();
