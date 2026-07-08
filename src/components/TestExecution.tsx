@@ -72,6 +72,17 @@ const TestExecution: React.FC = () => {
     setConfigFile(null);
   };
 
+  const markComplete = async (tid: string) => {
+    try {
+      await fetch(`${API_BASE}/api/tests/${tid}/complete`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+    } catch (err) {
+      console.error('Failed to advance loop:', err);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -101,7 +112,14 @@ const TestExecution: React.FC = () => {
           navigate('/dashboard');
           return;
         }
-        setStepIndex(i => i + 1);
+
+        const nextIndex = stepIndex + 1;
+        setStepIndex(nextIndex);
+
+        const allDone = steps.every(s => newDone.has(s.id));
+        if (allDone) {
+          markComplete(testId!);
+        }
       }
     } finally {
       setSubmitting(false);
@@ -115,6 +133,10 @@ const TestExecution: React.FC = () => {
     try {
       await fetch(`${API_BASE}/api/test-results/user/${user.id}/test/${testId}`, {
         method: 'DELETE',
+        headers: authHeaders
+      });
+      await fetch(`${API_BASE}/api/tests/${testId}/activate`, {
+        method: 'POST',
         headers: authHeaders
       });
       setDoneStepIds(new Set());

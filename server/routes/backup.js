@@ -16,6 +16,7 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
     const testSteps = testsDb.prepare('SELECT * FROM test_steps').all();
     const testResults = testsDb.prepare('SELECT * FROM test_results').all();
     const testAssignments = testsDb.prepare('SELECT * FROM test_assignments').all();
+    const userLoopState = testsDb.prepare('SELECT * FROM user_loop_state').all();
 
     const backup = {
       metadata: {
@@ -27,6 +28,7 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
       test_steps: testSteps,
       test_results: testResults,
       test_assignments: testAssignments,
+      user_loop_state: userLoopState,
     };
 
     const filename = `qualitycheck-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
@@ -56,6 +58,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
 
     testsDb.prepare('DELETE FROM test_results').run();
     testsDb.prepare('DELETE FROM test_assignments').run();
+    testsDb.prepare('DELETE FROM user_loop_state').run();
     testsDb.prepare('DELETE FROM test_steps').run();
     testsDb.prepare('DELETE FROM tests').run();
 
@@ -79,6 +82,9 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
     `);
     const insertAssignment = testsDb.prepare(`
       INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)
+    `);
+    const insertLoopState = testsDb.prepare(`
+      INSERT INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)
     `);
 
     for (const test of backup.tests) {
@@ -104,6 +110,10 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
 
     for (const assignment of backup.test_assignments || []) {
       insertAssignment.run(assignment.id, assignment.test_id, assignment.user_id, assignment.assigned_at);
+    }
+
+    for (const loop of backup.user_loop_state || []) {
+      insertLoopState.run(loop.user_id, loop.active_test_id);
     }
 
     res.json({ message: 'Restore completed successfully' });

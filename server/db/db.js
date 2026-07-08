@@ -61,6 +61,12 @@ function initDB() {
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
     UNIQUE(test_id, user_id)
   )`);
+
+  // Per-user sequential loop state: which assigned test is currently unlocked/active.
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS user_loop_state (
+    user_id INTEGER PRIMARY KEY,
+    active_test_id INTEGER
+  )`);
 }
 
 // Call initDB immediately to ensure tables are created on startup

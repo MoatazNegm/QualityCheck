@@ -43,8 +43,8 @@ The application supports two roles:
    - Can assign/unassign tests to/from users.
    - Can view user execution history and performance reports.
     - Can dynamically import new tests and steps from Excel spreadsheets (`.xlsx` or `.xls`).
-    - Can backup and restore all application data (users, tests, results, assignments) via the **Backup / Restore** tab in the admin panel.
-    - Backup exports a JSON file containing all database records. Restore replaces all current data with the uploaded backup.
+     - Can backup and restore all application data (users, tests, results, assignments, and each user's per-loop state) via the **Backup / Restore** tab in the admin panel.
+     - Backup exports a JSON file containing all database records (including `user_loop_state`, so each user's loop position and locked/unlocked status is preserved). Restore replaces all current data with the uploaded backup.
 
 ## Database Structure
 
@@ -53,9 +53,29 @@ The application supports two roles:
 - Tables: `users`, `user_sessions`
 
 ### Tests Database (tests.db)
-- Stores test definitions, steps, results, and user assignments.
-- Tables: `tests`, `test_steps`, `test_results`, `test_assignments`
+- Stores test definitions, steps, results, user assignments, and per-user loop state.
+- Tables: `tests`, `test_steps`, `test_results`, `test_assignments`, `user_loop_state`
   - `test_assignments` table columns: `id`, `test_id`, `user_id`, `assigned_at` (ensuring unique mappings for test assignments).
+  - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user). This drives the sequential loop described below.
+
+## Sequential Test Loop (Per-User Locking)
+
+Non-admin users must complete their assigned tests in a strict, sequential, repeating loop. The behavior is driven by the `user_loop_state` table (one row per user, storing `active_test_id`).
+
+- When a user logs in, the dashboard shows **one card per assigned test**.
+- Only the **current** test (matching `active_test_id`) is unlocked/clickable. Every other card is **dimmed and shows a 🔒 lock overlay**, visually signalling it cannot be run until the previous test in the loop is finished.
+- The loop order is the assigned tests sorted by `test.id` (ascending).
+- When a user **completes the current test** (all of its steps have a submitted result), the backend (`POST /api/tests/:id/complete`) locks that test again and unlocks the **next** test in the loop.
+- After the **last** assigned test is completed, the loop **wraps around** and the **first** test unlocks again — this repeats endlessly (infinite loop).
+- The loop state is **per user**: each user has their own independent `active_test_id`, so two users can be at different points in the loop.
+- The `GET /api/tests` endpoint augments each test object for non-admins with `locked`, `isActive`, and `completed` flags. Admins receive all tests with `locked:false` (they see every card unlocked in the admin panel).
+- Server-side guards ensure only the currently active test can be marked complete, and the per-test **Restart** action re-opens the same test (`POST /api/tests/:id/activate`) without skipping ahead.
+
+## Versioning
+
+- The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
+- **Always advance the version before a rebuild/redeploy.** Run `node scripts/advance_version.js` from the project root, which increments the patch component of `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`).
+- The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 
 ## Key Values and Locations
 

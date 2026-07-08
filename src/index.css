@@ -352,6 +352,94 @@ body {
   width: 100%;
 }
 
+.loop-hint {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  line-height: 1.5;
+}
+
+/* Active (unlocked, current) test card */
+.test-card.active {
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.25);
+}
+
+/* Locked (dimmed) test card */
+.test-card.locked {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.test-card.locked:hover {
+  transform: none;
+  background: var(--bg-card);
+  border-color: var(--border-color);
+  box-shadow: none;
+}
+
+.test-card.locked .test-card-body {
+  pointer-events: none;
+}
+
+.lock-overlay {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.test-card {
+  position: relative;
+}
+
+.test-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.test-card-footer .btn {
+  margin-left: auto;
+}
+
+.btn-locked {
+  background: var(--bg-card-hover);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.9;
+}
+
+.badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+
+.badge-current {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--color-primary);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.badge-done {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
 /* Empty Dashboard */
 .dashboard-empty {
   max-width: 500px;

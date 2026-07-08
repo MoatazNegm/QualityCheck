@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Link } from 'react-router-dom';
 
 interface Test {
   id: number;
   name: string;
   description: string;
+  locked: boolean;
+  isActive: boolean;
+  completed: boolean;
 }
 
 const Dashboard: React.FC = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,17 +52,45 @@ const Dashboard: React.FC = () => {
     );
   }
 
+  const handleCardClick = (test: Test) => {
+    if (test.locked) return;
+    navigate(`/test/${test.id}`);
+  };
+
   return (
     <div className='dashboard'>
       <h2>Available Tests</h2>
+      <p className='loop-hint'>
+        Complete each test in order. Only the current test is unlocked; finish it to unlock the next. The cycle repeats endlessly.
+      </p>
       <div className='tests-list'>
         {tests.map(test => (
-          <div key={test.id} className='test-card'>
-            <h3>{test.name}</h3>
-            <p>{test.description}</p>
-            <Link to={`/test/${test.id}`} className='btn'>
-              Start Test
-            </Link>
+          <div
+            key={test.id}
+            className={`test-card ${test.locked ? 'locked' : ''} ${test.isActive ? 'active' : ''}`}
+            onClick={() => handleCardClick(test)}
+          >
+            {test.locked && (
+              <div className='lock-overlay' title='Locked — finish the previous test first'>
+                <svg width='34' height='34' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                  <rect x='3' y='11' width='18' height='11' rx='2' ry='2' />
+                  <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                </svg>
+              </div>
+            )}
+            <div className='test-card-body'>
+              <h3>{test.name}</h3>
+              <p>{test.description}</p>
+            </div>
+            <div className='test-card-footer'>
+              {test.isActive && <span className='badge badge-current'>Current</span>}
+              {test.completed && !test.isActive && <span className='badge badge-done'>Completed</span>}
+              {test.locked ? (
+                <span className='btn btn-locked' aria-disabled='true'>🔒 Locked</span>
+              ) : (
+                <span className='btn'>Start Test</span>
+              )}
+            </div>
           </div>
         ))}
       </div>

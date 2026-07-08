@@ -7,21 +7,122 @@ const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Get all tests (filtered by assignment for non-admins)
+// Ordered list of tests assigned to a user (loop order = test id ascending)
+function getAssignedTestsOrdered(userId) {
+  return testsDb.prepare(`
+    SELECT t.* FROM tests t
+    INNER JOIN test_assignments ta ON ta.test_id = t.id
+    WHERE ta.user_id = ?
+    ORDER BY t.id
+  `).all(userId);
+}
+
+// Returns the currently active (unlocked) test id for a user, creating the
+// default (first assigned test) row on first access.
+function getActiveTestId(userId) {
+  const row = testsDb.prepare('SELECT active_test_id FROM user_loop_state WHERE user_id = ?').get(userId);
+  if (row) return row.active_test_id;
+  const assigned = getAssignedTestsOrdered(userId);
+  const firstId = assigned.length ? assigned[0].id : null;
+  if (firstId !== null) {
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
+      .run(userId, firstId);
+  }
+  return firstId;
+}
+
+// Whether every step of a test has a recorded result for the user
+function isTestCompleted(userId, testId) {
+  const stepCount = testsDb.prepare('SELECT COUNT(*) AS c FROM test_steps WHERE test_id = ?').get(testId).c;
+  if (stepCount === 0) return false;
+  const doneCount = testsDb.prepare(
+    'SELECT COUNT(*) AS c FROM test_results WHERE user_id = ? AND test_id = ?'
+  ).get(userId, testId).c;
+  return doneCount >= stepCount;
+}
+
+// Get all tests (filtered by assignment for non-admins, with loop lock status)
 router.get('/', authenticateToken, (req, res) => {
   try {
     let tests;
     if (req.user.isAdmin) {
       tests = testsDb.prepare('SELECT * FROM tests ORDER BY id').all();
+      tests = tests.map(t => ({ ...t, locked: false, isActive: false, completed: false }));
     } else {
-      tests = testsDb.prepare(`
-        SELECT t.* FROM tests t
-        INNER JOIN test_assignments ta ON ta.test_id = t.id
-        WHERE ta.user_id = ?
-        ORDER BY t.id
-      `).all(req.user.userId);
+      const assigned = getAssignedTestsOrdered(req.user.userId);
+      const activeTestId = getActiveTestId(req.user.userId);
+      tests = assigned.map(t => ({
+        ...t,
+        locked: t.id !== activeTestId,
+        isActive: t.id === activeTestId,
+        completed: isTestCompleted(req.user.userId, t.id)
+      }));
     }
     res.json(tests);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Mark the current active test as completed and advance the loop to the next
+// assigned test (wrapping around to the first after the last). Per-user.
+router.post('/:testId/complete', authenticateToken, (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admins do not use the test loop' });
+    }
+    const userId = req.user.userId;
+    const testId = parseInt(req.params.testId, 10);
+
+    const assigned = getAssignedTestsOrdered(userId);
+    if (assigned.length === 0) {
+      return res.status(400).json({ error: 'No tests assigned' });
+    }
+
+    const activeTestId = getActiveTestId(userId);
+    if (activeTestId !== testId) {
+      return res.status(400).json({ error: 'This test is not the current active test' });
+    }
+
+    if (!isTestCompleted(userId, testId)) {
+      return res.status(400).json({ error: 'Cannot complete an unfinished test' });
+    }
+
+    const idx = assigned.findIndex(t => t.id === testId);
+    const nextTest = assigned[(idx + 1) % assigned.length];
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
+      .run(userId, nextTest.id);
+
+    res.json({ message: 'Test completed', active_test_id: nextTest.id });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Re-open a test as the active one (used by "Restart"). Allowed only when the
+// test is already the active test or has been completed, so the loop order
+// cannot be skipped ahead.
+router.post('/:testId/activate', authenticateToken, (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admins do not use the test loop' });
+    }
+    const userId = req.user.userId;
+    const testId = parseInt(req.params.testId, 10);
+
+    const assigned = getAssignedTestsOrdered(userId);
+    if (!assigned.some(t => t.id === testId)) {
+      return res.status(400).json({ error: 'Test is not assigned to this user' });
+    }
+    const activeTestId = getActiveTestId(userId);
+    if (activeTestId !== testId && !isTestCompleted(userId, testId)) {
+      return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
+    }
+
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
+      .run(userId, testId);
+
+    res.json({ message: 'Test re-opened', active_test_id: testId });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
