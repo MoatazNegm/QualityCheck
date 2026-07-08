@@ -20,11 +20,11 @@ const AppContent: React.FC = () => {
       {user && <Header />}
       <div style={{ flex: 1 }}>
         <Routes>
-          <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to={user.isAdmin ? "/admin" : "/dashboard"} />} />
+          <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
           <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
           <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
           <Route path="/admin" element={user?.isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" />} />
-          <Route path="/" element={user ? <Navigate to={user.isAdmin ? "/admin" : "/dashboard"} /> : <Navigate to="/login" />} />
+          <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
         </Routes>
       </div>
       <VersionFooter />

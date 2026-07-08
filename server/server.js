@@ -29,12 +29,14 @@ const userRoutes = require('./routes/users');
 const testRoutes = require('./routes/tests');
 const testResultRoutes = require('./routes/test-results');
 const reportRoutes = require('./routes/reports');
+const backupRoutes = require('./routes/backup');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/test-results', testResultRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/backup', backupRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -43,8 +45,15 @@ app.get('/api/health', (req, res) => {
 
 if (process.env.NODE_ENV === 'production' || fs.existsSync(path.join(__dirname, '../build'))) {
   app.use(express.static(path.join(__dirname, '../build')));
-  app.get('*any', (req, res) => {
-    res.sendFile(path.join(__dirname, '../build', 'index.html'));
+  app.use((req, res) => {
+    try {
+      const content = fs.readFileSync(path.join(__dirname, '../build', 'index.html'), 'utf8');
+      res.setHeader('Content-Type', 'text/html');
+      res.send(content);
+    } catch (error) {
+      console.error('Failed to serve index.html:', error);
+      res.status(500).send('Server error');
+    }
   });
 }
 
