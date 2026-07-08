@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const { usersDb } = require('../db/db');
+const { usersDb, testsDb } = require('../db/db');
 
 // Get all users (admin only)
 router.get('/', (req, res) => {
@@ -31,8 +31,24 @@ router.post('/', async (req, res) => {
       INSERT INTO users (username, password_hash, is_admin)
       VALUES (?, ?, ?)
     `).run(username, hashedPassword, isAdmin ? 1 : 0);
-    
-    res.json({ id: result.lastInsertRowid, username, is_admin: isAdmin ? 1 : 0 });
+
+    const newUserId = result.lastInsertRowid;
+
+    // Auto-assign all existing tests to the new non-admin user
+    if (!isAdmin) {
+      const allTests = testsDb.prepare('SELECT id FROM tests').all();
+      const insertAssignment = testsDb.prepare(
+        'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)'
+      );
+      const assignAll = testsDb.transaction(() => {
+        for (const test of allTests) {
+          insertAssignment.run(test.id, newUserId);
+        }
+      });
+      assignAll();
+    }
+
+    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0 });
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'Username already exists' });

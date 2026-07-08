@@ -39,8 +39,8 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
 
     const insertTest = testsDb.prepare('INSERT INTO tests (name, description) VALUES (?, ?)');
     const insertStep = testsDb.prepare(`
-      INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure)
-      VALUES (?, ?, ?, ?, 'continue')
+      INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points)
+      VALUES (?, ?, ?, ?, 'continue', ?)
     `);
 
     const importWorkbook = testsDb.transaction(() => {
@@ -54,6 +54,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
         const sampleKeys = Object.keys(rows[0]);
         const testCaseKey = sampleKeys.find(k => k.toLowerCase().includes('test case')) || sampleKeys[0];
         const successKey = sampleKeys.find(k => k.toLowerCase().includes('expected success'));
+        const pointsKey = sampleKeys.find(k => k.toLowerCase().includes('points'));
 
         const result = insertTest.run(sheetName, `Imported from Excel`);
         const testId = result.lastInsertRowid;
@@ -63,7 +64,8 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
           const description = String(row[testCaseKey] || '').trim();
           if (!description) continue;
           const successSymptom = successKey ? String(row[successKey] || '').trim() : '';
-          insertStep.run(testId, stepNumber, description, successSymptom);
+          const points = pointsKey ? (parseInt(String(row[pointsKey] || ''), 10) || 10) : 10;
+          insertStep.run(testId, stepNumber, description, successSymptom, points);
           stepNumber++;
         }
 
@@ -112,6 +114,31 @@ router.delete('/:id/assignments/:userId', authenticateToken, requireAdmin, (req,
       'DELETE FROM test_assignments WHERE test_id = ? AND user_id = ?'
     ).run(req.params.id, req.params.userId);
     res.json({ message: 'Unassigned' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update points for a step (admin only)
+router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const points = parseInt(req.body.points, 10);
+    if (isNaN(points) || points < 0) {
+      return res.status(400).json({ error: 'Points must be a non-negative number' });
+    }
+    testsDb.prepare('UPDATE test_steps SET points = ? WHERE id = ? AND test_id = ?')
+      .run(points, req.params.stepId, req.params.testId);
+    res.json({ message: 'Points updated' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete entire test (admin only)
+router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    testsDb.prepare('DELETE FROM tests WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Test deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
