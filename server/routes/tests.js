@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { testsDb } = require('../db/db');
+const { testsDb, bumpRound } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -121,6 +121,7 @@ router.post('/:testId/complete', authenticateToken, (req, res) => {
     const nextTest = assigned[(idx + 1) % assigned.length];
     testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, nextTest.id, currentVersionId);
+    bumpRound(userId, nextTest.id);
 
     res.json({ message: 'Test completed', active_test_id: nextTest.id });
   } catch (error) {
@@ -151,6 +152,7 @@ router.post('/:testId/activate', authenticateToken, (req, res) => {
     const currentVersionId = getCurrentVersionId();
     testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, testId, currentVersionId);
+    bumpRound(userId, testId);
 
     res.json({ message: 'Test re-opened', active_test_id: testId });
   } catch (error) {
@@ -184,6 +186,7 @@ router.post('/:testId/end', authenticateToken, (req, res) => {
     const nextTest = assigned[(idx + 1) % assigned.length];
     testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, nextTest.id, currentVersionId);
+    bumpRound(userId, nextTest.id);
 
     res.json({ message: 'Test ended', active_test_id: nextTest.id });
   } catch (error) {
@@ -325,6 +328,17 @@ router.get('/:id', (req, res) => {
     
     test.steps = steps;
     res.json(test);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/:testId/round', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const testId = parseInt(req.params.testId, 10);
+    const round = getRound(userId, testId);
+    res.json({ round });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

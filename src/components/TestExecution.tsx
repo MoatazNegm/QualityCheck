@@ -54,9 +54,10 @@ const TestExecution: React.FC = () => {
   const loadTest = async () => {
     setLoading(true);
     try {
-      const [testRes, resultsRes] = await Promise.all([
+      const [testRes, resultsRes, roundRes] = await Promise.all([
         fetch(`${API_BASE}/api/tests/${testId}`, { headers: authHeaders }),
-        fetch(`${API_BASE}/api/test-results/user/${user!.id}/test/${testId}`, { headers: authHeaders })
+        fetch(`${API_BASE}/api/test-results/user/${user!.id}/test/${testId}`, { headers: authHeaders }),
+        fetch(`${API_BASE}/api/tests/${testId}/round`, { headers: authHeaders })
       ]);
 
       if (!testRes.ok) return;
@@ -65,21 +66,25 @@ const TestExecution: React.FC = () => {
       const allSteps: TestStep[] = testData.steps || [];
       setSteps(allSteps);
 
+      let currentRound = 1;
+      if (roundRes.ok) {
+        const roundData = await roundRes.json();
+        currentRound = roundData.round || 1;
+      }
+
       const doneIds = new Set<number>();
       if (resultsRes.ok) {
         const results = await resultsRes.json();
-        results.forEach((r: any) => doneIds.add(r.step_id));
+        results.forEach((r: any) => {
+          if (r.round_id === currentRound) {
+            doneIds.add(r.step_id);
+          }
+        });
       }
       setDoneStepIds(doneIds);
 
       const firstUnattempted = allSteps.findIndex(s => !doneIds.has(s.id));
       if (firstUnattempted === -1) {
-        // Every step already has a result — this happens when the infinite loop
-        // has wrapped back around to a test the user already finished in a
-        // previous iteration. Rather than showing the "Test Completed" screen,
-        // restart the attempt in-place from step 1 so the user can redo it.
-        // Nothing is cleared: prior results stay and each re-submission simply
-        // upserts its row and appends to the points ledger (so points accumulate).
         setStepIndex(0);
       } else {
         setStepIndex(firstUnattempted);

@@ -39,12 +39,12 @@ The application supports two roles:
    - Directed to the user dashboard (`/dashboard`).
 2. **Admin**:
    - Directed to the admin panel (`/admin`).
-   - Can manage users (create, delete, update roles).
+   - Can manage users (create, delete, update roles). Deleting a user is a **hard, irreversible wipe**: the admin must confirm twice (acknowledge, then type the exact username), and the backend cascades the deletion across `user_sessions`, `test_results`, `points_log`, `test_assignments`, `user_loop_state`, the `users` row itself, **and every uploaded config file that user submitted** — leaving the system exactly as if the user was never added.
    - Can assign/unassign tests to/from users.
    - Can view user execution history and performance reports.
     - Can dynamically import new tests and steps from Excel spreadsheets (`.xlsx` or `.xls`).
      - Can backup and restore all application data (users, tests, results, assignments, and each user's per-loop state) via the **Backup / Restore** tab in the admin panel.
-     - Backup exports a JSON file containing all database records (including `user_loop_state`, so each user's loop position and locked/unlocked status is preserved). Restore replaces all current data with the uploaded backup.
+     - Backup exports a JSON file containing all database records (including `user_loop_state` and `user_test_rounds`, so each user's loop position/round and locked/unlocked status is preserved, plus the full `test_submissions` audit ledger). It also embeds every uploaded compliance config file that is still referenced by a `test_results` or `test_submissions` row (base64-encoded), so a restore reproduces the system exactly — including every round's comments and the files users uploaded on failed steps, which are written back to `uploads/`. Restore replaces all current data (and writes the embedded files) with the uploaded backup.
 
 ## Database Structure
 
@@ -54,9 +54,11 @@ The application supports two roles:
 
 ### Tests Database (tests.db)
 - Stores test definitions, steps, results, user assignments, and per-user loop state.
-- Tables: `tests`, `test_steps`, `test_results`, `test_assignments`, `user_loop_state`
+- Tables: `tests`, `test_steps`, `test_results`, `test_submissions`, `test_assignments`, `user_loop_state`, `user_test_rounds`
   - `test_assignments` table columns: `id`, `test_id`, `user_id`, `assigned_at` (ensuring unique mappings for test assignments).
   - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user), `version_id` (the version under which the active test was started). This drives the sequential loop and version-change auto-end behavior described below.
+  - `user_test_rounds` table columns: `user_id`, `test_id` (composite PRIMARY KEY), `round_no` (the current loop-round counter for that user+test; bumped each time the test is (re)entered).
+  - `test_submissions` table columns: `id` (PK, the unique submission/round id), `round_id`, `user_id`, `test_id`, `step_id`, `result`, `comment`, `config_file_path`, `version_id`, `executed_at`. This is the **append-only audit ledger**: one row per submitted step result, so every loop round's attempt (with its comment, uploaded file, and round) is retained for complete, round-aware reporting. `test_results` keeps only the latest upserted row per step for loop logic; `round_id` is also carried on `test_results` and `points_log`.
 
 ## Sequential Test Loop (Per-User Locking)
 
@@ -101,6 +103,9 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of the **version-change auto-end** and **dashboard/header polling** work was **`1.0000019`**.
 - The version at the time of the **admin multi-user reports with version filter** and **searchable user/version selectors** was **`1.0000020`**.
 - The version at the time of the **test-centric admin report** with test selector and failed user/step breakdown was **`1.0000023`**.
+- The version at the time of the **failure comment + file download in reports**, **backup including uploaded files**, and **cascade user deletion with double confirmation** was **`1.0000024`**.
+- The version at the time of making each failed-step upload **uniquely related to its exact user/test/step** (filename carries `u{userId}-t{testId}-s{stepId}`, and a later-round re-failure replaces + deletes the previous file) was **`1.0000025`**.
+- The version at the time of the **round-aware audit ledger** (`test_submissions` append-only table + per-(user,test) `user_test_rounds` counter + `round_id` on `test_results`/`points_log`, with reports, backup, and user-delete cascade covering the new tables) was **`1.0000026`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
@@ -120,7 +125,9 @@ over a configurable date range, filtered by testing version.
   - **Date presets**: Current Month, Last Month (default), Current Year, Last Year, Custom.
   - **Generate Report** button is disabled until at least one user and a version are selected.
   - Test cards are collapsed by default; clicking a card expands it to show only failed steps
-    with their fail counts. Passed steps are hidden.
+     with their fail counts. Passed steps are hidden. For each failed step the report now also shows
+     the **comment** the user left and a **Download** link for the config file they uploaded
+     (so an admin reviewing a failure can read what went wrong and fetch the attachment).
 - Reports are scoped to tests assigned to the selected users and only count activity within
   the chosen date range and version.
 
@@ -283,4 +290,4 @@ Render's filesystem is **ephemeral** — `users.db`, `tests.db`, and `uploads/` 
 - Sessions are managed with JWT tokens.
 - File uploads are validated for type and size.
 - CORS is configured to allow requests from local client development origins.
-- **`uploads/` is never committed.** The `uploads/` directory holds runtime user-uploaded compliance configuration files (submitted on failed steps) and is listed in `.gitignore` so it is always excluded from version control. These are user data, not source — do not add or force-add `uploads/` to the repo. (Note: because `uploads/` is git-ignored, it is **not** included in admin backups; only DB records are backed up.)
+- **`uploads/` is never committed.** The `uploads/` directory holds runtime user-uploaded compliance configuration files (submitted on failed steps) and is listed in `.gitignore` so it is always excluded from version control. These are user data, not source — do not add or force-add `uploads/` to the repo. The admin **backup does** bundle every referenced upload (base64 inside the backup JSON) so a restore reproduces the system exactly, including the failure attachments.

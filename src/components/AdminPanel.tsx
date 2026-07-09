@@ -106,6 +106,9 @@ const AdminPanel: React.FC = () => {
   const [testReportLoading, setTestReportLoading] = useState(false);
   const [testReportError, setTestReportError] = useState('');
   const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletingUser, setDeletingUser] = useState(false);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -589,10 +592,38 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const handleDeleteUser = async (userId: number, username: string) => {
-    if (!window.confirm(`Delete user "${username}"? This cannot be undone.`)) return;
-    await fetch(`${API_BASE}/api/users/${userId}`, { method: 'DELETE', headers: authHeaders });
-    fetchUsers();
+  // Opening the delete flow requires a deliberate double confirmation: the admin must
+  // first acknowledge, then type the exact username to confirm. This wipes the user
+  // AND all of their data (results, points, assignments, loop state, uploads).
+  const openDeleteUser = (user: User) => {
+    setDeleteConfirmText('');
+    setDeleteTarget(user);
+  };
+
+  const closeDeleteUser = () => {
+    setDeleteTarget(null);
+    setDeleteConfirmText('');
+    setDeletingUser(false);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deleteTarget) return;
+    if (deleteConfirmText.trim() !== deleteTarget.username) return;
+    setDeletingUser(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${deleteTarget.id}`, { method: 'DELETE', headers: authHeaders });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setUserError(data.error || 'Failed to delete user');
+      } else {
+        closeDeleteUser();
+        fetchUsers();
+      }
+    } catch {
+      setUserError('Network error');
+    } finally {
+      setDeletingUser(false);
+    }
   };
 
   const handleBackupExport = async () => {
@@ -798,12 +829,12 @@ const AdminPanel: React.FC = () => {
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     </button>
-                    <button
-                      className="btn-danger"
-                      onClick={() => handleDeleteUser(u.id, u.username)}
-                    >
-                      Delete
-                    </button>
+                      <button
+                        className="btn-danger"
+                        onClick={() => openDeleteUser(u)}
+                      >
+                        Delete
+                      </button>
                   </div>
                 </div>
               ))}
@@ -1130,52 +1161,72 @@ const AdminPanel: React.FC = () => {
                 <p className="admin-hint">No test activity in this period.</p>
               ) : (
                 <div className="report-tests-list">
-                  {(reportData.tests || []).map((test: any) => {
-                    const isOpen = expandedTests.has(test.testId);
-                    const failedSteps = test.steps.filter((s: any) => s.fails > 0);
-                    return (
-                      <div key={test.testId} className="report-test-row">
-                        <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
-                          <span className="report-test-name">{test.testName}</span>
-                          <span className="report-test-stats">
-                            <span className="report-stat">{test.rounds} rounds</span>
-                            <span className="report-stat report-stat-pass">{test.passes} passed</span>
-                            <span className="report-stat report-stat-fail">{test.fails} failed</span>
-                          </span>
-                          {test.fullyPassed && (
-                            <span className="status-badge status-pass">FULLY PASSED</span>
-                          )}
-                          <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
-                        </div>
-                        {isOpen && (
-                          <div className="report-test-body">
-                            {failedSteps.length === 0 ? (
-                              <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
-                            ) : (
-                              <table className="report-steps-table">
-                                <thead>
-                                  <tr>
-                                    <th>Step</th>
-                                    <th>Description</th>
-                                    <th>Fails</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {failedSteps.map((step: any) => (
-                                    <tr key={step.stepId} className="report-step-row-failed">
-                                      <td className="step-num-cell">{step.stepNumber}</td>
-                                      <td>{step.description}</td>
-                                      <td><span className="status-badge status-fail">{step.fails}</span></td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                   {(reportData.tests || []).map((test: any) => {
+                     const isOpen = expandedTests.has(test.testId);
+                     const failedSubmissions = test.failedSubmissions || [];
+                     return (
+                       <div key={test.testId} className="report-test-row">
+                         <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
+                           <span className="report-test-name">{test.testName}</span>
+                           <span className="report-test-stats">
+                             <span className="report-stat">{test.rounds} rounds</span>
+                             <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                             <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                           </span>
+                           {test.fullyPassed && (
+                             <span className="status-badge status-pass">FULLY PASSED</span>
+                           )}
+                           <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                         </div>
+                         {isOpen && (
+                           <div className="report-test-body">
+                             {failedSubmissions.length === 0 ? (
+                               <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
+                             ) : (
+                               <table className="report-steps-table">
+                                 <thead>
+                                   <tr>
+                                     <th>Step</th>
+                                     <th>Round</th>
+                                     <th>Description</th>
+                                     <th>Comment</th>
+                                     <th>File</th>
+                                     <th>Time</th>
+                                   </tr>
+                                 </thead>
+                                 <tbody>
+                                   {failedSubmissions.map((sub: any) => (
+                                     <tr key={`${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-failed">
+                                       <td className="step-num-cell">{sub.stepNumber}</td>
+                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
+                                       <td>{sub.description}</td>
+                                       <td className="report-step-comment">{sub.comment || '—'}</td>
+                                       <td>
+                                         {sub.configFilePath ? (
+                                           <a
+                                             className="report-file-link"
+                                             href={`${API_BASE}${sub.configFilePath}`}
+                                             target="_blank"
+                                             rel="noopener noreferrer"
+                                             download
+                                           >
+                                             Download
+                                           </a>
+                                         ) : (
+                                           '—'
+                                         )}
+                                       </td>
+                                       <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
+                                     </tr>
+                                   ))}
+                                 </tbody>
+                               </table>
+                             )}
+                           </div>
+                         )}
+                       </div>
+                     );
+                   })}
                 </div>
               )}
             </div>
@@ -1389,53 +1440,73 @@ const AdminPanel: React.FC = () => {
                 <p className="admin-hint">No test activity in this period.</p>
               ) : (
                 <div className="report-tests-list">
-                  {testReportData.tests.map((test: any) => {
-                    const isOpen = expandedTestReportTests.has(test.testId);
-                    const failedUsers = test.failedUsers || [];
-                    return (
-                      <div key={test.testId} className="report-test-row">
-                        <div className="report-test-header" onClick={() => toggleTestReportExpand(test.testId)}>
-                          <span className="report-test-name">{test.testName}</span>
-                          <span className="report-test-stats">
-                            <span className="report-stat">{test.rounds} rounds</span>
-                            <span className="report-stat report-stat-pass">{test.passes} passed</span>
-                            <span className="report-stat report-stat-fail">{test.fails} failed</span>
-                          </span>
-                          <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
-                        </div>
-                        {isOpen && (
-                          <div className="report-test-body">
-                            {failedUsers.length === 0 ? (
-                              <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed users in this period.</p>
-                            ) : (
-                              <table className="report-steps-table">
-                                <thead>
-                                  <tr>
-                                    <th>User</th>
-                                    <th>Step</th>
-                                    <th>Description</th>
-                                    <th>Fails</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {failedUsers.map((fu: any) =>
-                                    fu.steps.map((step: any) => (
-                                      <tr key={`${fu.userId}-${step.stepId}`} className="report-step-row-failed">
-                                        <td>{fu.userName}</td>
-                                        <td className="step-num-cell">{step.stepNumber}</td>
-                                        <td>{step.description}</td>
-                                        <td><span className="status-badge status-fail">{step.fails}</span></td>
-                                      </tr>
-                                    ))
-                                  )}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                   {testReportData.tests.map((test: any) => {
+                     const isOpen = expandedTestReportTests.has(test.testId);
+                     const failedUsers = test.failedUsers || [];
+                     return (
+                       <div key={test.testId} className="report-test-row">
+                         <div className="report-test-header" onClick={() => toggleTestReportExpand(test.testId)}>
+                           <span className="report-test-name">{test.testName}</span>
+                           <span className="report-test-stats">
+                             <span className="report-stat">{test.rounds} rounds</span>
+                             <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                             <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                           </span>
+                           <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                         </div>
+                         {isOpen && (
+                           <div className="report-test-body">
+                             {failedUsers.length === 0 ? (
+                               <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed users in this period.</p>
+                             ) : (
+                               <table className="report-steps-table">
+                                 <thead>
+                                   <tr>
+                                     <th>User</th>
+                                     <th>Step</th>
+                                     <th>Round</th>
+                                     <th>Description</th>
+                                     <th>Comment</th>
+                                     <th>File</th>
+                                     <th>Time</th>
+                                   </tr>
+                                 </thead>
+                                 <tbody>
+                                   {failedUsers.map((fu: any) =>
+                                     (fu.submissions || []).map((sub: any) => (
+                                       <tr key={`${fu.userId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-failed">
+                                         <td>{fu.userName}</td>
+                                         <td className="step-num-cell">{sub.stepNumber}</td>
+                                         <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
+                                         <td>{sub.description}</td>
+                                         <td className="report-step-comment">{sub.comment || '—'}</td>
+                                         <td>
+                                           {sub.configFilePath ? (
+                                             <a
+                                               className="report-file-link"
+                                               href={`${API_BASE}${sub.configFilePath}`}
+                                               target="_blank"
+                                               rel="noopener noreferrer"
+                                               download
+                                             >
+                                               Download
+                                             </a>
+                                           ) : (
+                                             '—'
+                                           )}
+                                         </td>
+                                         <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
+                                       </tr>
+                                     ))
+                                   )}
+                                 </tbody>
+                               </table>
+                             )}
+                           </div>
+                         )}
+                       </div>
+                     );
+                   })}
                 </div>
               )}
             </div>
@@ -1447,7 +1518,9 @@ const AdminPanel: React.FC = () => {
         <div className="admin-section">
           <h3>Backup All Data</h3>
           <p className="admin-hint">
-            Download a JSON backup containing all users, tests, steps, results, and assignments.
+            Download a JSON backup containing all users, tests, steps, results, assignments, loop
+            state, points, versions — and every uploaded config file referenced by a failed step,
+            so restoring reproduces the system exactly (comments and their attachments included).
           </p>
           <button className="btn" onClick={handleBackupExport} disabled={backupLoading}>
             {backupLoading ? 'Preparing...' : 'Download Backup'}
@@ -1471,6 +1544,46 @@ const AdminPanel: React.FC = () => {
 
           {backupError && <p className="error-msg">{backupError}</p>}
           {backupMessage && <p className="success-msg">{backupMessage}</p>}
+        </div>
+      )}
+      {deleteTarget && (
+        <div className="modal-overlay" onClick={closeDeleteUser}>
+          <div className="modal modal-danger" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Delete User — Final Confirmation</h3>
+              <button className="modal-close" onClick={closeDeleteUser}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p className="admin-hint">
+                This will permanently delete <strong>{deleteTarget.username}</strong> and <strong>all</strong> of
+                their data: test results, points, assignments, loop state, and every uploaded config file.
+                This cannot be undone.
+              </p>
+              <p className="admin-hint">
+                To confirm, type the username <strong>{deleteTarget.username}</strong> below:
+              </p>
+              <input
+                type="text"
+                className="user-input"
+                placeholder={deleteTarget.username}
+                value={deleteConfirmText}
+                onChange={e => setDeleteConfirmText(e.target.value)}
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button className="btn-secondary" onClick={closeDeleteUser} disabled={deletingUser}>
+                  Cancel
+                </button>
+                <button
+                  className="btn-danger"
+                  onClick={confirmDeleteUser}
+                  disabled={deletingUser || deleteConfirmText.trim() !== deleteTarget.username}
+                >
+                  {deletingUser ? 'Deleting...' : 'Delete User Permanently'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
       {historyUser && (

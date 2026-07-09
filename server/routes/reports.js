@@ -139,6 +139,7 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
 
     const versionFilter = versionId ? ' AND pl.version_id = ? ' : ' ';
     const versionFilterJoin = versionId ? ' AND tr.version_id = ? ' : ' ';
+    const versionFilterSub = versionId ? ' AND s.version_id = ? ' : ' ';
 
     const totals = testsDb.prepare(
       `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
@@ -163,42 +164,54 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
       ).all(...userIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.submissions])
     );
 
-    const stepData = testsDb.prepare(
+    // Full failure history from the append-only audit ledger. We return every
+    // failed submission as its own record so the report can show one line per
+    // failure, each with its own comment, uploaded file, and round.
+    const failedSubmissions = testsDb.prepare(
       `SELECT 
-         pl.test_id,
-         pl.step_id,
+         s.test_id,
+         s.step_id,
          ts.step_number,
          ts.description,
-         COUNT(pl.id) as submissions,
-         SUM(CASE WHEN tr.result = 'pass' THEN 1 ELSE 0 END) as passes,
-         SUM(CASE WHEN tr.result = 'fail' THEN 1 ELSE 0 END) as fails
-       FROM points_log pl
-       JOIN test_steps ts ON ts.id = pl.step_id
-       LEFT JOIN test_results tr ON tr.user_id IN (${placeholders}) AND tr.test_id = pl.test_id AND tr.step_id = pl.step_id ${versionFilterJoin}
-       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
-       GROUP BY pl.test_id, pl.step_id
-       ORDER BY pl.test_id, ts.step_number`
-    ).all(...userIds, ...(versionId ? [versionId] : []), ...userIds, start, end, ...(versionId ? [versionId] : []));
+         s.comment,
+         s.config_file_path,
+         s.round_id,
+         s.executed_at
+       FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.user_id IN (${placeholders}) AND s.result = 'fail'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+       ORDER BY s.test_id, ts.step_number, s.executed_at DESC`
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
 
-    const stepsByTest = {};
-    const testLevelStats = {};
-    for (const row of stepData) {
-      if (!stepsByTest[row.test_id]) stepsByTest[row.test_id] = [];
-      stepsByTest[row.test_id].push({
+    const failedSubmissionsByTest = {};
+    for (const row of failedSubmissions) {
+      if (!failedSubmissionsByTest[row.test_id]) failedSubmissionsByTest[row.test_id] = [];
+      failedSubmissionsByTest[row.test_id].push({
         stepId: row.step_id,
         stepNumber: row.step_number,
         description: row.description,
-        submissions: row.submissions,
-        passes: row.passes || 0,
-        fails: row.fails || 0
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executed_at: row.executed_at
       });
+    }
 
-      if (!testLevelStats[row.test_id]) {
-        testLevelStats[row.test_id] = { submissions: 0, passes: 0, fails: 0 };
-      }
-      testLevelStats[row.test_id].submissions += row.submissions;
-      testLevelStats[row.test_id].passes += (row.passes || 0);
-      testLevelStats[row.test_id].fails += (row.fails || 0);
+    // Keep per-test stats from the aggregated step data.
+    const testLevelStats = {};
+    const stepData = testsDb.prepare(
+      `SELECT 
+         s.test_id,
+         COUNT(s.id) as submissions,
+         SUM(CASE WHEN s.result = 'pass' THEN 1 ELSE 0 END) as passes,
+         SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fails
+       FROM test_submissions s
+       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+       GROUP BY s.test_id`
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+    for (const row of stepData) {
+      testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
     }
 
     const fullyPassedTests = new Set();
@@ -215,7 +228,6 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
     }
 
     const tests = assignedTests.map(test => {
-      const steps = stepsByTest[test.id] || [];
       const stats = testLevelStats[test.id] || { submissions: 0, passes: 0, fails: 0 };
       const totalSubmissions = testSubMap[test.id] || 0;
 
@@ -226,7 +238,7 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
         rounds: stats.submissions,
         passes: stats.passes,
         fails: stats.fails,
-        steps,
+        failedSubmissions: failedSubmissionsByTest[test.id] || [],
         fullyPassed: fullyPassedTests.has(test.id)
       };
     });
@@ -295,7 +307,7 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
         `SELECT test_id, COUNT(*) as rounds,
                 SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
                 SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
-         FROM test_results
+         FROM test_submissions
          WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter}
          GROUP BY test_id`
       ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r])
@@ -310,40 +322,53 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
       ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.rounds])
     );
 
-    const failedUsersRaw = testsDb.prepare(
+    // Usernames live in users.db, which is a separate database from tests.db, so
+    // we look them up by id rather than JOINing across databases.
+    const userNames = Object.fromEntries(
+      usersDb.prepare('SELECT id, username FROM users').all().map(u => [u.id, u.username])
+    );
+
+    // Full failure history from the append-only audit ledger. We return every
+    // failed submission as its own record so the report can show one line per
+    // failure, each with its own comment, uploaded file, and round.
+    const failedSubmissions = testsDb.prepare(
       `SELECT 
-         tr.test_id,
-         tr.user_id,
-         u.username,
-         tr.step_id,
+         s.test_id,
+         s.user_id,
+         s.step_id,
          ts.step_number,
          ts.description,
-         COUNT(tr.id) as fail_count
-       FROM test_results tr
-       JOIN users u ON tr.user_id = u.id
-       JOIN test_steps ts ON tr.step_id = ts.id
-       WHERE tr.test_id IN (${testPlaceholders}) AND tr.result = 'fail' AND tr.executed_at >= ? AND tr.executed_at <= ? ${versionFilter}
-       GROUP BY tr.test_id, tr.user_id, tr.step_id
-       ORDER BY tr.test_id, tr.user_id, ts.step_number`
+         s.comment,
+         s.config_file_path,
+         s.round_id,
+         s.executed_at
+       FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'fail'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter}
+       ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
     ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
 
     const failedUsersByTest = {};
-    for (const row of failedUsersRaw) {
+    for (const row of failedSubmissions) {
       if (!failedUsersByTest[row.test_id]) {
         failedUsersByTest[row.test_id] = {};
       }
       if (!failedUsersByTest[row.test_id][row.user_id]) {
         failedUsersByTest[row.test_id][row.user_id] = {
           userId: row.user_id,
-          userName: row.username,
-          steps: []
+          userName: userNames[row.user_id] || ('user ' + row.user_id),
+          submissions: []
         };
       }
-      failedUsersByTest[row.test_id][row.user_id].steps.push({
+      failedUsersByTest[row.test_id][row.user_id].submissions.push({
         stepId: row.step_id,
         stepNumber: row.step_number,
         description: row.description,
-        fails: row.fail_count
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executed_at: row.executed_at
       });
     }
 

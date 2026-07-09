@@ -92,6 +92,60 @@ function initDB() {
     is_current INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // Per-(user, test) loop-round counter. Each time a test is (re)entered by the
+  // user (loop advance or manual restart), the round increments, so every
+  // submission can be tagged with the unique round it belongs to.
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS user_test_rounds (
+    user_id INTEGER,
+    test_id INTEGER,
+    round_no INTEGER DEFAULT 1,
+    PRIMARY KEY (user_id, test_id)
+  )`);
+
+  // Append-only audit ledger: one row per submitted step result. Unlike
+  // test_results (one upserted row per step for loop logic), this keeps the FULL
+  // history of every round's attempt — including result, comment, uploaded file,
+  // version, and the unique round_id — so reports give a complete, round-aware
+  // audit trail rather than only the latest attempt.
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS test_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id INTEGER NOT NULL,
+    user_id INTEGER,
+    test_id INTEGER,
+    step_id INTEGER,
+    result TEXT CHECK (result IN ('pass', 'fail')) NOT NULL,
+    comment TEXT,
+    config_file_path TEXT,
+    version_id INTEGER,
+    executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+}
+
+// Return the current loop-round number for a (user, test) pair, initialising it
+// to 1 on first access.
+function getRound(userId, testId) {
+  const row = testsDb.prepare(
+    'SELECT round_no FROM user_test_rounds WHERE user_id = ? AND test_id = ?'
+  ).get(userId, testId);
+  if (row) return row.round_no;
+  testsDb.prepare(
+    'INSERT OR IGNORE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, 1)'
+  ).run(userId, testId);
+  return 1;
+}
+
+// Advance the loop-round counter for a (user, test) pair (called when the test is
+// (re)entered via a loop advance or manual restart). Returns the new round number.
+function bumpRound(userId, testId) {
+  testsDb.prepare(
+    `INSERT INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, 1)
+     ON CONFLICT(user_id, test_id) DO UPDATE SET round_no = round_no + 1`
+  ).run(userId, testId);
+  const row = testsDb.prepare(
+    'SELECT round_no FROM user_test_rounds WHERE user_id = ? AND test_id = ?'
+  ).get(userId, testId);
+  return row ? row.round_no : 1;
 }
 
 // Migration: tag submissions with the version they were performed for.
@@ -110,6 +164,16 @@ try {
   if (!lsCols.some(c => c.name === 'version_id')) {
     testsDb.exec('ALTER TABLE user_loop_state ADD COLUMN version_id INTEGER');
     console.log('Migration: added version_id column to user_loop_state');
+  }
+  const trCols2 = testsDb.prepare('PRAGMA table_info(test_results)').all();
+  if (!trCols2.some(c => c.name === 'round_id')) {
+    testsDb.exec('ALTER TABLE test_results ADD COLUMN round_id INTEGER');
+    console.log('Migration: added round_id column to test_results');
+  }
+  const plCols2 = testsDb.prepare('PRAGMA table_info(points_log)').all();
+  if (!plCols2.some(c => c.name === 'round_id')) {
+    testsDb.exec('ALTER TABLE points_log ADD COLUMN round_id INTEGER');
+    console.log('Migration: added round_id column to points_log');
   }
 } catch (err) {
   console.error('Migration failed:', err);
@@ -136,5 +200,7 @@ try {
 module.exports = {
   usersDb,
   testsDb,
-  initDB
+  initDB,
+  getRound,
+  bumpRound
 };

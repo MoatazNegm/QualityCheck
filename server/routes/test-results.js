@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb, usersDb } = require('../db/db');
+const { testsDb, usersDb, getRound, bumpRound } = require('../db/db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -31,8 +31,15 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
+    // Embed the user/test/step ids so every saved file is unambiguously related
+    // to the exact failed step it was submitted for, plus a timestamp+random
+    // suffix so a re-failure in a later loop round is always a distinct file.
+    const userId = req.user && req.user.userId ? req.user.userId : 'anon';
+    const testId = req.params && req.params.testId ? req.params.testId : 't';
+    const stepId = req.params && req.params.stepId ? req.params.stepId : 's';
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    const ext = path.extname(file.originalname);
+    cb(null, `configFile-u${userId}-t${testId}-s${stepId}-${uniqueSuffix}${ext}`);
   }
 });
 
@@ -121,15 +128,43 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     const currentVersion = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
     const currentVersionId = currentVersion ? currentVersion.id : null;
 
-    // Upsert: remove any previous result for this user/test/step before inserting
+    // The unique loop-round this submission belongs to (per user+test).
+    const roundNo = getRound(userId, testId);
+
+    // Append-only audit ledger: every submission gets its own row with a unique
+    // id, so a re-failure of the same step in a later round is a distinct,
+    // traceable record (result + comment + uploaded file + round_id).
+    const subId = testsDb.prepare(`
+      INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId);
+
+    // Upsert: keep exactly ONE result row per (user, test, step) so the loop/next-step
+    // logic and the per-step current view work. Capture the previously saved file so
+    // we can delete it from disk once the new upload replaces it — this guarantees a
+    // later-round re-failure points at a brand-new, distinct file and we never confuse
+    // it with an older submission. The full history lives in test_submissions.
+    const prevResult = testsDb.prepare(
+      'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
+    ).get(userId, testId, stepId);
+
     testsDb.prepare(
       'DELETE FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
     ).run(userId, testId, stepId);
 
     const resultId = testsDb.prepare(`
-      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId);
+      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo);
+
+    // Remove the now-orphaned previous upload for this step (it can no longer be
+    // referenced, so leaving it would only create stale/confusing duplicates).
+    if (prevResult && prevResult.config_file_path && prevResult.config_file_path !== configFilePath) {
+      const oldAbs = path.join(uploadDir, path.basename(prevResult.config_file_path));
+      if (fs.existsSync(oldAbs)) {
+        try { fs.unlinkSync(oldAbs); } catch (e) { console.error('Failed to delete old upload', oldAbs, e); }
+      }
+    }
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -139,11 +174,11 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
     testsDb.prepare(
-      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id) VALUES (?, ?, ?, ?, ?)'
-    ).run(userId, testId, stepId, stepPoints, currentVersionId);
+      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(userId, testId, stepId, stepPoints, currentVersionId, roundNo);
 
     // If the current version differs from the version this test was started under,
-    // auto-end the test and advance to the next one.
+    // auto-end the test and advance to the next one (new round for that test).
     let autoEnded = false;
     const loopState = testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
     if (loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId) {
@@ -153,11 +188,12 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
         const nextTest = assigned[(idx + 1) % assigned.length];
         testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
           .run(userId, nextTest.id, currentVersionId);
+        bumpRound(userId, nextTest.id);
         autoEnded = true;
       }
     }
 
-    res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully', autoEnded });
+    res.json({ id: resultId.lastInsertRowid, submissionId: subId.lastInsertRowid, roundId: roundNo, message: 'Result submitted successfully', autoEnded });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

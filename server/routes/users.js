@@ -57,14 +57,68 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Delete user (admin only)
-router.delete('/:id', (req, res) => {
+const fs = require('fs');
+const path = require('path');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
+
+const uploadDir = path.join(__dirname, '../../uploads');
+
+// Delete user (admin only) — cascades every piece of data tied to the user so it
+// is as if they were never added: their results, assignments, loop state, points
+// ledger, sessions, the user row itself, and every uploaded config file they
+// submitted (so the failure attachments are removed too).
+router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
   try {
     const { id } = req.params;
-    
-    usersDb.prepare('DELETE FROM users WHERE id = ?').run(id);
-    res.json({ message: 'User deleted successfully' });
+    const userId = parseInt(id, 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const user = usersDb.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Capture the uploaded files this user submitted before deleting the rows.
+    const fileRows = testsDb.prepare(
+      'SELECT DISTINCT config_file_path FROM test_results WHERE user_id = ? AND config_file_path IS NOT NULL'
+    ).all(userId);
+    const filesToDelete = fileRows
+      .map(r => r.config_file_path)
+      .filter(Boolean)
+      .map(p => path.basename(p));
+
+    // Cascade delete in a transaction.
+    const tx = testsDb.transaction(() => {
+      usersDb.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM test_results WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM test_submissions WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM points_log WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM test_assignments WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM user_loop_state WHERE user_id = ?').run(userId);
+      testsDb.prepare('DELETE FROM user_test_rounds WHERE user_id = ?').run(userId);
+      usersDb.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    });
+    tx();
+
+    // Remove the user's uploaded files from disk.
+    let deletedFiles = 0;
+    for (const fileName of filesToDelete) {
+      const absPath = path.join(uploadDir, fileName);
+      if (fs.existsSync(absPath)) {
+        try {
+          fs.unlinkSync(absPath);
+          deletedFiles++;
+        } catch (e) {
+          console.error('Failed to delete upload file', fileName, e);
+        }
+      }
+    }
+
+    res.json({ message: 'User and all associated data deleted successfully', deletedFiles });
   } catch (error) {
+    console.error('Delete user error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
