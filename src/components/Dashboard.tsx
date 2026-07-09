@@ -9,6 +9,7 @@ interface Test {
   locked: boolean;
   isActive: boolean;
   completed: boolean;
+  totalPoints: number;
 }
 
 const Dashboard: React.FC = () => {
@@ -16,17 +17,21 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
+  const [monthEarned, setMonthEarned] = useState<number | null>(null);
 
   const API_BASE = process.env.REACT_APP_API_URL || '';
+  const authHeaders = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
     fetchTests();
+    fetchSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const fetchTests = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/tests`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: authHeaders
       });
 
       if (response.ok) {
@@ -37,6 +42,18 @@ const Dashboard: React.FC = () => {
       console.error('Error fetching tests:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchSummary = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/test-results/summary`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setMonthEarned(data.monthEarned);
+      }
+    } catch (error) {
+      console.error('Error fetching points summary:', error);
     }
   };
 
@@ -63,6 +80,9 @@ const Dashboard: React.FC = () => {
       <p className='loop-hint'>
         Complete each test in order. Only the current test is unlocked; finish it to unlock the next. The cycle repeats endlessly.
       </p>
+      <div className='points-summary'>
+        Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong>
+      </div>
       <div className='tests-list'>
         {tests.map(test => (
           <div
@@ -85,6 +105,7 @@ const Dashboard: React.FC = () => {
             <div className='test-card-footer'>
               {test.isActive && <span className='badge badge-current'>Current</span>}
               {test.completed && !test.isActive && <span className='badge badge-done'>Completed</span>}
+              <span className='badge badge-points'>★ {test.totalPoints} pts</span>
               {test.locked ? (
                 <span className='btn btn-locked' aria-disabled='true'>🔒 Locked</span>
               ) : (

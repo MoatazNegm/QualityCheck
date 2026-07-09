@@ -30,6 +30,7 @@ const TestExecution: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [monthEarned, setMonthEarned] = useState<number | null>(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -37,6 +38,18 @@ const TestExecution: React.FC = () => {
     if (user) loadTest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testId, user]);
+
+  const fetchSummary = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/test-results/summary`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setMonthEarned(data.monthEarned);
+      }
+    } catch (error) {
+      console.error('Error fetching points summary:', error);
+    }
+  };
 
   const loadTest = async () => {
     setLoading(true);
@@ -60,7 +73,18 @@ const TestExecution: React.FC = () => {
       setDoneStepIds(doneIds);
 
       const firstUnattempted = allSteps.findIndex(s => !doneIds.has(s.id));
-      setStepIndex(firstUnattempted === -1 ? allSteps.length : firstUnattempted);
+      if (firstUnattempted === -1) {
+        // Every step already has a result — this happens when the infinite loop
+        // has wrapped back around to a test the user already finished in a
+        // previous iteration. Rather than showing the "Test Completed" screen,
+        // restart the attempt in-place from step 1 so the user can redo it.
+        // Nothing is cleared: prior results stay and each re-submission simply
+        // upserts its row and appends to the points ledger (so points accumulate).
+        setStepIndex(0);
+      } else {
+        setStepIndex(firstUnattempted);
+      }
+      fetchSummary();
     } finally {
       setLoading(false);
     }
@@ -80,6 +104,17 @@ const TestExecution: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed to advance loop:', err);
+    }
+  };
+
+  const endTest = async (tid: string) => {
+    try {
+      await fetch(`${API_BASE}/api/tests/${tid}/end`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+    } catch (err) {
+      console.error('Failed to end test:', err);
     }
   };
 
@@ -107,8 +142,11 @@ const TestExecution: React.FC = () => {
         newDone.add(step.id);
         setDoneStepIds(newDone);
         resetForm();
+        fetchSummary();
 
         if (result === 'fail' && step.on_failure === 'stop') {
+          // Hard stop: test ends now, loop advances to the next test.
+          endTest(testId!);
           navigate('/dashboard');
           return;
         }
@@ -155,6 +193,11 @@ const TestExecution: React.FC = () => {
 
   if (loading) return <div>Loading...</div>;
 
+  const totalPoints = steps.reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0);
+  const earnedInTest = steps
+    .slice(0, stepIndex)
+    .reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0);
+
   const isCompleted = stepIndex >= steps.length;
   const currentStep = steps[stepIndex] ?? null;
   const isAlreadyDone = currentStep ? doneStepIds.has(currentStep.id) : false;
@@ -164,6 +207,8 @@ const TestExecution: React.FC = () => {
       <div className='test-completed'>
         <h2>Test Completed</h2>
         <p>You have completed all steps for <strong>{testName}</strong>.</p>
+        <p className='points-summary'>Points earned in this test: <strong>{earnedInTest}/{totalPoints}</strong></p>
+        <p className='points-summary'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></p>
         <div className='test-completed-actions'>
           <button onClick={goToPrev} disabled={steps.length === 0}>
             ← Go to Last Step
@@ -182,7 +227,9 @@ const TestExecution: React.FC = () => {
       <div className='step-header'>
         <h2>{testName}</h2>
         <span className='step-counter'>Step {currentStep.step_number} of {steps.length}</span>
+        <span className='test-total-points'>Earned: {earnedInTest}/{totalPoints} pts</span>
       </div>
+      <div className='test-month-points'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></div>
 
       <div className='step-info'>
         <h3>Step {currentStep.step_number}: {currentStep.description}</h3>

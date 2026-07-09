@@ -41,13 +41,21 @@ function isTestCompleted(userId, testId) {
   return doneCount >= stepCount;
 }
 
+// Total points awarded for a test (sum of its steps' points)
+function getTestTotalPoints(testId) {
+  const row = testsDb.prepare(
+    'SELECT COALESCE(SUM(COALESCE(points, value, 0)), 0) AS total FROM test_steps WHERE test_id = ?'
+  ).get(testId);
+  return row.total;
+}
+
 // Get all tests (filtered by assignment for non-admins, with loop lock status)
 router.get('/', authenticateToken, (req, res) => {
   try {
     let tests;
     if (req.user.isAdmin) {
       tests = testsDb.prepare('SELECT * FROM tests ORDER BY id').all();
-      tests = tests.map(t => ({ ...t, locked: false, isActive: false, completed: false }));
+      tests = tests.map(t => ({ ...t, locked: false, isActive: false, completed: false, totalPoints: getTestTotalPoints(t.id) }));
     } else {
       const assigned = getAssignedTestsOrdered(req.user.userId);
       const activeTestId = getActiveTestId(req.user.userId);
@@ -55,7 +63,8 @@ router.get('/', authenticateToken, (req, res) => {
         ...t,
         locked: t.id !== activeTestId,
         isActive: t.id === activeTestId,
-        completed: isTestCompleted(req.user.userId, t.id)
+        completed: isTestCompleted(req.user.userId, t.id),
+        totalPoints: getTestTotalPoints(t.id)
       }));
     }
     res.json(tests);
@@ -128,6 +137,38 @@ router.post('/:testId/activate', authenticateToken, (req, res) => {
   }
 });
 
+// End the current active test early (e.g. a hard-stop failure) and advance the
+// loop to the next test. Unlike /complete, this does not require the test to be
+// fully finished, but the test must be the user's currently active test.
+router.post('/:testId/end', authenticateToken, (req, res) => {
+  try {
+    if (req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admins do not use the test loop' });
+    }
+    const userId = req.user.userId;
+    const testId = parseInt(req.params.testId, 10);
+
+    const assigned = getAssignedTestsOrdered(userId);
+    if (assigned.length === 0) {
+      return res.status(400).json({ error: 'No tests assigned' });
+    }
+
+    const activeTestId = getActiveTestId(userId);
+    if (activeTestId !== testId) {
+      return res.status(400).json({ error: 'This test is not the current active test' });
+    }
+
+    const idx = assigned.findIndex(t => t.id === testId);
+    const nextTest = assigned[(idx + 1) % assigned.length];
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
+      .run(userId, nextTest.id);
+
+    res.json({ message: 'Test ended', active_test_id: nextTest.id });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Import tests from Excel file (admin only)
 router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (req, res) => {
   try {
@@ -141,7 +182,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
     const insertTest = testsDb.prepare('INSERT INTO tests (name, description) VALUES (?, ?)');
     const insertStep = testsDb.prepare(`
       INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points)
-      VALUES (?, ?, ?, ?, 'continue', ?)
+      VALUES (?, ?, ?, ?, 'stop', ?)
     `);
 
     const importWorkbook = testsDb.transaction(() => {
@@ -293,7 +334,7 @@ router.post('/:id/steps', (req, res) => {
     const result = testsDb.prepare(`
       INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, success_symptom, pointsVal, pointsVal, on_failure || 'continue');
+    `).run(id, step_number, description, success_symptom, pointsVal, pointsVal, on_failure || 'stop');
     
     res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom, value: pointsVal, points: pointsVal, on_failure });
   } catch (error) {

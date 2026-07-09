@@ -66,10 +66,22 @@ Non-admin users must complete their assigned tests in a strict, sequential, repe
 - Only the **current** test (matching `active_test_id`) is unlocked/clickable. Every other card is **dimmed and shows a 🔒 lock overlay**, visually signalling it cannot be run until the previous test in the loop is finished.
 - The loop order is the assigned tests sorted by `test.id` (ascending).
 - When a user **completes the current test** (all of its steps have a submitted result), the backend (`POST /api/tests/:id/complete`) locks that test again and unlocks the **next** test in the loop.
-- After the **last** assigned test is completed, the loop **wraps around** and the **first** test unlocks again — this repeats endlessly (infinite loop).
+- A **hard stop** also advances the loop: if a user submits a **failed** result on a step whose `on_failure` is `stop`, the test ends immediately and the backend (`POST /api/tests/:id/end`) locks the test and unlocks the next one — even though the test was not fully completed. (A `continue` failure simply moves on to the next step.)
+- After the **last** assigned test is completed (or hard-stopped), the loop **wraps around** and the **first** test unlocks again — this repeats endlessly (infinite loop).
 - The loop state is **per user**: each user has their own independent `active_test_id`, so two users can be at different points in the loop.
-- The `GET /api/tests` endpoint augments each test object for non-admins with `locked`, `isActive`, and `completed` flags. Admins receive all tests with `locked:false` (they see every card unlocked in the admin panel).
-- Server-side guards ensure only the currently active test can be marked complete, and the per-test **Restart** action re-opens the same test (`POST /api/tests/:id/activate`) without skipping ahead.
+- The `GET /api/tests` endpoint augments each test object for non-admins with `locked`, `isActive`, and `completed` flags, plus `totalPoints` (sum of the test's step points). Admins receive all tests with `locked:false` (they see every card unlocked in the admin panel).
+- Server-side guards ensure only the currently active test can be marked complete or ended, and the per-test **Restart** action re-opens the same test (`POST /api/tests/:id/activate`) without skipping ahead.
+
+## Points & Scoring
+
+Each step carries a **points** value (`value` / `points` column in `test_steps`, kept in sync). Points are aggregated as follows:
+
+- **Total points of a test** = sum of all its steps' points. Returned as `totalPoints` on each test object from `GET /api/tests`, and shown on the dashboard card and in the test view.
+- **Points earned in a test (in-session display)** = sum of points for the steps from the first step up to (but not including) the **current** step. The test view shows this as **`Earned: xx/yy`** (earned so far / test total), so the user sees progress without the still-unearned remainder.
+- **Grand total earned this month** = sum of points logged in the append-only `points_log` table for **every submitted step** since the 1st of the current month. Because the ledger grows on every submission (a `pass` **or** a `fail`, and on every loop iteration — including re-runs of the same test), points accumulate correctly instead of freezing at the last value when the loop wraps around. Provided by `GET /api/test-results/summary` (authenticated, returns `{ monthEarned, monthStart }`), which reads from `points_log`. It is displayed on the dashboard and in the test view, and refreshes after each submitted step so it advances immediately as the user passes/fails a step. (The per-step current-progress still lives in `test_results`, which is upserted so the loop/next-step logic sees exactly one result per step.)
+
+> [!NOTE]
+> "Earned" counts any attempted step (pass **or** fail). A hard-stopped test therefore includes the failed step's points, but steps after the stop are never aggregated because the user does not perform them.
 
 ## Versioning
 
@@ -184,6 +196,9 @@ Start the Express server which automatically serves the newly built production b
 ```powershell
 cmd.exe /c "node server/server.js"
 ```
+
+> [!NOTE]
+> The `npm run build` step above produces the **same** production bundle that is deployed to Render.com. Because the frontend now defaults to **relative** API URLs (`REACT_APP_API_URL` falls back to `''`), the `REACT_APP_API_URL` line is optional — when omitted, the app calls `/api/...` on whatever host serves it (the local `:4005` instance or the Render URL). The local instructions keep it explicit for clarity. The server listens on `process.env.PORT_API || process.env.PORT || 4006`, so it binds to Render's injected `PORT` automatically with no change to this rebuild/restart flow.
 
 ---
 

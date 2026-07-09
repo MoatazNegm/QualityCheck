@@ -27,7 +27,7 @@ function seed() {
 
   testsDb.prepare(`
     INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, on_failure)
-    VALUES (?, 3, 'Perform a bandwidth speed test to ensure downstream rates match requirements.', 'Download speed matches or exceeds 50 Mbps.', 25.0, 'continue')
+      VALUES (?, 3, 'Perform a bandwidth speed test to ensure downstream rates match requirements.', 'Download speed matches or exceeds 50 Mbps.', 25.0, 'stop')
   `).run(test1Id);
 
   // Insert Test 2
@@ -46,12 +46,12 @@ function seed() {
 
   testsDb.prepare(`
     INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, on_failure)
-    VALUES (?, 2, 'Scan for listening ports on the local host.', 'No unexpected listening ports found (only HTTP 80/443 and API 4006 allowed).', 30.0, 'continue')
+      VALUES (?, 2, 'Scan for listening ports on the local host.', 'No unexpected listening ports found (only HTTP 80/443 and API 4006 allowed).', 30.0, 'stop')
   `).run(test2Id);
 
   testsDb.prepare(`
     INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, on_failure)
-    VALUES (?, 3, 'Query update manager for any unapplied critical security updates.', 'Zero critical security patches pending installation.', 15.0, 'continue')
+      VALUES (?, 3, 'Query update manager for any unapplied critical security updates.', 'Zero critical security patches pending installation.', 15.0, 'stop')
   `).run(test2Id);
 
   console.log('Database seeded with sample tests and steps successfully!');

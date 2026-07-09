@@ -112,6 +112,17 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(userId, testId, stepId, result, comment || null, configFilePath);
 
+    // Append to the points ledger on every submission so points accumulate
+    // across loop iterations (and for both pass and fail results). The loop's
+    // current progress is tracked separately via the upserted test_results row.
+    const stepRow = testsDb.prepare(
+      'SELECT COALESCE(points, value, 0) AS pts FROM test_steps WHERE id = ?'
+    ).get(stepId);
+    const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
+    testsDb.prepare(
+      'INSERT INTO points_log (user_id, test_id, step_id, points) VALUES (?, ?, ?, ?)'
+    ).run(userId, testId, stepId, stepPoints);
+
     res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -125,6 +136,30 @@ router.delete('/user/:userId/test/:testId', authenticateToken, (req, res) => {
       'DELETE FROM test_results WHERE user_id = ? AND test_id = ?'
     ).run(req.params.userId, req.params.testId);
     res.json({ message: 'Results cleared' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Points summary for the logged-in user: total points earned this month
+// (sum of the points ledger for every step submitted since the 1st of the
+// current month). The ledger grows on every submission — including re-runs of
+// the loop and failed steps — so points accumulate rather than freeze.
+router.get('/summary', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const pad = (n) => String(n).padStart(2, '0');
+    const monthStartStr = `${monthStart.getFullYear()}-${pad(monthStart.getMonth() + 1)}-${pad(monthStart.getDate())} ${pad(monthStart.getHours())}:${pad(monthStart.getMinutes())}:${pad(monthStart.getSeconds())}`;
+
+    const row = testsDb.prepare(`
+      SELECT COALESCE(SUM(points), 0) AS earned
+      FROM points_log
+      WHERE user_id = ? AND earned_at >= ?
+    `).get(userId, monthStartStr);
+
+    res.json({ monthEarned: row.earned, monthStart: monthStartStr });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

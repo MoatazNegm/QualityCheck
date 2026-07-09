@@ -713,8 +713,8 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
       on_failure: step.on_failure
     };
 
-  const setDraft = (stepId: number, patch: Partial<{ description: string; points: string; on_failure: string }>) =>
-    setDrafts(prev => ({ ...prev, [stepId]: { ...(prev[stepId] || { description: '', points: '0', on_failure: 'continue' }), ...patch } }));
+  const setDraft = (step: TestStepAdmin, patch: Partial<{ description: string; points: string; on_failure: string }>) =>
+    setDrafts(prev => ({ ...prev, [step.id]: { ...getDraft(step), ...patch } }));
 
   const handleSave = (step: TestStepAdmin) => {
     const d = getDraft(step);
@@ -792,7 +792,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
                           type="text"
                           className="step-desc-input"
                           value={d.description}
-                          onChange={e => setDraft(step.id, { description: e.target.value })}
+                          onChange={e => setDraft(step, { description: e.target.value })}
                         />
                       </td>
                       <td className="step-points-cell">
@@ -801,14 +801,14 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
                           min={0}
                           className="points-input"
                           value={d.points}
-                          onChange={e => setDraft(step.id, { points: e.target.value })}
+                          onChange={e => setDraft(step, { points: e.target.value })}
                         />
                       </td>
                       <td className="step-failure-cell">
                         <select
                           className="failure-select"
                           value={d.on_failure}
-                          onChange={e => setDraft(step.id, { on_failure: e.target.value })}
+                          onChange={e => setDraft(step, { on_failure: e.target.value })}
                         >
                           <option value="continue">Continue</option>
                           <option value="stop">Hard Stop</option>

@@ -17,6 +17,7 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
     const testResults = testsDb.prepare('SELECT * FROM test_results').all();
     const testAssignments = testsDb.prepare('SELECT * FROM test_assignments').all();
     const userLoopState = testsDb.prepare('SELECT * FROM user_loop_state').all();
+    const pointsLog = testsDb.prepare('SELECT * FROM points_log').all();
 
     const backup = {
       metadata: {
@@ -29,6 +30,7 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
       test_results: testResults,
       test_assignments: testAssignments,
       user_loop_state: userLoopState,
+      points_log: pointsLog,
     };
 
     const filename = `qualitycheck-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
@@ -59,6 +61,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
     testsDb.prepare('DELETE FROM test_results').run();
     testsDb.prepare('DELETE FROM test_assignments').run();
     testsDb.prepare('DELETE FROM user_loop_state').run();
+    testsDb.prepare('DELETE FROM points_log').run();
     testsDb.prepare('DELETE FROM test_steps').run();
     testsDb.prepare('DELETE FROM tests').run();
 
@@ -85,6 +88,9 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
     `);
     const insertLoopState = testsDb.prepare(`
       INSERT INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)
+    `);
+    const insertPointsLog = testsDb.prepare(`
+      INSERT INTO points_log (id, user_id, test_id, step_id, points, earned_at) VALUES (?, ?, ?, ?, ?, ?)
     `);
 
     for (const test of backup.tests) {
@@ -114,6 +120,10 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
 
     for (const loop of backup.user_loop_state || []) {
       insertLoopState.run(loop.user_id, loop.active_test_id);
+    }
+
+    for (const pl of backup.points_log || []) {
+      insertPointsLog.run(pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.earned_at);
     }
 
     res.json({ message: 'Restore completed successfully' });

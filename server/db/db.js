@@ -36,7 +36,7 @@ function initDB() {
     description TEXT NOT NULL,
     success_symptom TEXT,
     value REAL DEFAULT 0,
-    on_failure TEXT CHECK (on_failure IN ('continue', 'stop')) DEFAULT 'continue',
+    on_failure TEXT CHECK (on_failure IN ('continue', 'stop')) DEFAULT 'stop',
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
   )`);
 
@@ -66,6 +66,18 @@ function initDB() {
   testsDb.exec(`CREATE TABLE IF NOT EXISTS user_loop_state (
     user_id INTEGER PRIMARY KEY,
     active_test_id INTEGER
+  )`);
+
+  // Append-only log of points earned per submitted step. Unlike test_results
+  // (one row per step, upserted), this table grows on every submission so that
+  // points accumulate across loop iterations and failures. Never cleared on loop advance.
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS points_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    test_id INTEGER,
+    step_id INTEGER,
+    points INTEGER,
+    earned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 }
 
