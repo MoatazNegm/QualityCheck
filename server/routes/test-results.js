@@ -102,15 +102,20 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
       configFilePath = `/uploads/${req.file.filename}`;
     }
 
+    // The version the user is currently running. Every submission is tagged with
+    // it so pass/fail, points, and "# tests done" can later be reported per version.
+    const currentVersion = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+    const versionId = currentVersion ? currentVersion.id : null;
+
     // Upsert: remove any previous result for this user/test/step before inserting
     testsDb.prepare(
       'DELETE FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
     ).run(userId, testId, stepId);
 
     const resultId = testsDb.prepare(`
-      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, result, comment || null, configFilePath);
+      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, testId, stepId, result, comment || null, configFilePath, versionId);
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -120,8 +125,8 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
     testsDb.prepare(
-      'INSERT INTO points_log (user_id, test_id, step_id, points) VALUES (?, ?, ?, ?)'
-    ).run(userId, testId, stepId, stepPoints);
+      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(userId, testId, stepId, stepPoints, versionId);
 
     res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully' });
   } catch (error) {

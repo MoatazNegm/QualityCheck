@@ -77,8 +77,36 @@ function initDB() {
     test_id INTEGER,
     step_id INTEGER,
     points INTEGER,
+    version_id INTEGER,
     earned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+  // Admin-controlled "current version". Users perform tests for the active
+  // version; every submission is tagged with it so per-version reporting is possible.
+  // Only one version is flagged current at any time.
+  testsDb.exec(`CREATE TABLE IF NOT EXISTS versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    note TEXT,
+    is_current INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+}
+
+// Migration: tag submissions with the version they were performed for.
+try {
+  const trCols = testsDb.prepare('PRAGMA table_info(test_results)').all();
+  if (!trCols.some(c => c.name === 'version_id')) {
+    testsDb.exec('ALTER TABLE test_results ADD COLUMN version_id INTEGER');
+    console.log('Migration: added version_id column to test_results');
+  }
+  const plCols = testsDb.prepare('PRAGMA table_info(points_log)').all();
+  if (!plCols.some(c => c.name === 'version_id')) {
+    testsDb.exec('ALTER TABLE points_log ADD COLUMN version_id INTEGER');
+    console.log('Migration: added version_id column to points_log');
+  }
+} catch (err) {
+  console.error('Migration failed:', err);
 }
 
 // Call initDB immediately to ensure tables are created on startup

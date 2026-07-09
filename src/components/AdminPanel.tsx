@@ -39,6 +39,14 @@ interface TestStepAdmin {
   on_failure: string;
 }
 
+interface Version {
+  id: number;
+  name: string;
+  note: string | null;
+  is_current: number;
+  created_at: string;
+}
+
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
 const AdminPanel: React.FC = () => {
@@ -49,7 +57,7 @@ const AdminPanel: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'backup'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -65,14 +73,113 @@ const AdminPanel: React.FC = () => {
   const [backupLoading, setBackupLoading] = useState(false);
   const [backupMessage, setBackupMessage] = useState('');
   const [backupError, setBackupError] = useState('');
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [currentVersion, setCurrentVersion] = useState<Version | null>(null);
+  const [newVersionName, setNewVersionName] = useState('');
+  const [newVersionNote, setNewVersionNote] = useState('');
+  const [versionBusy, setVersionBusy] = useState(false);
+  const [versionMessage, setVersionMessage] = useState('');
+  const [versionError, setVersionError] = useState('');
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
     fetchTests();
     fetchUsers();
+    fetchVersions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  const fetchVersions = async () => {
+    try {
+      const [allRes, curRes] = await Promise.all([
+        fetch(`${API_BASE}/api/versions`, { headers: authHeaders }),
+        fetch(`${API_BASE}/api/versions/current`, { headers: authHeaders })
+      ]);
+      if (allRes.ok) setVersions(await allRes.json());
+      if (curRes.ok) {
+        const data = await curRes.json();
+        setCurrentVersion(data.version || null);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCreateVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newVersionName.trim()) return;
+    setVersionBusy(true);
+    setVersionError('');
+    setVersionMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/versions`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newVersionName.trim(), note: newVersionNote.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setVersionError(data.error || 'Failed to create version');
+      } else {
+        setVersionMessage(`Version "${data.version.name}" created${data.version.is_current ? ' and set as current' : ''}.`);
+        setNewVersionName('');
+        setNewVersionNote('');
+        fetchVersions();
+      }
+    } catch {
+      setVersionError('Network error');
+    } finally {
+      setVersionBusy(false);
+    }
+  };
+
+  const handleSetCurrent = async (versionId: number) => {
+    setVersionBusy(true);
+    setVersionError('');
+    setVersionMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/versions/${versionId}/set-current`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setVersionError(data.error || 'Failed to set current version');
+      } else {
+        setVersionMessage(`Current version is now "${data.version.name}".`);
+        fetchVersions();
+      }
+    } catch {
+      setVersionError('Network error');
+    } finally {
+      setVersionBusy(false);
+    }
+  };
+
+  const handleDeleteVersion = async (version: Version) => {
+    if (!window.confirm(`Delete version "${version.name}"? Only versions with no recorded results can be deleted.`)) return;
+    setVersionBusy(true);
+    setVersionError('');
+    setVersionMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/versions/${version.id}`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setVersionError(data.error || 'Failed to delete version');
+      } else {
+        setVersionMessage('Version deleted.');
+        fetchVersions();
+      }
+    } catch {
+      setVersionError('Network error');
+    } finally {
+      setVersionBusy(false);
+    }
+  };
 
   const fetchTests = async () => {
     const res = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
@@ -399,6 +506,12 @@ const AdminPanel: React.FC = () => {
           Manage Tests
         </button>
         <button
+          className={`tab-btn ${activeTab === 'versions' ? 'active' : ''}`}
+          onClick={() => setActiveTab('versions')}
+        >
+          Versions
+        </button>
+        <button
           className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
           onClick={() => setActiveTab('backup')}
         >
@@ -547,6 +660,85 @@ const AdminPanel: React.FC = () => {
                 />
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'versions' && (
+        <div className="admin-section">
+          <h3>Testing Versions</h3>
+          <p className="admin-hint">
+            Create the version users should run tests for, then mark it <strong>current</strong>.
+            Every submitted result and earned point is tagged with the current version so you can
+            report pass/fail, tests done, and points per version later. Only one version is current at a time.
+          </p>
+
+          {versionMessage && <p className="success-msg">{versionMessage}</p>}
+          {versionError && <p className="error-msg">{versionError}</p>}
+
+          <form onSubmit={handleCreateVersion} className="create-version-form">
+            <input
+              type="text"
+              placeholder="Version name (e.g. v2.3.1)"
+              value={newVersionName}
+              onChange={e => { setNewVersionName(e.target.value); setVersionError(''); setVersionMessage(''); }}
+              className="user-input"
+              autoComplete="off"
+            />
+            <input
+              type="text"
+              placeholder="Note (optional)"
+              value={newVersionNote}
+              onChange={e => setNewVersionNote(e.target.value)}
+              className="user-input"
+              autoComplete="off"
+            />
+            <button type="submit" className="btn" disabled={versionBusy || !newVersionName.trim()}>
+              {versionBusy ? 'Saving...' : 'Create Version'}
+            </button>
+          </form>
+
+          <h3 style={{ marginTop: '2rem' }}>
+            Versions
+            {currentVersion && (
+              <span className="current-version-pill"> Current: {currentVersion.name}</span>
+            )}
+          </h3>
+          {versions.length === 0 ? (
+            <p className="admin-hint">No versions created yet.</p>
+          ) : (
+            <table className="versions-table">
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Note</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versions.map(v => (
+                  <tr key={v.id} className={v.is_current ? 'version-current-row' : ''}>
+                    <td>
+                      {v.name}
+                      {v.is_current ? <span className="status-badge status-pass"> CURRENT</span> : null}
+                    </td>
+                    <td>{v.note || '—'}</td>
+                    <td>{new Date(v.created_at).toLocaleString()}</td>
+                    <td className="version-actions-cell">
+                      {!v.is_current && (
+                        <button className="btn-secondary" onClick={() => handleSetCurrent(v.id)} disabled={versionBusy}>
+                          Set Current
+                        </button>
+                      )}
+                      <button className="btn-danger" onClick={() => handleDeleteVersion(v)} disabled={versionBusy}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}

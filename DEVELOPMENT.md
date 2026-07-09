@@ -92,6 +92,29 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 
+## Testing Versions (Per-Version Tracking)
+
+Admins define a **testing version** that users must run their tests against. This is a
+separate concept from the build `APP_VERSION` (`src/constants.ts`) shown in the footer.
+
+- Managed from the **Versions** tab in the admin panel (`src/components/AdminPanel.tsx`).
+- Stored in the `versions` table (`tests.db`); exactly one row carries `is_current = 1`.
+  The first version created automatically becomes current. `POST /api/versions/:id/set-current`
+  switches the active version (unsetting the previous one inside a transaction).
+- The current version name is displayed in the **top-center of the header**
+  (`src/components/Header.tsx` via `GET /api/versions/current`) on every page.
+- Every test submission is tagged with the current `version_id`:
+  - `POST /api/test-results/:testId/steps/:stepId` writes `version_id` into `test_results`.
+  - The same `version_id` is written into the append-only `points_log` on each submission.
+- Both `test_results` and `points_log` gained a `version_id` column (added via migration
+  in `server/db/db.js`; nullable so pre-existing rows are unaffected).
+- Because each submission records its version, **per-version reports** can later aggregate
+  pass/fail counts, number of tests done, and earned points simply by grouping on `version_id`.
+- Backups (admin Backup / Restore tab) now include the `versions` table, and restores
+  re-insert `version_id` for results/points.
+- A version cannot be deleted while it still has logged results or points (to avoid
+  orphaning per-version history); admins instead switch the current version.
+
 ## Admin: Manage Test Steps
 
 The **Manage Tests** tab in the admin panel lets an admin open any test and manage its steps in a table:

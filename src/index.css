@@ -157,6 +157,78 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.header-center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.current-version-badge {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  padding: 0.4rem 1rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.current-version-pill {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  margin-left: 0.6rem;
+}
+
+.create-version-form {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.create-version-form .user-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.versions-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+
+.versions-table th,
+.versions-table td {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.versions-table th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.version-current-row {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.version-actions-cell {
+  display: flex;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;
