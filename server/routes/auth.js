@@ -54,18 +54,18 @@ router.post('/login', async (req, res) => {
     }
     
     const token = jwt.sign(
-      { userId: user.id, username: user.username, isAdmin: user.is_admin },
+      { userId: user.id, username: user.username, isAdmin: !!user.is_admin },
       JWT_SECRET,
       { expiresIn: TOKEN_EXPIRATION }
     );
-    
+
     // Store session
     usersDb.prepare(`
       INSERT INTO user_sessions (user_id, token, expires_at)
       VALUES (?, ?, datetime('now', '+24 hours'))
     `).run(user.id, token);
-    
-    res.json({ token, user: { id: user.id, username: user.username, isAdmin: user.is_admin } });
+
+    res.json({ token, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin } });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -81,7 +81,9 @@ router.get('/verify', (req, res) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    res.json({ valid: true, user: decoded });
+    // Coerce is_admin (SQLite INTEGER 0/1) to a real boolean so the client never
+    // receives the number 0, which React would render as the literal text "0".
+    res.json({ valid: true, user: { ...decoded, isAdmin: !!decoded.isAdmin } });
   } catch (error) {
     res.status(401).json({ error: 'Invalid token' });
   }

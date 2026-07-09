@@ -41,7 +41,7 @@ const Header: React.FC = () => {
           </span>
         </div>
         <div className='header-nav'>
-          {user?.isAdmin && (
+          {user?.isAdmin ? (
             <>
               <NavLink to='/dashboard' className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
                 Dashboard
@@ -50,7 +50,7 @@ const Header: React.FC = () => {
                 Admin Panel
               </NavLink>
             </>
-          )}
+          ) : null}
         </div>
         <div className='user-info'>
           {user && (
