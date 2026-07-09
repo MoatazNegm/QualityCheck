@@ -68,9 +68,11 @@ Non-admin users must complete their assigned tests in a strict, sequential, repe
 - When a user **completes the current test** (all of its steps have a submitted result), the backend (`POST /api/tests/:id/complete`) locks that test again and unlocks the **next** test in the loop.
 - A **hard stop** also advances the loop: if a user submits a **failed** result on a step whose `on_failure` is `stop`, the test ends immediately and the backend (`POST /api/tests/:id/end`) locks the test and unlocks the next one — even though the test was not fully completed. (A `continue` failure simply moves on to the next step.)
 - After the **last** assigned test is completed (or hard-stopped), the loop **wraps around** and the **first** test unlocks again — this repeats endlessly (infinite loop).
+- **Wrapped-around tests auto-restart**: when the loop returns to a test the user has already finished in a prior iteration, the test view opens **ready to be redone from step 1** (no manual Restart needed). Nothing is cleared — the previous `test_results` stay and each re-submission simply upserts its row and appends to `points_log`, so points **accumulate across every loop iteration** (e.g. looping the suite twice doubles the month's earned points). This is how users are "paid" per completed step regardless of how many times the loop repeats.
 - The loop state is **per user**: each user has their own independent `active_test_id`, so two users can be at different points in the loop.
 - The `GET /api/tests` endpoint augments each test object for non-admins with `locked`, `isActive`, and `completed` flags, plus `totalPoints` (sum of the test's step points). Admins receive all tests with `locked:false` (they see every card unlocked in the admin panel).
 - Server-side guards ensure only the currently active test can be marked complete or ended, and the per-test **Restart** action re-opens the same test (`POST /api/tests/:id/activate`) without skipping ahead.
+- **Hard stop is the default failure behavior.** New steps created via the admin panel or Excel import default to `on_failure = 'stop'`, and the `test_steps.on_failure` column default is `stop`. All pre-existing steps in the seed/DB were also converted to `stop`. An admin can still switch an individual step to `continue` in the Manage Test Steps tab if a non-fatal failure should let the user proceed.
 
 ## Points & Scoring
 
@@ -88,6 +90,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
 - **Always advance the version before a rebuild/redeploy.** Run `node scripts/advance_version.js` from the project root, which increments the patch component of `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`).
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
+- The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 
 ## Admin: Manage Test Steps
 
@@ -97,7 +100,7 @@ The **Manage Tests** tab in the admin panel lets an admin open any test and mana
 - **Edit points** awarded per step (`value` / `points` column in `test_steps`).
 - **Set failure behavior** per step via `on_failure`:
   - `continue` — a failed step lets the user proceed to the next step.
-  - `stop` — a failed step hard-stops the entire test (user is returned to the dashboard).
+  - `stop` — a failed step hard-stops the entire test (user is returned to the dashboard). **This is the default** for new steps (see above).
 - **Add a step** between existing steps (choose "After step N" or "At the end"); step numbers are re-sequenced automatically (1..n) after every insert/delete via the reorder endpoint.
 - **Delete a step** (also re-sequences the remaining steps).
 
@@ -248,3 +251,4 @@ Render's filesystem is **ephemeral** — `users.db`, `tests.db`, and `uploads/` 
 - Sessions are managed with JWT tokens.
 - File uploads are validated for type and size.
 - CORS is configured to allow requests from local client development origins.
+- **`uploads/` is never committed.** The `uploads/` directory holds runtime user-uploaded compliance configuration files (submitted on failed steps) and is listed in `.gitignore` so it is always excluded from version control. These are user data, not source — do not add or force-add `uploads/` to the repo. (Note: because `uploads/` is git-ignored, it is **not** included in admin backups; only DB records are backed up.)

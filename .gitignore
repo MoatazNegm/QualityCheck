@@ -25,3 +25,6 @@ yarn-error.log*
 # custom overrides
 .env
 *.db
+
+# runtime user uploads (compliance config files) — never commit user data
+/uploads
