@@ -6,6 +6,20 @@ const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 
+function getAssignedTestsOrdered(userId) {
+  return testsDb.prepare(`
+    SELECT t.* FROM tests t
+    INNER JOIN test_assignments ta ON ta.test_id = t.id
+    WHERE ta.user_id = ?
+    ORDER BY t.id
+  `).all(userId);
+}
+
+function getCurrentVersionId() {
+  const row = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+  return row ? row.id : null;
+}
+
 // Configure uploads
 const uploadDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -105,7 +119,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // The version the user is currently running. Every submission is tagged with
     // it so pass/fail, points, and "# tests done" can later be reported per version.
     const currentVersion = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
-    const versionId = currentVersion ? currentVersion.id : null;
+    const currentVersionId = currentVersion ? currentVersion.id : null;
 
     // Upsert: remove any previous result for this user/test/step before inserting
     testsDb.prepare(
@@ -115,7 +129,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     const resultId = testsDb.prepare(`
       INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, result, comment || null, configFilePath, versionId);
+    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId);
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -126,9 +140,24 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
     testsDb.prepare(
       'INSERT INTO points_log (user_id, test_id, step_id, points, version_id) VALUES (?, ?, ?, ?, ?)'
-    ).run(userId, testId, stepId, stepPoints, versionId);
+    ).run(userId, testId, stepId, stepPoints, currentVersionId);
 
-    res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully' });
+    // If the current version differs from the version this test was started under,
+    // auto-end the test and advance to the next one.
+    let autoEnded = false;
+    const loopState = testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+    if (loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId) {
+      const assigned = getAssignedTestsOrdered(userId);
+      if (assigned.length > 0) {
+        const idx = assigned.findIndex(t => t.id === parseInt(testId, 10));
+        const nextTest = assigned[(idx + 1) % assigned.length];
+        testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+          .run(userId, nextTest.id, currentVersionId);
+        autoEnded = true;
+      }
+    }
+
+    res.json({ id: resultId.lastInsertRowid, message: 'Result submitted successfully', autoEnded });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

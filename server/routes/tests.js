@@ -17,16 +17,35 @@ function getAssignedTestsOrdered(userId) {
   `).all(userId);
 }
 
+function getCurrentVersionId() {
+  const row = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+  return row ? row.id : null;
+}
+
 // Returns the currently active (unlocked) test id for a user, creating the
 // default (first assigned test) row on first access.
 function getActiveTestId(userId) {
-  const row = testsDb.prepare('SELECT active_test_id FROM user_loop_state WHERE user_id = ?').get(userId);
-  if (row) return row.active_test_id;
+  const row = testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+  if (row) {
+    const currentVersionId = getCurrentVersionId();
+    if (row.version_id && currentVersionId && row.version_id !== currentVersionId) {
+      const assigned = getAssignedTestsOrdered(userId);
+      if (assigned.length > 0) {
+        const idx = assigned.findIndex(t => t.id === row.active_test_id);
+        const nextTest = assigned[(idx + 1) % assigned.length];
+        testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+          .run(userId, nextTest.id, currentVersionId);
+        return nextTest.id;
+      }
+    }
+    return row.active_test_id;
+  }
   const assigned = getAssignedTestsOrdered(userId);
   const firstId = assigned.length ? assigned[0].id : null;
   if (firstId !== null) {
-    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
-      .run(userId, firstId);
+    const currentVersionId = getCurrentVersionId();
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+      .run(userId, firstId, currentVersionId);
   }
   return firstId;
 }
@@ -97,10 +116,11 @@ router.post('/:testId/complete', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Cannot complete an unfinished test' });
     }
 
+    const currentVersionId = getCurrentVersionId();
     const idx = assigned.findIndex(t => t.id === testId);
     const nextTest = assigned[(idx + 1) % assigned.length];
-    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
-      .run(userId, nextTest.id);
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+      .run(userId, nextTest.id, currentVersionId);
 
     res.json({ message: 'Test completed', active_test_id: nextTest.id });
   } catch (error) {
@@ -128,8 +148,9 @@ router.post('/:testId/activate', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
     }
 
-    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
-      .run(userId, testId);
+    const currentVersionId = getCurrentVersionId();
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+      .run(userId, testId, currentVersionId);
 
     res.json({ message: 'Test re-opened', active_test_id: testId });
   } catch (error) {
@@ -158,10 +179,11 @@ router.post('/:testId/end', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
 
+    const currentVersionId = getCurrentVersionId();
     const idx = assigned.findIndex(t => t.id === testId);
     const nextTest = assigned[(idx + 1) % assigned.length];
-    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)')
-      .run(userId, nextTest.id);
+    testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+      .run(userId, nextTest.id, currentVersionId);
 
     res.json({ message: 'Test ended', active_test_id: nextTest.id });
   } catch (error) {

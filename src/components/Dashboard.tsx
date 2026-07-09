@@ -18,6 +18,7 @@ const Dashboard: React.FC = () => {
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
+  const [currentVersionId, setCurrentVersionId] = useState<number | null>(null);
 
   const API_BASE = process.env.REACT_APP_API_URL || '';
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -27,6 +28,31 @@ const Dashboard: React.FC = () => {
     fetchSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let mounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/versions/current`, { headers: authHeaders });
+        if (res.ok && mounted) {
+          const data = await res.json();
+          const vid = data.version ? data.version.id : null;
+          if (vid !== currentVersionId) {
+            setCurrentVersionId(vid);
+            const testsRes = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
+            if (testsRes.ok) {
+              setTests(await testsRes.json());
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll current version:', err);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, currentVersionId]);
 
   const fetchTests = async () => {
     try {

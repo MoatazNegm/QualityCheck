@@ -138,14 +138,19 @@ const TestExecution: React.FC = () => {
       });
 
       if (res.ok) {
+        const data = await res.json();
         const newDone = new Set(doneStepIds);
         newDone.add(step.id);
         setDoneStepIds(newDone);
         resetForm();
         fetchSummary();
 
+        if (data.autoEnded) {
+          navigate('/dashboard');
+          return;
+        }
+
         if (result === 'fail' && step.on_failure === 'stop') {
-          // Hard stop: test ends now, loop advances to the next test.
           endTest(testId!);
           navigate('/dashboard');
           return;

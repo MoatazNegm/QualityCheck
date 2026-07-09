@@ -56,7 +56,7 @@ The application supports two roles:
 - Stores test definitions, steps, results, user assignments, and per-user loop state.
 - Tables: `tests`, `test_steps`, `test_results`, `test_assignments`, `user_loop_state`
   - `test_assignments` table columns: `id`, `test_id`, `user_id`, `assigned_at` (ensuring unique mappings for test assignments).
-  - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user). This drives the sequential loop described below.
+  - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user), `version_id` (the version under which the active test was started). This drives the sequential loop and version-change auto-end behavior described below.
 
 ## Sequential Test Loop (Per-User Locking)
 
@@ -88,34 +88,39 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- **The version now advances automatically** — you no longer run `node scripts/advance_version.js` by hand. A git **pre-commit hook** (`.githooks/pre-commit`, using `scripts/pre-commit.js`) bumps `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`) whenever a source file under `src/` or `server/` is committed, and stages the bumped `src/constants.ts` into that same commit. Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger a bump, and a commit that only touches `src/constants.ts` will not double-bump.
+- **After every code change, the version must be advanced.** There are two ways to do this:
+  1. **Preferred:** Commit the code change. A git **pre-commit hook** (`.githooks/pre-commit`, using `scripts/pre-commit.js`) automatically bumps `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`) whenever a source file under `src/` or `server/` is committed, and stages the bumped `src/constants.ts` into that same commit. Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger a bump, and a commit that only touches `src/constants.ts` will not double-bump.
+  2. **Manual fallback:** Run `node scripts/advance_version.js` by hand if you are not ready to commit.
 - The hook is activated by `git config core.hooksPath .githooks` (already set in this checkout). On a fresh clone, run that command once so the repo's tracked hook takes effect.
 - Net effect: the version advances as soon as you change code and commit it, **before** the next rebuild/redeploy — so the deployed build always carries a fresh `APP_VERSION`. (The hook is a no-op during `npm run build` itself; the bump is produced at commit time and picked up by the subsequent build.)
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
+- The version at the time of the **version-change auto-end** and **dashboard/header polling** work was **`1.0000019`**.
+- The version at the time of the **admin multi-user reports with version filter** and **searchable user/version selectors** was **`1.0000020`**.
 
-## Testing Versions (Per-Version Tracking)
+## Admin: User Reports
 
-Admins define a **testing version** that users must run their tests against. This is a
-separate concept from the build `APP_VERSION` (`src/constants.ts`) shown in the footer.
+The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
+over a configurable date range, filtered by testing version.
 
-- Managed from the **Versions** tab in the admin panel (`src/components/AdminPanel.tsx`).
-- Stored in the `versions` table (`tests.db`); exactly one row carries `is_current = 1`.
-  The first version created automatically becomes current. `POST /api/versions/:id/set-current`
-  switches the active version (unsetting the previous one inside a transaction).
-- The current version name is displayed in the **top-center of the header**
-  (`src/components/Header.tsx` via `GET /api/versions/current`) on every page.
-- Every test submission is tagged with the current `version_id`:
-  - `POST /api/test-results/:testId/steps/:stepId` writes `version_id` into `test_results`.
-  - The same `version_id` is written into the append-only `points_log` on each submission.
-- Both `test_results` and `points_log` gained a `version_id` column (added via migration
-  in `server/db/db.js`; nullable so pre-existing rows are unaffected).
-- Because each submission records its version, **per-version reports** can later aggregate
-  pass/fail counts, number of tests done, and earned points simply by grouping on `version_id`.
-- Backups (admin Backup / Restore tab) now include the `versions` table, and restores
-  re-insert `version_id` for results/points.
-- A version cannot be deleted while it still has logged results or points (to avoid
-  orphaning per-version history); admins instead switch the current version.
+- **Route**: `GET /api/reports/user-report` (admin only).
+- **Parameters**: `userId` (single ID or comma-separated list), `startDate`, `endDate`, `versionId` (optional).
+- **Response**:
+  - `users`: array of `{ userId, userName }` for the requested users.
+  - `startDate`, `endDate`, `versionId`.
+  - `totalPointsEarned`, `totalSteps`.
+  - `tests`: array of assigned tests with per-test summary (`rounds`, `passes`, `fails`)
+    and `steps` containing only steps with at least one failure (`fails > 0`), showing
+    how many times each step failed during the period.
+- **Frontend UI** (`AdminPanel.tsx` Reports tab):
+  - **User selector**: searchable combo box with checkboxes; selected users shown as removable tags.
+  - **Version selector**: searchable combo box, defaults to the current version.
+  - **Date presets**: Current Month, Last Month (default), Current Year, Last Year, Custom.
+  - **Generate Report** button is disabled until at least one user and a version are selected.
+  - Test cards are collapsed by default; clicking a card expands it to show only failed steps
+    with their fail counts. Passed steps are hidden.
+- Reports are scoped to tests assigned to the selected users and only count activity within
+  the chosen date range and version.
 
 ## Admin: Manage Test Steps
 

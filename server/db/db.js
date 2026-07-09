@@ -65,7 +65,8 @@ function initDB() {
   // Per-user sequential loop state: which assigned test is currently unlocked/active.
   testsDb.exec(`CREATE TABLE IF NOT EXISTS user_loop_state (
     user_id INTEGER PRIMARY KEY,
-    active_test_id INTEGER
+    active_test_id INTEGER,
+    version_id INTEGER
   )`);
 
   // Append-only log of points earned per submitted step. Unlike test_results
@@ -104,6 +105,11 @@ try {
   if (!plCols.some(c => c.name === 'version_id')) {
     testsDb.exec('ALTER TABLE points_log ADD COLUMN version_id INTEGER');
     console.log('Migration: added version_id column to points_log');
+  }
+  const lsCols = testsDb.prepare('PRAGMA table_info(user_loop_state)').all();
+  if (!lsCols.some(c => c.name === 'version_id')) {
+    testsDb.exec('ALTER TABLE user_loop_state ADD COLUMN version_id INTEGER');
+    console.log('Migration: added version_id column to user_loop_state');
   }
 } catch (err) {
   console.error('Migration failed:', err);

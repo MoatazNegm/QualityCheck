@@ -90,7 +90,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
       INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)
     `);
     const insertLoopState = testsDb.prepare(`
-      INSERT INTO user_loop_state (user_id, active_test_id) VALUES (?, ?)
+      INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)
     `);
     const insertPointsLog = testsDb.prepare(`
       INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -130,7 +130,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
     }
 
     for (const loop of backup.user_loop_state || []) {
-      insertLoopState.run(loop.user_id, loop.active_test_id);
+      insertLoopState.run(loop.user_id, loop.active_test_id, loop.version_id ?? null);
     }
 
     for (const pl of backup.points_log || []) {

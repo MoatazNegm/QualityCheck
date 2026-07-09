@@ -10,12 +10,13 @@ const Header: React.FC = () => {
 
   useEffect(() => {
     if (!token) return;
+    let mounted = true;
     const fetchVersion = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/versions/current`, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        if (res.ok) {
+        if (res.ok && mounted) {
           const data = await res.json();
           setCurrentVersion(data.version ? data.version.name : null);
         }
@@ -24,6 +25,8 @@ const Header: React.FC = () => {
       }
     };
     fetchVersion();
+    const interval = setInterval(fetchVersion, 5000);
+    return () => clearInterval(interval);
   }, [token]);
 
   return (

@@ -57,7 +57,7 @@ const AdminPanel: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'backup'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -80,6 +80,19 @@ const AdminPanel: React.FC = () => {
   const [versionBusy, setVersionBusy] = useState(false);
   const [versionMessage, setVersionMessage] = useState('');
   const [versionError, setVersionError] = useState('');
+  const [reportUserIds, setReportUserIds] = useState<number[]>([]);
+  const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [reportVersionId, setReportVersionId] = useState<number | null>(null);
+  const [reportUserSearch, setReportUserSearch] = useState('');
+  const [reportVersionSearch, setReportVersionSearch] = useState('');
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [showVersionDropdown, setShowVersionDropdown] = useState(false);
+  const [reportData, setReportData] = useState<any | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -87,6 +100,9 @@ const AdminPanel: React.FC = () => {
     fetchTests();
     fetchUsers();
     fetchVersions();
+    const dates = getDefaultReportDates('last_month');
+    setReportStartDate(dates.start);
+    setReportEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -99,7 +115,11 @@ const AdminPanel: React.FC = () => {
       if (allRes.ok) setVersions(await allRes.json());
       if (curRes.ok) {
         const data = await curRes.json();
-        setCurrentVersion(data.version || null);
+        const cv = data.version || null;
+        setCurrentVersion(cv);
+        if (cv && reportVersionId === null) {
+          setReportVersionId(cv.id);
+        }
       }
     } catch {
       // ignore
@@ -189,6 +209,100 @@ const AdminPanel: React.FC = () => {
   const fetchUsers = async () => {
     const res = await fetch(`${API_BASE}/api/users`, { headers: authHeaders });
     if (res.ok) setUsers(await res.json());
+  };
+
+  const getDefaultReportDates = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
+    const now = new Date();
+    const start = new Date();
+    const end = new Date();
+
+    switch (preset) {
+      case 'current_month':
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'last_month':
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        start.setMonth(start.getMonth() - 1);
+        end.setDate(0);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'current_year':
+        start.setMonth(0, 1);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'last_year':
+        start.setFullYear(now.getFullYear() - 1, 0, 1);
+        start.setHours(0, 0, 0, 0);
+        end.setFullYear(now.getFullYear() - 1, 11, 31);
+        end.setHours(23, 59, 59, 999);
+        break;
+      default:
+        break;
+    }
+
+    return {
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10)
+    };
+  };
+
+  const handlePresetChange = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
+    setReportPreset(preset);
+    if (preset !== 'custom') {
+      const dates = getDefaultReportDates(preset);
+      setReportStartDate(dates.start);
+      setReportEndDate(dates.end);
+    }
+    setReportData(null);
+    setReportError('');
+  };
+
+  const fetchUserReport = async () => {
+    if (reportUserIds.length === 0 || !reportStartDate || !reportEndDate) return;
+    setReportLoading(true);
+    setReportError('');
+    setReportData(null);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/user-report`);
+      url.searchParams.set('userId', reportUserIds.join(','));
+      url.searchParams.set('startDate', reportStartDate);
+      url.searchParams.set('endDate', reportEndDate);
+      if (reportVersionId) url.searchParams.set('versionId', String(reportVersionId));
+
+      const res = await fetch(url.toString(), {
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setReportError(data.error || 'Failed to load report');
+      } else {
+        setReportData(data);
+      }
+    } catch {
+      setReportError('Network error');
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const toggleUserSelect = (userId: number) => {
+    setReportUserIds(prev => {
+      if (prev.includes(userId)) return prev.filter(id => id !== userId);
+      return [...prev, userId];
+    });
+    setReportData(null);
+    setReportError('');
+  };
+
+  const toggleTestExpand = (testId: number) => {
+    setExpandedTests(prev => {
+      const next = new Set(prev);
+      if (next.has(testId)) next.delete(testId);
+      else next.add(testId);
+      return next;
+    });
   };
 
   const fetchAssignmentsForTest = async (testId: number) => {
@@ -512,6 +626,12 @@ const AdminPanel: React.FC = () => {
           Versions
         </button>
         <button
+          className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
+          onClick={() => setActiveTab('reports')}
+        >
+          Reports
+        </button>
+        <button
           className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
           onClick={() => setActiveTab('backup')}
         >
@@ -739,6 +859,245 @@ const AdminPanel: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'reports' && (
+        <div className="admin-section">
+          <h3>User Report</h3>
+          <p className="admin-hint">
+            Select a user and a date range to view their points earned, steps attempted, per-test breakdown, and fully passed tests.
+          </p>
+
+          <div className="report-controls">
+            <div className="report-selectors">
+              <div className="searchable-select">
+                <label>Users</label>
+                <input
+                  type="text"
+                  className="user-input"
+                  placeholder="Search users..."
+                  value={showUserDropdown ? reportUserSearch : (reportUserIds.length > 0 ? reportUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ') : reportUserSearch)}
+                  onChange={e => setReportUserSearch(e.target.value)}
+                  onFocus={() => { setShowUserDropdown(true); setReportUserSearch(''); }}
+                  onBlur={() => setTimeout(() => setShowUserDropdown(false), 150)}
+                />
+                {showUserDropdown && (
+                  <div className="searchable-dropdown">
+                    {nonAdminUsers
+                      .filter(u => u.username.toLowerCase().includes(reportUserSearch.toLowerCase()))
+                      .map(u => (
+                        <label
+                          key={u.id}
+                          className={`searchable-option ${reportUserIds.includes(u.id) ? 'selected' : ''}`}
+                          onMouseDown={e => e.preventDefault()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={reportUserIds.includes(u.id)}
+                            onChange={() => {
+                              toggleUserSelect(u.id);
+                              setReportUserSearch('');
+                            }}
+                          />
+                          {u.username}
+                        </label>
+                      ))}
+                    {nonAdminUsers.filter(u => u.username.toLowerCase().includes(reportUserSearch.toLowerCase())).length === 0 && (
+                      <div className="searchable-no-results">No users found</div>
+                    )}
+                  </div>
+                )}
+                {reportUserIds.length > 0 && (
+                  <div className="selected-tags">
+                    {reportUserIds.map(id => {
+                      const u = nonAdminUsers.find(x => x.id === id);
+                      return u ? (
+                        <span key={id} className="selected-tag">
+                          {u.username}
+                          <button type="button" onClick={() => toggleUserSelect(id)}>×</button>
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="searchable-select">
+                <label>Version</label>
+                <input
+                  type="text"
+                  className="user-input"
+                  placeholder="Search versions..."
+                  value={showVersionDropdown ? reportVersionSearch : (reportVersionId ? (versions.find(v => v.id === reportVersionId)?.name || '') : reportVersionSearch)}
+                  onChange={e => setReportVersionSearch(e.target.value)}
+                  onFocus={() => setShowVersionDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowVersionDropdown(false), 150)}
+                />
+                {showVersionDropdown && (
+                  <div className="searchable-dropdown">
+                    {versions
+                      .filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase()))
+                      .map(v => (
+                        <div
+                          key={v.id}
+                          className={`searchable-option ${reportVersionId === v.id ? 'selected' : ''}`}
+                          onMouseDown={() => {
+                            setReportVersionId(v.id);
+                            setShowVersionDropdown(false);
+                            setReportVersionSearch('');
+                          }}
+                        >
+                          {v.name} {v.is_current ? '(current)' : ''}
+                        </div>
+                      ))}
+                    {versions.filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase())).length === 0 && (
+                      <div className="searchable-no-results">No versions found</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="report-presets">
+              <button
+                className={`btn-secondary report-preset-btn ${reportPreset === 'current_month' ? 'active' : ''}`}
+                onClick={() => handlePresetChange('current_month')}
+              >
+                Current Month
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${reportPreset === 'last_month' ? 'active' : ''}`}
+                onClick={() => handlePresetChange('last_month')}
+              >
+                Last Month
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${reportPreset === 'current_year' ? 'active' : ''}`}
+                onClick={() => handlePresetChange('current_year')}
+              >
+                Current Year
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${reportPreset === 'last_year' ? 'active' : ''}`}
+                onClick={() => handlePresetChange('last_year')}
+              >
+                Last Year
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${reportPreset === 'custom' ? 'active' : ''}`}
+                onClick={() => handlePresetChange('custom')}
+              >
+                Custom
+              </button>
+            </div>
+
+            <div className="report-dates">
+              <input
+                type="date"
+                className="user-input"
+                value={reportStartDate}
+                onChange={e => { setReportStartDate(e.target.value); setReportPreset('custom'); setReportData(null); setReportError(''); }}
+              />
+              <span className="report-date-sep">to</span>
+              <input
+                type="date"
+                className="user-input"
+                value={reportEndDate}
+                onChange={e => { setReportEndDate(e.target.value); setReportPreset('custom'); setReportData(null); setReportError(''); }}
+              />
+            </div>
+
+            <button
+              className="btn"
+              onClick={fetchUserReport}
+              disabled={reportLoading || reportUserIds.length === 0 || !reportVersionId || !reportStartDate || !reportEndDate}
+            >
+              {reportLoading ? 'Generating...' : 'Generate Report'}
+            </button>
+          </div>
+
+          {reportError && <p className="error-msg">{reportError}</p>}
+
+          {reportData && (
+            <div className="report-results">
+              <h4>
+                Report for {reportData.users && reportData.users.length > 0
+                  ? reportData.users.map((u: any) => u.userName).join(', ')
+                  : 'selected users'}
+                {' '}({reportData.startDate} — {reportData.endDate})
+                {reportData.versionId && (
+                  <span className="report-version-tag">
+                    Version {versions.find(v => v.id === reportData.versionId)?.name || reportData.versionId}
+                  </span>
+                )}
+              </h4>
+
+              <div className="report-summary">
+                <div className="report-summary-card">
+                  <span className="report-summary-value">{reportData.totalPointsEarned}</span>
+                  <span className="report-summary-label">Points Earned</span>
+                </div>
+                <div className="report-summary-card">
+                  <span className="report-summary-value">{reportData.totalSteps}</span>
+                  <span className="report-summary-label">Steps Submitted</span>
+                </div>
+              </div>
+
+              {reportData.tests.length === 0 ? (
+                <p className="admin-hint">No test activity in this period.</p>
+              ) : (
+                <div className="report-tests-list">
+                  {(reportData.tests || []).map((test: any) => {
+                    const isOpen = expandedTests.has(test.testId);
+                    const failedSteps = test.steps.filter((s: any) => s.fails > 0);
+                    return (
+                      <div key={test.testId} className="report-test-row">
+                        <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
+                          <span className="report-test-name">{test.testName}</span>
+                          <span className="report-test-stats">
+                            <span className="report-stat">{test.rounds} rounds</span>
+                            <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                            <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                          </span>
+                          {test.fullyPassed && (
+                            <span className="status-badge status-pass">FULLY PASSED</span>
+                          )}
+                          <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                        </div>
+                        {isOpen && (
+                          <div className="report-test-body">
+                            {failedSteps.length === 0 ? (
+                              <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
+                            ) : (
+                              <table className="report-steps-table">
+                                <thead>
+                                  <tr>
+                                    <th>Step</th>
+                                    <th>Description</th>
+                                    <th>Fails</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {failedSteps.map((step: any) => (
+                                    <tr key={step.stepId} className="report-step-row-failed">
+                                      <td className="step-num-cell">{step.stepNumber}</td>
+                                      <td>{step.description}</td>
+                                      <td><span className="status-badge status-fail">{step.fails}</span></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb } = require('../db/db');
+const { testsDb, usersDb } = require('../db/db');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 // Get detailed test results for a user
 router.get('/test/:testId/user/:userId', (req, res) => {
@@ -64,6 +65,183 @@ router.get('/monthly/:userId', (req, res) => {
     
     res.json(results);
   } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+function getDateRange(preset) {
+  const now = new Date();
+  const start = new Date();
+  const end = new Date();
+
+  switch (preset) {
+    case 'current_month':
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'last_month': {
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      start.setMonth(start.getMonth() - 1);
+      end.setDate(0);
+      end.setHours(23, 59, 59, 999);
+      break;
+    }
+    case 'current_year':
+      start.setMonth(0, 1);
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'last_year':
+      start.setFullYear(now.getFullYear() - 1, 0, 1);
+      start.setHours(0, 0, 0, 0);
+      end.setFullYear(now.getFullYear() - 1, 11, 31);
+      end.setHours(23, 59, 59, 999);
+      break;
+    default:
+      break;
+  }
+
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10)
+  };
+}
+
+// Get admin user report for a date range (admin only)
+router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const userIdsRaw = req.query.userId;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    const versionId = req.query.versionId ? parseInt(req.query.versionId, 10) : null;
+
+    if (!userIdsRaw || !startDate || !endDate) {
+      return res.status(400).json({ error: 'userId, startDate, and endDate are required' });
+    }
+
+    const userIds = String(userIdsRaw)
+      .split(',')
+      .map(id => parseInt(id, 10))
+      .filter(id => !isNaN(id));
+
+    if (userIds.length === 0) {
+      return res.status(400).json({ error: 'At least one valid userId is required' });
+    }
+
+    const placeholders = userIds.map(() => '?').join(',');
+    const users = usersDb.prepare(`SELECT id, username FROM users WHERE id IN (${placeholders})`).all(...userIds);
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'No valid users found' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    const versionFilter = versionId ? ' AND pl.version_id = ? ' : ' ';
+    const versionFilterJoin = versionId ? ' AND tr.version_id = ? ' : ' ';
+
+    const totals = testsDb.prepare(
+      `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
+       FROM points_log pl
+       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}`
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []))[0];
+
+    const assignedTests = testsDb.prepare(
+      `SELECT t.id, t.name
+       FROM tests t
+       INNER JOIN test_assignments ta ON ta.test_id = t.id
+       WHERE ta.user_id IN (${placeholders})
+       ORDER BY t.id`
+    ).all(...userIds);
+
+    const testSubMap = Object.fromEntries(
+      testsDb.prepare(
+        `SELECT test_id, COUNT(*) as submissions
+         FROM points_log pl
+         WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
+         GROUP BY test_id`
+      ).all(...userIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.submissions])
+    );
+
+    const stepData = testsDb.prepare(
+      `SELECT 
+         pl.test_id,
+         pl.step_id,
+         ts.step_number,
+         ts.description,
+         COUNT(pl.id) as submissions,
+         SUM(CASE WHEN tr.result = 'pass' THEN 1 ELSE 0 END) as passes,
+         SUM(CASE WHEN tr.result = 'fail' THEN 1 ELSE 0 END) as fails
+       FROM points_log pl
+       JOIN test_steps ts ON ts.id = pl.step_id
+       LEFT JOIN test_results tr ON tr.user_id IN (${placeholders}) AND tr.test_id = pl.test_id AND tr.step_id = pl.step_id ${versionFilterJoin}
+       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
+       GROUP BY pl.test_id, pl.step_id
+       ORDER BY pl.test_id, ts.step_number`
+    ).all(...userIds, ...(versionId ? [versionId] : []), ...userIds, start, end, ...(versionId ? [versionId] : []));
+
+    const stepsByTest = {};
+    const testLevelStats = {};
+    for (const row of stepData) {
+      if (!stepsByTest[row.test_id]) stepsByTest[row.test_id] = [];
+      stepsByTest[row.test_id].push({
+        stepId: row.step_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        submissions: row.submissions,
+        passes: row.passes || 0,
+        fails: row.fails || 0
+      });
+
+      if (!testLevelStats[row.test_id]) {
+        testLevelStats[row.test_id] = { submissions: 0, passes: 0, fails: 0 };
+      }
+      testLevelStats[row.test_id].submissions += row.submissions;
+      testLevelStats[row.test_id].passes += (row.passes || 0);
+      testLevelStats[row.test_id].fails += (row.fails || 0);
+    }
+
+    const fullyPassedTests = new Set();
+    for (const test of assignedTests) {
+      const stepsCount = testsDb.prepare('SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?').get(test.id).c;
+      if (stepsCount === 0) continue;
+      const passedSteps = testsDb.prepare(
+        `SELECT COUNT(*) as c FROM test_results tr WHERE tr.user_id IN (${placeholders}) AND tr.test_id = ? AND tr.result = ? ${versionId ? ' AND tr.version_id = ? ' : ' '}`
+      ).all(...userIds, test.id, 'pass', ...(versionId ? [versionId] : []))[0].c;
+      const hasActivity = (testSubMap[test.id] || 0) > 0;
+      if (passedSteps >= stepsCount && hasActivity) {
+        fullyPassedTests.add(test.id);
+      }
+    }
+
+    const tests = assignedTests.map(test => {
+      const steps = stepsByTest[test.id] || [];
+      const stats = testLevelStats[test.id] || { submissions: 0, passes: 0, fails: 0 };
+      const totalSubmissions = testSubMap[test.id] || 0;
+
+      return {
+        testId: test.id,
+        testName: test.name,
+        totalSubmissions,
+        rounds: stats.submissions,
+        passes: stats.passes,
+        fails: stats.fails,
+        steps,
+        fullyPassed: fullyPassedTests.has(test.id)
+      };
+    });
+
+    res.json({
+      startDate,
+      endDate,
+      versionId: versionId || null,
+      totalPointsEarned: totals.totalPointsEarned,
+      totalSteps: totals.totalSteps,
+      users: users.map(u => ({ userId: u.id, userName: u.username })),
+      tests
+    });
+  } catch (error) {
+    console.error('Report error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
