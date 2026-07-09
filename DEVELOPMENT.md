@@ -88,17 +88,19 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- **After every code change, the version must be advanced.** There are two ways to do this:
-  1. **Preferred:** Commit the code change. A git **pre-commit hook** (`.githooks/pre-commit`, using `scripts/pre-commit.js`) automatically bumps `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`) whenever a source file under `src/` or `server/` is committed, and stages the bumped `src/constants.ts` into that same commit. Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger a bump, and a commit that only touches `src/constants.ts` will not double-bump.
-  2. **Manual fallback:** Run `node scripts/advance_version.js` by hand if you are not ready to commit.
-- The hook is activated by `git config core.hooksPath .githooks` (already set in this checkout). On a fresh clone, run that command once so the repo's tracked hook takes effect.
-- Net effect: the version advances as soon as you change code and commit it, **before** the next rebuild/redeploy — so the deployed build always carries a fresh `APP_VERSION`. (The hook is a no-op during `npm run build` itself; the bump is produced at commit time and picked up by the subsequent build.)
+- **After every code change, the version must be advanced BEFORE rebuilding.** The correct order is:
+  1. Make the code change.
+  2. Run `node scripts/advance_version.js` to bump `APP_VERSION`.
+  3. Run `npm run build` to produce the production bundle with the new version.
+  4. Restart the server.
+  5. Commit and push the code change **along with the already-bumped `src/constants.ts`**.
+- The pre-commit hook is a **safety net only**: if you forget to advance the version manually, it will bump and stage `src/constants.ts` at commit time. But the **running app serves the built bundle**, so if you build before advancing, the deployed app will still show the old version even though the committed `constants.ts` has the new one. Always advance before building.
+- Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** need a version bump.
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 - The version at the time of the **version-change auto-end** and **dashboard/header polling** work was **`1.0000019`**.
 - The version at the time of the **admin multi-user reports with version filter** and **searchable user/version selectors** was **`1.0000020`**.
-
-## Admin: User Reports
+- The version at the time of the **test-centric admin report** with test selector and failed user/step breakdown was **`1.0000023`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
