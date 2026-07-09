@@ -57,7 +57,7 @@ const AdminPanel: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'backup'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -93,6 +93,19 @@ const AdminPanel: React.FC = () => {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState('');
   const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
+  const [testReportTestIds, setTestReportTestIds] = useState<number[]>([]);
+  const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [testReportStartDate, setTestReportStartDate] = useState('');
+  const [testReportEndDate, setTestReportEndDate] = useState('');
+  const [testReportVersionId, setTestReportVersionId] = useState<number | null>(null);
+  const [testReportTestSearch, setTestReportTestSearch] = useState('');
+  const [testReportVersionSearch, setTestReportVersionSearch] = useState('');
+  const [showTestDropdown, setShowTestDropdown] = useState(false);
+  const [showTestVersionDropdown, setShowTestVersionDropdown] = useState(false);
+  const [testReportData, setTestReportData] = useState<any | null>(null);
+  const [testReportLoading, setTestReportLoading] = useState(false);
+  const [testReportError, setTestReportError] = useState('');
+  const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -103,6 +116,8 @@ const AdminPanel: React.FC = () => {
     const dates = getDefaultReportDates('last_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
+    setTestReportStartDate(dates.start);
+    setTestReportEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -298,6 +313,66 @@ const AdminPanel: React.FC = () => {
 
   const toggleTestExpand = (testId: number) => {
     setExpandedTests(prev => {
+      const next = new Set(prev);
+      if (next.has(testId)) next.delete(testId);
+      else next.add(testId);
+      return next;
+    });
+  };
+
+  const fetchTestReport = async () => {
+    if ((testReportTestIds.length === 0 && testReportTestIds.length !== 0) || !testReportStartDate || !testReportEndDate) return;
+    setTestReportLoading(true);
+    setTestReportError('');
+    setTestReportData(null);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/test-report`);
+      if (testReportTestIds.length > 0) {
+        url.searchParams.set('testId', testReportTestIds.join(','));
+      } else {
+        url.searchParams.set('testId', 'all');
+      }
+      url.searchParams.set('startDate', testReportStartDate);
+      url.searchParams.set('endDate', testReportEndDate);
+      if (testReportVersionId) url.searchParams.set('versionId', String(testReportVersionId));
+
+      const res = await fetch(url.toString(), {
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTestReportError(data.error || 'Failed to load report');
+      } else {
+        setTestReportData(data);
+      }
+    } catch {
+      setTestReportError('Network error');
+    } finally {
+      setTestReportLoading(false);
+    }
+  };
+
+  const toggleTestSelect = (testId: number) => {
+    setTestReportTestIds(prev => {
+      if (prev.includes(testId)) return prev.filter(id => id !== testId);
+      return [...prev, testId];
+    });
+    setTestReportData(null);
+    setTestReportError('');
+  };
+
+  const toggleAllTests = () => {
+    if (testReportTestIds.length === tests.length) {
+      setTestReportTestIds([]);
+    } else {
+      setTestReportTestIds(tests.map(t => t.id));
+    }
+    setTestReportData(null);
+    setTestReportError('');
+  };
+
+  const toggleTestReportExpand = (testId: number) => {
+    setExpandedTestReportTests(prev => {
       const next = new Set(prev);
       if (next.has(testId)) next.delete(testId);
       else next.add(testId);
@@ -630,6 +705,12 @@ const AdminPanel: React.FC = () => {
           onClick={() => setActiveTab('reports')}
         >
           Reports
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'test-reports' ? 'active' : ''}`}
+          onClick={() => setActiveTab('test-reports')}
+        >
+          Test Reports
         </button>
         <button
           className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
@@ -1087,6 +1168,266 @@ const AdminPanel: React.FC = () => {
                                       <td><span className="status-badge status-fail">{step.fails}</span></td>
                                     </tr>
                                   ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'test-reports' && (
+        <div className="admin-section">
+          <h3>Test Report</h3>
+          <p className="admin-hint">
+            Select tests and a date range to view how many times each test was run, how many passed/failed, and which users failed at which steps.
+          </p>
+
+          <div className="report-controls">
+            <div className="report-selectors">
+              <div className="searchable-select">
+                <label>Tests</label>
+                <div className="test-select-header">
+                  <button type="button" className="btn-secondary" onClick={toggleAllTests}>
+                    {testReportTestIds.length === tests.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  className="user-input"
+                  placeholder="Search tests..."
+                  value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : testReportTestSearch)}
+                  onChange={e => setTestReportTestSearch(e.target.value)}
+                  onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
+                  onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
+                />
+                {showTestDropdown && (
+                  <div className="searchable-dropdown">
+                    {tests
+                      .filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
+                      .map(t => (
+                        <label
+                          key={t.id}
+                          className={`searchable-option ${testReportTestIds.includes(t.id) ? 'selected' : ''}`}
+                          onMouseDown={e => e.preventDefault()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={testReportTestIds.includes(t.id)}
+                            onChange={() => toggleTestSelect(t.id)}
+                          />
+                          {t.name}
+                        </label>
+                      ))}
+                    {tests.filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase())).length === 0 && (
+                      <div className="searchable-no-results">No tests found</div>
+                    )}
+                  </div>
+                )}
+                {testReportTestIds.length > 0 && (
+                  <div className="selected-tags">
+                    {testReportTestIds.map(id => {
+                      const t = tests.find(x => x.id === id);
+                      return t ? (
+                        <span key={id} className="selected-tag">
+                          {t.name}
+                          <button type="button" onClick={() => toggleTestSelect(id)}>×</button>
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="searchable-select">
+                <label>Version</label>
+                <input
+                  type="text"
+                  className="user-input"
+                  placeholder="Search versions..."
+                  value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionId ? (versions.find(v => v.id === testReportVersionId)?.name || '') : testReportVersionSearch)}
+                  onChange={e => setTestReportVersionSearch(e.target.value)}
+                  onFocus={() => setShowTestVersionDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
+                />
+                {showTestVersionDropdown && (
+                  <div className="searchable-dropdown">
+                    {versions
+                      .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
+                      .map(v => (
+                        <div
+                          key={v.id}
+                          className={`searchable-option ${testReportVersionId === v.id ? 'selected' : ''}`}
+                          onMouseDown={() => {
+                            setTestReportVersionId(v.id);
+                            setShowTestVersionDropdown(false);
+                            setTestReportVersionSearch('');
+                          }}
+                        >
+                          {v.name} {v.is_current ? '(current)' : ''}
+                        </div>
+                      ))}
+                    {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
+                      <div className="searchable-no-results">No versions found</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="report-presets">
+              <button
+                className={`btn-secondary report-preset-btn ${testReportPreset === 'current_month' ? 'active' : ''}`}
+                onClick={() => {
+                  setTestReportPreset('current_month');
+                  const dates = getDefaultReportDates('current_month');
+                  setTestReportStartDate(dates.start);
+                  setTestReportEndDate(dates.end);
+                  setTestReportData(null);
+                  setTestReportError('');
+                }}
+              >
+                Current Month
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${testReportPreset === 'last_month' ? 'active' : ''}`}
+                onClick={() => {
+                  setTestReportPreset('last_month');
+                  const dates = getDefaultReportDates('last_month');
+                  setTestReportStartDate(dates.start);
+                  setTestReportEndDate(dates.end);
+                  setTestReportData(null);
+                  setTestReportError('');
+                }}
+              >
+                Last Month
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${testReportPreset === 'current_year' ? 'active' : ''}`}
+                onClick={() => {
+                  setTestReportPreset('current_year');
+                  const dates = getDefaultReportDates('current_year');
+                  setTestReportStartDate(dates.start);
+                  setTestReportEndDate(dates.end);
+                  setTestReportData(null);
+                  setTestReportError('');
+                }}
+              >
+                Current Year
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${testReportPreset === 'last_year' ? 'active' : ''}`}
+                onClick={() => {
+                  setTestReportPreset('last_year');
+                  const dates = getDefaultReportDates('last_year');
+                  setTestReportStartDate(dates.start);
+                  setTestReportEndDate(dates.end);
+                  setTestReportData(null);
+                  setTestReportError('');
+                }}
+              >
+                Last Year
+              </button>
+              <button
+                className={`btn-secondary report-preset-btn ${testReportPreset === 'custom' ? 'active' : ''}`}
+                onClick={() => {
+                  setTestReportPreset('custom');
+                  setTestReportData(null);
+                  setTestReportError('');
+                }}
+              >
+                Custom
+              </button>
+            </div>
+
+            <div className="report-dates">
+              <input
+                type="date"
+                className="user-input"
+                value={testReportStartDate}
+                onChange={e => { setTestReportStartDate(e.target.value); setTestReportPreset('custom'); setTestReportData(null); setTestReportError(''); }}
+              />
+              <span className="report-date-sep">to</span>
+              <input
+                type="date"
+                className="user-input"
+                value={testReportEndDate}
+                onChange={e => { setTestReportEndDate(e.target.value); setTestReportPreset('custom'); setTestReportData(null); setTestReportError(''); }}
+              />
+            </div>
+
+            <button
+              className="btn"
+              onClick={fetchTestReport}
+              disabled={testReportLoading || (testReportTestIds.length === 0 && tests.length > 0) || !testReportVersionId || !testReportStartDate || !testReportEndDate}
+            >
+              {testReportLoading ? 'Generating...' : 'Generate Report'}
+            </button>
+          </div>
+
+          {testReportError && <p className="error-msg">{testReportError}</p>}
+
+          {testReportData && (
+            <div className="report-results">
+              <h4>
+                Test Report ({testReportData.startDate} — {testReportData.endDate})
+                {testReportData.versionId && (
+                  <span className="report-version-tag">
+                    Version {versions.find(v => v.id === testReportData.versionId)?.name || testReportData.versionId}
+                  </span>
+                )}
+              </h4>
+
+              {testReportData.tests.length === 0 ? (
+                <p className="admin-hint">No test activity in this period.</p>
+              ) : (
+                <div className="report-tests-list">
+                  {testReportData.tests.map((test: any) => {
+                    const isOpen = expandedTestReportTests.has(test.testId);
+                    const failedUsers = test.failedUsers || [];
+                    return (
+                      <div key={test.testId} className="report-test-row">
+                        <div className="report-test-header" onClick={() => toggleTestReportExpand(test.testId)}>
+                          <span className="report-test-name">{test.testName}</span>
+                          <span className="report-test-stats">
+                            <span className="report-stat">{test.rounds} rounds</span>
+                            <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                            <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                          </span>
+                          <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                        </div>
+                        {isOpen && (
+                          <div className="report-test-body">
+                            {failedUsers.length === 0 ? (
+                              <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed users in this period.</p>
+                            ) : (
+                              <table className="report-steps-table">
+                                <thead>
+                                  <tr>
+                                    <th>User</th>
+                                    <th>Step</th>
+                                    <th>Description</th>
+                                    <th>Fails</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {failedUsers.map((fu: any) =>
+                                    fu.steps.map((step: any) => (
+                                      <tr key={`${fu.userId}-${step.stepId}`} className="report-step-row-failed">
+                                        <td>{fu.userName}</td>
+                                        <td className="step-num-cell">{step.stepNumber}</td>
+                                        <td>{step.description}</td>
+                                        <td><span className="status-badge status-fail">{step.fails}</span></td>
+                                      </tr>
+                                    ))
+                                  )}
                                 </tbody>
                               </table>
                             )}

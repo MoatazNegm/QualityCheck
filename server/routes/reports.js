@@ -247,3 +247,130 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
 });
 
 module.exports = router;
+
+// Get admin test report for a date range (admin only)
+router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const testIdsRaw = req.query.testId;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    const versionId = req.query.versionId ? parseInt(req.query.versionId, 10) : null;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    let testIds = [];
+    let tests;
+
+    if (testIdsRaw === 'all' || !testIdsRaw) {
+      tests = testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      testIds = tests.map(t => t.id);
+    } else {
+      testIds = String(testIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+
+      if (testIds.length === 0) {
+        return res.status(400).json({ error: 'At least one valid testId is required' });
+      }
+
+      const placeholders = testIds.map(() => '?').join(',');
+      tests = testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+    }
+
+    if (tests.length === 0) {
+      return res.status(404).json({ error: 'No valid tests found' });
+    }
+
+    const testPlaceholders = testIds.map(() => '?').join(',');
+    const versionFilter = versionId ? ' AND version_id = ? ' : ' ';
+
+    const testStats = Object.fromEntries(
+      testsDb.prepare(
+        `SELECT test_id, COUNT(*) as rounds,
+                SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
+                SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
+         FROM test_results
+         WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter}
+         GROUP BY test_id`
+      ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r])
+    );
+
+    const roundsMap = Object.fromEntries(
+      testsDb.prepare(
+        `SELECT test_id, COUNT(*) as rounds
+         FROM points_log
+         WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter}
+         GROUP BY test_id`
+      ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.rounds])
+    );
+
+    const failedUsersRaw = testsDb.prepare(
+      `SELECT 
+         tr.test_id,
+         tr.user_id,
+         u.username,
+         tr.step_id,
+         ts.step_number,
+         ts.description,
+         COUNT(tr.id) as fail_count
+       FROM test_results tr
+       JOIN users u ON tr.user_id = u.id
+       JOIN test_steps ts ON tr.step_id = ts.id
+       WHERE tr.test_id IN (${testPlaceholders}) AND tr.result = 'fail' AND tr.executed_at >= ? AND tr.executed_at <= ? ${versionFilter}
+       GROUP BY tr.test_id, tr.user_id, tr.step_id
+       ORDER BY tr.test_id, tr.user_id, ts.step_number`
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+
+    const failedUsersByTest = {};
+    for (const row of failedUsersRaw) {
+      if (!failedUsersByTest[row.test_id]) {
+        failedUsersByTest[row.test_id] = {};
+      }
+      if (!failedUsersByTest[row.test_id][row.user_id]) {
+        failedUsersByTest[row.test_id][row.user_id] = {
+          userId: row.user_id,
+          userName: row.username,
+          steps: []
+        };
+      }
+      failedUsersByTest[row.test_id][row.user_id].steps.push({
+        stepId: row.step_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        fails: row.fail_count
+      });
+    }
+
+    const testsReport = tests.map(test => {
+      const stats = testStats[test.id] || { passes: 0, fails: 0 };
+      const rounds = roundsMap[test.id] || 0;
+      const failedUsersMap = failedUsersByTest[test.id] || {};
+      const failedUsers = Object.values(failedUsersMap);
+
+      return {
+        testId: test.id,
+        testName: test.name,
+        rounds,
+        passes: stats.passes,
+        fails: stats.fails,
+        failedUsers
+      };
+    });
+
+    res.json({
+      startDate,
+      endDate,
+      versionId: versionId || null,
+      tests: testsReport
+    });
+  } catch (error) {
+    console.error('Test report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
