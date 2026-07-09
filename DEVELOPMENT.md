@@ -88,7 +88,9 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- **Always advance the version before a rebuild/redeploy.** Run `node scripts/advance_version.js` from the project root, which increments the patch component of `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`).
+- **The version now advances automatically** — you no longer run `node scripts/advance_version.js` by hand. A git **pre-commit hook** (`.githooks/pre-commit`, using `scripts/pre-commit.js`) bumps `APP_VERSION` by `0.0000001` (e.g. `1.0000002` → `1.0000003`) whenever a source file under `src/` or `server/` is committed, and stages the bumped `src/constants.ts` into that same commit. Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger a bump, and a commit that only touches `src/constants.ts` will not double-bump.
+- The hook is activated by `git config core.hooksPath .githooks` (already set in this checkout). On a fresh clone, run that command once so the repo's tracked hook takes effect.
+- Net effect: the version advances as soon as you change code and commit it, **before** the next rebuild/redeploy — so the deployed build always carries a fresh `APP_VERSION`. (The hook is a no-op during `npm run build` itself; the bump is produced at commit time and picked up by the subsequent build.)
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 
