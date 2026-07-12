@@ -10,20 +10,26 @@ const { usersDb } = require('../db/db');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
 
-// Ensure the default admin user exists.
+// Ensure the default admin user exists with password 'admin'.
 async function initializeAdminUser() {
   try {
     const admin = usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
     
+    const hashedPassword = await bcrypt.hash('admin', 10);
+    
     if (!admin) {
-      const hashedPassword = await bcrypt.hash('admin', 10);
-      
       usersDb.prepare(`
         INSERT INTO users (username, password_hash, is_admin)
         VALUES (?, ?, 1)
       `).run('admin', hashedPassword);
       
       console.log('Default admin user (admin/admin) created');
+    } else {
+      usersDb.prepare(`
+        UPDATE users SET password_hash = ? WHERE username = ?
+      `).run(hashedPassword, 'admin');
+      
+      console.log('Default admin user (admin/admin) password reset');
     }
   } catch (error) {
     console.error('Error initializing admin user:', error);
