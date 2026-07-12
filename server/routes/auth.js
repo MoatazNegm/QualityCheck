@@ -11,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
 
 // Ensure the default admin user exists with password 'admin'.
-async function initializeAdminUser() {
+async function ensureAdminUser() {
   try {
     const admin = usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
     
@@ -32,13 +32,15 @@ async function initializeAdminUser() {
       console.log('Default admin user (admin/admin) password reset');
     }
   } catch (error) {
-    console.error('Error initializing admin user:', error);
+    console.error('Failed to ensure admin user:', error);
   }
 }
 
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
+    await ensureAdminUser();
+
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -106,4 +108,4 @@ router.post('/logout', (req, res) => {
   res.json({ message: 'Logged out successfully' });
 });
 
-module.exports = { router, initializeAdminUser };
+module.exports = { router, ensureAdminUser };

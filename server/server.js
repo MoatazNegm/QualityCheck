@@ -30,9 +30,9 @@ const versionRoutes = require('./routes/versions');
 
 (async () => {
   try {
-    await authRoutes.initializeAdminUser();
+    await authRoutes.ensureAdminUser();
   } catch (err) {
-    console.error('Failed to initialize admin user:', err);
+    console.error('Failed to ensure admin user:', err);
   }
 })();
 
