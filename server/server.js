@@ -32,7 +32,15 @@ const reportRoutes = require('./routes/reports');
 const backupRoutes = require('./routes/backup');
 const versionRoutes = require('./routes/versions');
 
-app.use('/api/auth', authRoutes);
+(async () => {
+  try {
+    await authRoutes.initializeAdminUser();
+  } catch (err) {
+    console.error('Failed to initialize admin user:', err);
+  }
+})();
+
+app.use('/api/auth', authRoutes.router);
 app.use('/api/users', userRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/test-results', testResultRoutes);
