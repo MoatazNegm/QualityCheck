@@ -91,15 +91,15 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- The version is advanced **only at commit time**, by the pre-commit hook. The hook runs `scripts/advance_version.js` and stages the bumped `src/constants.ts` automatically whenever a `src/` or `server/` file is committed. There is no need — and no benefit — to manually run `node scripts/advance_version.js` before building. Doing so causes a double bump, which makes the locally-built bundle show one version number while the commit (and the deployed Vercel build) show the next.
+- The version is advanced only after completing any code change.
 - The correct order for any code change is:
-  1. Make the code change in `src/` or `server/`.
+  1. Make the code change and advance the app version.
   2. Build the production bundle: `cmd.exe /c "npm run build"`.
-  3. Restart the server and test locally. The footer will still show the **previous** version because the bump hasn't happened yet — this is expected and intentional, the bump is for the commit, not the build.
-  4. Commit the code change. The pre-commit hook bumps `APP_VERSION` and stages the new `src/constants.ts` automatically.
+  3. Restart the server and test locally.
+  4. Commit the code change.
   5. Push the commit.
-  6. **Rebuild** the production bundle (the source is now at the new version) and **restart** the server. From this point the local footer matches what Vercel will deploy.
-- This "bump at commit, build after commit" ordering is the only way to keep the locally-served bundle and the deployed Vercel build showing the **same** `APP_VERSION`. If you see a version mismatch between local and Vercel, it almost always means you skipped the post-commit rebuild in step 6.
+  6. **Rebuild** the production bundle and **restart** the server. From this point the local footer matches what Vercel will deploy.
+- This ordering is the only way to keep the locally-served bundle and the deployed Vercel build showing the **same** `APP_VERSION`. If you see a version mismatch between local and Vercel, it almost always means you skipped the post-commit rebuild in step 6.
 - Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger the pre-commit hook and **do not** change `APP_VERSION`.
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.

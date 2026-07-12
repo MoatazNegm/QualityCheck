@@ -46,7 +46,8 @@ const jsonParser = express.json({ limit: '1mb' });
 
 router.get('/export', authenticateToken, requireAdmin, (req, res) => {
   try {
-    const users = usersDb.prepare('SELECT id, username, is_admin FROM users').all();
+    const users = usersDb.prepare('SELECT * FROM users').all();
+    const userSessions = usersDb.prepare('SELECT * FROM user_sessions').all();
     const tests = testsDb.prepare('SELECT * FROM tests').all();
     const testSteps = testsDb.prepare('SELECT * FROM test_steps').all();
     const testResults = testsDb.prepare('SELECT * FROM test_results').all();
@@ -66,6 +67,7 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
         includesFiles: true,
       },
       users,
+      user_sessions: userSessions,
       tests,
       test_steps: testSteps,
       test_results: testResults,
@@ -96,131 +98,166 @@ function applyBackup(backup, res) {
     return res.status(400).json({ error: 'Invalid backup file format' });
   }
 
-  usersDb.prepare('DELETE FROM user_sessions').run();
-  usersDb.prepare('DELETE FROM users').run();
+  testsDb.pragma('foreign_keys = OFF');
+  const tx = usersDb.transaction(() => {
+    usersDb.prepare('DELETE FROM user_sessions').run();
+    usersDb.prepare('DELETE FROM users').run();
 
-  testsDb.prepare('DELETE FROM test_results').run();
-  testsDb.prepare('DELETE FROM test_submissions').run();
-  testsDb.prepare('DELETE FROM test_assignments').run();
-  testsDb.prepare('DELETE FROM user_loop_state').run();
-  testsDb.prepare('DELETE FROM user_test_rounds').run();
-  testsDb.prepare('DELETE FROM points_log').run();
-  testsDb.prepare('DELETE FROM test_steps').run();
-  testsDb.prepare('DELETE FROM tests').run();
-  testsDb.prepare('DELETE FROM versions').run();
+    testsDb.prepare('DELETE FROM test_results').run();
+    testsDb.prepare('DELETE FROM test_submissions').run();
+    testsDb.prepare('DELETE FROM test_assignments').run();
+    testsDb.prepare('DELETE FROM user_loop_state').run();
+    testsDb.prepare('DELETE FROM user_test_rounds').run();
+    testsDb.prepare('DELETE FROM points_log').run();
+    testsDb.prepare('DELETE FROM test_steps').run();
+    testsDb.prepare('DELETE FROM tests').run();
+    testsDb.prepare('DELETE FROM versions').run();
 
-  const insertUser = usersDb.prepare(`
-    INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)
-  `);
+    const insertUser = usersDb.prepare(`
+      INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)
+    `);
 
-  for (const user of backup.users) {
-    const passwordHash = user.password_hash || bcrypt.hashSync('changeme', 10);
-    insertUser.run(user.id, user.username, passwordHash, user.is_admin ? 1 : 0);
-  }
-
-  const insertTest = testsDb.prepare('INSERT INTO tests (id, name, description) VALUES (?, ?, ?)');
-  const insertStep = testsDb.prepare(`
-    INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, on_failure)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertResult = testsDb.prepare(`
-    INSERT INTO test_results (id, user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertSubmission = testsDb.prepare(`
-    INSERT INTO test_submissions (id, round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertAssignment = testsDb.prepare(`
-    INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)
-  `);
-  const insertLoopState = testsDb.prepare(`
-    INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)
-  `);
-  const insertUserTestRound = testsDb.prepare(`
-    INSERT OR REPLACE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, ?)
-  `);
-  const insertPointsLog = testsDb.prepare(`
-    INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertVersion = testsDb.prepare(`
-    INSERT INTO versions (id, name, note, is_current, created_at) VALUES (?, ?, ?, ?, ?)
-  `);
-
-  for (const test of backup.tests) {
-    insertTest.run(test.id, test.name, test.description);
-  }
-
-  for (const v of backup.versions || []) {
-    insertVersion.run(v.id, v.name, v.note, v.is_current ? 1 : 0, v.created_at);
-  }
-
-  for (const step of backup.test_steps || []) {
-    insertStep.run(step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.on_failure);
-  }
-
-  for (const result of backup.test_results || []) {
-    insertResult.run(
-      result.id,
-      result.user_id,
-      result.test_id,
-      result.step_id,
-      result.result,
-      result.comment,
-      result.config_file_path,
-      result.version_id ?? null,
-      result.round_id ?? null,
-      result.executed_at
-    );
-  }
-
-  for (const sub of backup.test_submissions || []) {
-    insertSubmission.run(
-      sub.id,
-      sub.round_id ?? null,
-      sub.user_id,
-      sub.test_id,
-      sub.step_id,
-      sub.result,
-      sub.comment,
-      sub.config_file_path,
-      sub.version_id ?? null,
-      sub.executed_at
-    );
-  }
-
-  for (const assignment of backup.test_assignments || []) {
-    insertAssignment.run(assignment.id, assignment.test_id, assignment.user_id, assignment.assigned_at);
-  }
-
-  for (const loop of backup.user_loop_state || []) {
-    insertLoopState.run(loop.user_id, loop.active_test_id, loop.version_id ?? null);
-  }
-
-  for (const r of backup.user_test_rounds || []) {
-    insertUserTestRound.run(r.user_id, r.test_id, r.round_no ?? 1);
-  }
-
-  for (const pl of backup.points_log || []) {
-    insertPointsLog.run(pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.version_id ?? null, pl.earned_at);
-  }
-
-  // Restore the uploaded config files that were embedded in the backup so the
-  // restored system is byte-for-byte complete (comments + their attachments).
-  const restoredFiles = [];
-  for (const f of backup.files || []) {
-    if (!f || !f.path || !f.data) continue;
-    const fileName = path.basename(f.path);
-    const absPath = path.join(uploadDir, fileName);
-    try {
-      fs.writeFileSync(absPath, Buffer.from(f.data, 'base64'));
-      restoredFiles.push(fileName);
-    } catch (e) {
-      console.error('Failed to restore upload file', fileName, e);
+    for (const user of backup.users) {
+      const passwordHash = user.password_hash || bcrypt.hashSync('changeme', 10);
+      insertUser.run(user.id, user.username, passwordHash, user.is_admin ? 1 : 0);
     }
-  }
 
-  res.json({ message: 'Restore completed successfully', restoredFiles: restoredFiles.length });
+    const insertSession = usersDb.prepare(`
+      INSERT INTO user_sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)
+    `);
+    for (const s of backup.user_sessions || []) {
+      insertSession.run(s.id, s.user_id, s.token, s.expires_at);
+    }
+
+    const insertTest = testsDb.prepare('INSERT INTO tests (id, name, description) VALUES (?, ?, ?)');
+    
+    const testStepsCols = testsDb.prepare('PRAGMA table_info(test_steps)').all();
+    const hasPointsCol = testStepsCols.some(c => c.name === 'points');
+    const insertStep = hasPointsCol
+      ? testsDb.prepare(`
+          INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, points, on_failure)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+      : testsDb.prepare(`
+          INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, on_failure)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+
+    const insertResult = testsDb.prepare(`
+      INSERT INTO test_results (id, user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertSubmission = testsDb.prepare(`
+      INSERT INTO test_submissions (id, round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertAssignment = testsDb.prepare(`
+      INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)
+    `);
+    const insertLoopState = testsDb.prepare(`
+      INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)
+    `);
+    const insertUserTestRound = testsDb.prepare(`
+      INSERT OR REPLACE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, ?)
+    `);
+    const insertPointsLog = testsDb.prepare(`
+      INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertVersion = testsDb.prepare(`
+      INSERT INTO versions (id, name, note, is_current, created_at) VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const test of backup.tests) {
+      insertTest.run(test.id, test.name, test.description);
+    }
+
+    for (const v of backup.versions || []) {
+      insertVersion.run(v.id, v.name, v.note, v.is_current ? 1 : 0, v.created_at);
+    }
+
+    for (const step of backup.test_steps || []) {
+      if (hasPointsCol) {
+        insertStep.run(step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.points ?? step.value ?? 0, step.on_failure);
+      } else {
+        insertStep.run(step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.on_failure);
+      }
+    }
+
+    for (const result of backup.test_results || []) {
+      insertResult.run(
+        result.id,
+        result.user_id,
+        result.test_id,
+        result.step_id,
+        result.result,
+        result.comment,
+        result.config_file_path,
+        result.version_id ?? null,
+        result.round_id ?? null,
+        result.executed_at
+      );
+    }
+
+    for (const sub of backup.test_submissions || []) {
+      insertSubmission.run(
+        sub.id,
+        sub.round_id ?? null,
+        sub.user_id,
+        sub.test_id,
+        sub.step_id,
+        sub.result,
+        sub.comment,
+        sub.config_file_path,
+        sub.version_id ?? null,
+        sub.executed_at
+      );
+    }
+
+    for (const assignment of backup.test_assignments || []) {
+      insertAssignment.run(assignment.id, assignment.test_id, assignment.user_id, assignment.assigned_at);
+    }
+
+    for (const loop of backup.user_loop_state || []) {
+      insertLoopState.run(loop.user_id, loop.active_test_id, loop.version_id ?? null);
+    }
+
+    for (const r of backup.user_test_rounds || []) {
+      insertUserTestRound.run(r.user_id, r.test_id, r.round_no ?? 1);
+    }
+
+    for (const pl of backup.points_log || []) {
+      insertPointsLog.run(pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.version_id ?? null, pl.earned_at);
+    }
+
+    // Restore the uploaded config files that were embedded in the backup so the
+    // restored system is byte-for-byte complete (comments + their attachments).
+    const restoredFiles = [];
+    for (const f of backup.files || []) {
+      if (!f || !f.path || !f.data) continue;
+      const fileName = path.basename(f.path);
+      const absPath = path.join(uploadDir, fileName);
+      try {
+        fs.writeFileSync(absPath, Buffer.from(f.data, 'base64'));
+        restoredFiles.push(fileName);
+      } catch (e) {
+        console.error('Failed to restore upload file', fileName, e);
+      }
+    }
+
+    return { restoredFiles: restoredFiles.length };
+  });
+
+  try {
+    const result = tx();
+    res.json({ message: 'Restore completed successfully', restoredFiles: result.restoredFiles });
+  } catch (error) {
+    console.error('Backup apply error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to apply backup' });
+    }
+  } finally {
+    testsDb.pragma('foreign_keys = ON');
+  }
 }
 
 // Single-request import. Kept for small backups and backwards compatibility.
