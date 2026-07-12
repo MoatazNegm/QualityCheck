@@ -10,12 +10,12 @@ const { usersDb } = require('../db/db');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
 
-// Initialize default admin user if database is empty
+// Ensure the default admin user exists.
 async function initializeAdminUser() {
   try {
-    const userCount = usersDb.prepare('SELECT COUNT(*) as count FROM users').get();
+    const admin = usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
     
-    if (userCount.count === 0) {
+    if (!admin) {
       const hashedPassword = await bcrypt.hash('admin', 10);
       
       usersDb.prepare(`
