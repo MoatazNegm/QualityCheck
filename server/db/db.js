@@ -2,10 +2,10 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const { dataDir } = require('../utils/dataDir');
 
-// Users database
+// Users database — local SQLite file on disk (dataDir = project root locally,
+// /tmp on Vercel). On Vercel, /tmp is ephemeral (wiped on cold start/deploy).
+// For persistent Turso storage, set TURSO_DATABASE_URL env var (see README).
 const usersDb = new Database(path.join(dataDir, 'users.db'), { filename: true });
-
-// Tests database
 const testsDb = new Database(path.join(dataDir, 'tests.db'), { filename: true });
 
 // Initialize tables

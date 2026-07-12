@@ -336,7 +336,28 @@ Consumers:
 
 ### Vercel ephemeral storage caveat
 
-Vercel's `/tmp` is wiped on every cold start and every redeploy, so all runtime data (`users.db`, `tests.db`, `uploads/`) is **lost on every deploy**. After each fresh boot the server only has the auto-seeded `admin` user; tests, assignments, and results must be restored by the admin via the Backup / Restore tab (or re-imported via Excel upload). For durable data on Vercel, attach a persistent volume (Vercel KV, Vercel Postgres, or an external hosted DB) and adjust `dataDir.js` to point at it — but `/tmp` is enough to get the app running today and matches the existing ephemeral-storage design used on Render.
+> [!WARNING]
+> **Vercel's `/tmp` is wiped on every cold start and every redeploy.** This means all runtime data (`users.db`, `tests.db`, `uploads/`) is **lost** after inactivity (cold start) or after pushing a new deploy. You will see only the `admin` user — tests, assignments, results, and logs will all be gone.
+>
+> **Workaround:** After every cold start or deploy, the admin must restore via the Backup / Restore tab to bring all data back.
+
+### Persistent storage on Vercel with Turso
+
+For durable data on Vercel, the recommended approach is **[Turso](https://turso.tech)** — a cloud-hosted SQLite (libSQL) service with a free tier (9GB storage, 500 databases).
+
+**Setup steps:**
+1. Create a Turso account at [turso.tech](https://turso.tech)
+2. Install the Turso CLI: `curl -sSfL https://get.tur.so/install.sh | bash`
+3. Create a database: `turso db create qualitycheck`
+4. Get the URL and auth token: `turso db show qualitycheck`
+5. Add to Vercel dashboard → Settings → Environment Variables:
+   - `TURSO_DATABASE_URL` = the `libsql://` URL from step 4
+   - `TURSO_AUTH_TOKEN` = the token from step 4
+6. Install `@libsql/client`: `npm install @libsql/client`
+7. Update `server/db/db.js` to use `@libsql/client` instead of `better-sqlite3` (async API required). The Turso libsql client works over HTTP and persists all data in the cloud — no file writes needed on Vercel.
+
+> [!NOTE]
+> Using `@libsql/client` requires converting all synchronous `better-sqlite3` calls (`db.prepare().all()`, `db.prepare().run()`, `db.exec()`) to `await db.execute()` calls since the libsql HTTP client is async. This is a moderate refactor but is the correct long-term solution for production.
 
 ### Vercel's 4.5 MB request body limit and chunked backup import
 
