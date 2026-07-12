@@ -283,7 +283,7 @@ const AdminPanel: React.FC = () => {
     setReportError('');
     setReportData(null);
     try {
-      const url = new URL(`${API_BASE}/api/reports/user-report`);
+      const url = new URL(`${API_BASE}/api/reports/user-report`, window.location.origin);
       url.searchParams.set('userId', reportUserIds.join(','));
       url.searchParams.set('startDate', reportStartDate);
       url.searchParams.set('endDate', reportEndDate);
@@ -298,7 +298,8 @@ const AdminPanel: React.FC = () => {
       } else {
         setReportData(data);
       }
-    } catch {
+    } catch (err) {
+      console.error('User report fetch failed:', err);
       setReportError('Network error');
     } finally {
       setReportLoading(false);
@@ -329,7 +330,7 @@ const AdminPanel: React.FC = () => {
     setTestReportError('');
     setTestReportData(null);
     try {
-      const url = new URL(`${API_BASE}/api/reports/test-report`);
+      const url = new URL(`${API_BASE}/api/reports/test-report`, window.location.origin);
       if (testReportTestIds.length > 0) {
         url.searchParams.set('testId', testReportTestIds.join(','));
       } else {
@@ -348,7 +349,8 @@ const AdminPanel: React.FC = () => {
       } else {
         setTestReportData(data);
       }
-    } catch {
+    } catch (err) {
+      console.error('Test report fetch failed:', err);
       setTestReportError('Network error');
     } finally {
       setTestReportLoading(false);
