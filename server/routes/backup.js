@@ -99,7 +99,8 @@ function applyBackup(backup, res) {
   }
 
   testsDb.pragma('foreign_keys = OFF');
-  const tx = usersDb.transaction(() => {
+
+  try {
     usersDb.prepare('DELETE FROM user_sessions').run();
     usersDb.prepare('DELETE FROM users').run();
 
@@ -244,12 +245,7 @@ function applyBackup(backup, res) {
       }
     }
 
-    return { restoredFiles: restoredFiles.length };
-  });
-
-  try {
-    const result = tx();
-    res.json({ message: 'Restore completed successfully', restoredFiles: result.restoredFiles });
+    res.json({ message: 'Restore completed successfully', restoredFiles: restoredFiles.length });
   } catch (error) {
     console.error('Backup apply error:', error);
     if (!res.headersSent) {
