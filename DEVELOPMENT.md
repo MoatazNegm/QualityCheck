@@ -12,7 +12,8 @@ QualityCheck/
 │   ├── db/                 # Database initialization and connection (db.js)
 │   ├── googleDrive/        # Unused/partially implemented Google Drive sync (driveService.js)
 │   ├── middleware/         # Express middlewares (auth.js)
-│   └── routes/             # API routes (auth, users, tests, test-results, reports, backup)
+│   ├── routes/             # API routes (auth, users, tests, test-results, reports, backup)
+│   └── utils/              # Server-side helpers (dataDir.js — writable-directory resolver for Vercel)
 ├── src/                    # React frontend
 │   ├── components/         # React UI components (Dashboard, TestExecution, AdminPanel, etc.)
 │   ├── context/            # State contexts (AuthContext)
@@ -111,6 +112,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of making `initializeAdminUser` callable from server bootstrap and fixing `app.use('/api/auth', authRoutes.router)` was **`1.0000031`**.
 - The version at the time of **forcing admin/admin reset on every server startup** (regardless of existing admin user state) to guarantee login works in production was **`1.0000037`**.
 - The version at the time of **switching frontend to relative API URLs** and fixing CORS for multi-user/internet deployment was **`1.0000040`**.
+- The version at the time of **bumping `engines.node` to `24.x` (Node 20 was deprecated on Vercel as of 2026 and would fail to build)**, **fixing the User/Test Report "Network error" caused by `new URL()` throwing on a path-only string**, and **redirecting SQLite + uploads to `/tmp` on Vercel (read-only `/var/task/`)** was **`1.0000047`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
@@ -282,11 +284,57 @@ The app is a single Node service: Express serves both the API and the React prod
 - **Required env vars** (set in `render.yaml` / Render dashboard):
   - `NODE_ENV=production`
   - `JWT_SECRET` — set a strong random value (sessions are signed with it).
-  - `NODE_VERSION` is pinned to `24` for `better-sqlite3` prebuilt binaries (Node 20 was deprecated on Vercel as of 2026 and would fail to build).
+  - `NODE_VERSION` is pinned to `24` for `better-sqlite3` prebuilt binaries (Node 20 was deprecated as of 2026 and would fail to build on Vercel).
 - **Google Drive** is disabled and ignored; no `GOOGLE_*` credentials are required.
 
 ### Ephemeral storage caveat
 Render's filesystem is **ephemeral** — `users.db`, `tests.db`, and `uploads/` are created at runtime in the service root and are **lost on every deploy/restart**. The DBs are recreated empty (seed data is not auto-applied), so an admin must re-import tests and recreate users after a reset. For durable data, attach a Render **Disk** (persistent storage) mounted at the service root, or back up/restore via the admin Backup / Restore tab.
+
+## Deployment (Vercel)
+
+The same single Node service is deployed to Vercel via `vercel.json` at the project root. Two builds are wired up:
+
+- `@vercel/static-build` reading `package.json`, output dir `build/` — produces the React production bundle.
+- `@vercel/node` on `server/server.js` — the Express API.
+
+Routes:
+- `/api/*` → serverless function (`server/server.js`).
+- `/*` → static assets in `build/`. Unknown paths within the build output fall back to `index.html` (the SPA catch-all is handled by the static-build output, not the Express server).
+
+- **Port**: Vercel injects `PORT`; the server listens on `process.env.PORT_API || process.env.PORT || 4006` and binds `0.0.0.0`.
+- **Node version**: `engines.node` in `package.json` is pinned to `24.x`. Node 20 was deprecated on Vercel in 2026 and any project that still pins it (or has the project setting on 20.x) will fail to build with a hard error. If you have to change the Node version, update **both** the `engines` field in `package.json` **and** the dashboard setting in **Settings → General → Node.js Version**.
+- **API base**: the frontend uses **relative** API URLs (`/api/...`) by default, so the same build works on localhost, a private IP, Render, or any Vercel domain with no extra config. CORS is `origin: true`.
+- **Required env vars** (set in the Vercel dashboard, not in `.env`):
+  - `NODE_ENV=production`
+  - `JWT_SECRET` — set a strong random value (sessions are signed with it).
+- **Google Drive** is disabled and ignored; no `GOOGLE_*` credentials are required.
+
+### Vercel's read-only filesystem and the `dataDir` utility
+
+Vercel serverless functions run with a **read-only** filesystem at `/var/task/` — the only writable location is `/tmp`, which is also **ephemeral** (wiped on every cold start and every redeploy). Anywhere the backend writes to disk — `users.db`, `tests.db`, and `uploads/` — must therefore redirect to `/tmp` on Vercel. Locally those files live in the project root and everything works as-is.
+
+This is centralised in **`server/utils/dataDir.js`**, which every writable path goes through:
+
+```js
+// server/utils/dataDir.js
+const isVercel = !!process.env.VERCEL;
+const dataDir  = isVercel ? '/tmp' : path.join(__dirname, '..', '..');
+module.exports = { dataDir, isVercel };
+```
+
+Consumers:
+- `server/db/db.js` — opens `users.db` and `tests.db` under `dataDir`.
+- `server/server.js` — the `/uploads` static route reads from `dataDir/uploads` so files written by multer are served from the same place.
+- `server/routes/test-results.js` — failed-step config uploads are written to `dataDir/uploads`.
+- `server/routes/backup.js` — backup restore writes embedded files to `dataDir/uploads`; export reads from the same place.
+- `server/routes/users.js` — cascade-delete on user removal unlinks files from `dataDir/uploads`.
+
+> [!IMPORTANT]
+> **When you add any new server-side code that writes to disk (database files, upload files, caches, logs, anything), always go through `dataDir` from `server/utils/dataDir.js`.** Do not hardcode a relative path like `'users.db'` or `'../../uploads'` — those will work locally and silently crash on Vercel with `SQLITE_CANTOPEN` or `EROFS`. The `process.env.VERCEL` signal is the only thing distinguishing the two environments.
+
+### Vercel ephemeral storage caveat
+
+Vercel's `/tmp` is wiped on every cold start and every redeploy, so all runtime data (`users.db`, `tests.db`, `uploads/`) is **lost on every deploy**. After each fresh boot the server only has the auto-seeded `admin` user; tests, assignments, and results must be restored by the admin via the Backup / Restore tab (or re-imported via Excel upload). For durable data on Vercel, attach a persistent volume (Vercel KV, Vercel Postgres, or an external hosted DB) and adjust `dataDir.js` to point at it — but `/tmp` is enough to get the app running today and matches the existing ephemeral-storage design used on Render.
 
 ## Security Notes
 - Passwords are hashed using `bcrypt` / `bcryptjs`.
@@ -303,3 +351,4 @@ The React frontend is intentionally kept stateless with respect to all business 
 - **Relative API URLs only.** No hardcoded `localhost`, IP, or absolute URLs are baked into the build. The app works whether served on `localhost:4005`, a private IP, or a public Render/Vercel domain.
 - **Single source of truth:** the SQLite databases (`users.db`, `tests.db`) owned by the backend. Multiple concurrent users/browsers all query the same backend state, so there is no client-side inconsistency.
 - **Authentication token** is the only persistent client state (`localStorage`). All other state (`tests`, `steps`, `results`, `round`, `monthEarned`) is derived fresh from backend responses on each navigation/render.
+- **`new URL()` requires a base in the browser.** Unlike in Node, the browser's `URL` constructor does **not** fall back to `window.location` as an implicit base when you pass a path-only string. `new URL('/api/foo')` throws `TypeError: Failed to construct 'URL': Invalid URL` even though the page is loaded from a valid origin. The fix is to pass `window.location.origin` explicitly as the second argument — `new URL('/api/foo', window.location.origin)` — or just use a plain template string (`\`${API_BASE}/api/foo\``) and let `fetch` resolve the path against the current page. The User/Test Report fetches in `AdminPanel.tsx` hit this bug; see the commit history around version `1.0000045`.
