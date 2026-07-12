@@ -47,7 +47,7 @@ interface Version {
   created_at: string;
 }
 
-const API_BASE = process.env.REACT_APP_API_URL || '';
+const API_BASE = '';
 
 const AdminPanel: React.FC = () => {
   const { token } = useAuth();

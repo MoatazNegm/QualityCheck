@@ -13,7 +13,7 @@ interface TestStep {
   points: number;
 }
 
-const API_BASE = process.env.REACT_APP_API_URL || '';
+const API_BASE = '';
 
 const TestExecution: React.FC = () => {
   const { testId } = useParams<{ testId: string }>();

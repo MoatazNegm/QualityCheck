@@ -20,7 +20,7 @@ const Dashboard: React.FC = () => {
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
   const [currentVersionId, setCurrentVersionId] = useState<number | null>(null);
 
-  const API_BASE = process.env.REACT_APP_API_URL || '';
+  const API_BASE = '';
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
