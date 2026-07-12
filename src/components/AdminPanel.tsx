@@ -49,6 +49,17 @@ interface Version {
 
 const API_BASE = '';
 
+// Gzip a string using the browser's native CompressionStream. Returns a
+// Uint8Array of the compressed bytes. No npm dependency needed — available
+// in all modern browsers (Chrome 80+, Firefox 113+, Safari 16.4+).
+// (Type declaration lives in src/compressionStream.d.ts — TypeScript 4.9.5
+// doesn't include this type in lib.dom.d.ts.)
+async function gzipString(text: string): Promise<Uint8Array> {
+  const blob = new Blob([text]);
+  const stream = blob.stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 const AdminPanel: React.FC = () => {
   const { token } = useAuth();
   const [tests, setTests] = useState<Test[]>([]);
@@ -661,26 +672,58 @@ const AdminPanel: React.FC = () => {
     setBackupError('');
     setBackupMessage('');
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const res = await fetch(`${API_BASE}/api/backup/import`, {
+      // Read the file, gzip it, then upload in chunks. Vercel hard-caps
+      // serverless function request bodies at 4.5 MB, so any backup with
+      // embedded base64 files is guaranteed to exceed that without chunking.
+      const text = await file.text();
+      const gzipped = await gzipString(text);
+
+      // 3 MB per chunk keeps every individual request well under the 4.5 MB
+      // Vercel limit even after multipart overhead.
+      const CHUNK_SIZE = 3 * 1024 * 1024;
+      const totalChunks = Math.max(1, Math.ceil(gzipped.byteLength / CHUNK_SIZE));
+      const uploadId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, gzipped.byteLength);
+        const chunk = gzipped.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('uploadId', uploadId);
+        formData.append('chunkIndex', String(i));
+        formData.append('totalChunks', String(totalChunks));
+        formData.append('chunk', new Blob([chunk], { type: 'application/octet-stream' }));
+
+        const res = await fetch(`${API_BASE}/api/backup/import-chunk`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: formData,
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Chunk ${i + 1}/${totalChunks} upload failed (HTTP ${res.status})`);
+        }
+      }
+
+      const res = await fetch(`${API_BASE}/api/backup/import-finalize`, {
         method: 'POST',
-        headers: authHeaders,
-        body: formData,
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadId, totalChunks }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setBackupError(data.error || 'Restore failed');
-      } else {
-        setBackupMessage('Backup restored successfully.');
-        if (backupFileRef.current) backupFileRef.current.value = '';
-        fetchTests();
-        fetchUsers();
+        throw new Error(data.error || `Restore failed (HTTP ${res.status})`);
       }
-    } catch {
-      setBackupError('Network error during restore');
+
+      setBackupMessage(`Backup restored successfully (${data.restoredFiles} files restored).`);
+      if (backupFileRef.current) backupFileRef.current.value = '';
+      fetchTests();
+      fetchUsers();
+    } catch (err: any) {
+      console.error('Backup import failed:', err);
+      setBackupError(err?.message || 'Network error during restore');
     } finally {
       setBackupLoading(false);
     }

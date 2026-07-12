@@ -113,6 +113,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of **forcing admin/admin reset on every server startup** (regardless of existing admin user state) to guarantee login works in production was **`1.0000037`**.
 - The version at the time of **switching frontend to relative API URLs** and fixing CORS for multi-user/internet deployment was **`1.0000040`**.
 - The version at the time of **bumping `engines.node` to `24.x` (Node 20 was deprecated on Vercel as of 2026 and would fail to build)**, **fixing the User/Test Report "Network error" caused by `new URL()` throwing on a path-only string**, and **redirecting SQLite + uploads to `/tmp` on Vercel (read-only `/var/task/`)** was **`1.0000047`**.
+- The version at the time of **fixing the backup import 413 (Content Too Large) on Vercel** by adding **gzip compression + chunked upload** (3 MB per chunk, with new `/api/backup/import-chunk` and `/api/backup/import-finalize` endpoints, plus a small `dataDir`-aware cleanup), and **moving the SQLite migrations to run after `initDB()`** so the "no such table" error stops showing up in Vercel cold-start logs, was **`1.0000048`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
@@ -335,6 +336,18 @@ Consumers:
 ### Vercel ephemeral storage caveat
 
 Vercel's `/tmp` is wiped on every cold start and every redeploy, so all runtime data (`users.db`, `tests.db`, `uploads/`) is **lost on every deploy**. After each fresh boot the server only has the auto-seeded `admin` user; tests, assignments, and results must be restored by the admin via the Backup / Restore tab (or re-imported via Excel upload). For durable data on Vercel, attach a persistent volume (Vercel KV, Vercel Postgres, or an external hosted DB) and adjust `dataDir.js` to point at it — but `/tmp` is enough to get the app running today and matches the existing ephemeral-storage design used on Render.
+
+### Vercel's 4.5 MB request body limit and chunked backup import
+
+Vercel serverless functions hard-cap the request body at **4.5 MB** on every plan. The admin **Backup / Restore** backup JSON is mostly base64-embedded user uploads, so a real backup with even a handful of files easily blows past that limit and the import POST returns `413 Content Too Large`.
+
+To handle arbitrary backup sizes the restore flow is **gzip + chunked**:
+
+- **Client** (`AdminPanel.tsx` → `handleBackupImport`): reads the file, gzips the JSON with the browser's native `CompressionStream`, splits the gzipped bytes into 3 MB chunks, and POSTs each chunk to `/api/backup/import-chunk` with `uploadId`, `chunkIndex`, and `totalChunks` form fields. Then it POSTs `/api/backup/import-finalize` with `{ uploadId, totalChunks }`.
+- **Server** (`server/routes/backup.js`): the `/import-chunk` route writes each chunk to `dataDir/import-chunks/<uploadId>/<chunkIndex>`. The `/import-finalize` route reassembles the chunks in order, tries `zlib.gunzipSync` first (falling back to raw JSON), validates the structure, and applies it through the shared `applyBackup()` helper. Chunks are cleaned up on success and on any error path.
+- **Single-request fallback**: the original `POST /api/backup/import` is kept and now accepts **gzipped or raw** JSON (auto-detected via the gzip magic bytes), so any consumer that still sends a single request — or a backup small enough to fit in 4.5 MB even uncompressed — keeps working.
+
+The chunk size is 3 MB (well under the 4.5 MB Vercel limit even with multipart overhead) and the chunk directory is created on demand under `dataDir` so it works identically on local disk and on Vercel's `/tmp`. The `uploadId` is validated against a strict character class to prevent any path-traversal mischief.
 
 ## Security Notes
 - Passwords are hashed using `bcrypt` / `bcryptjs`.

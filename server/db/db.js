@@ -150,6 +150,15 @@ function bumpRound(userId, testId) {
   return row ? row.round_no : 1;
 }
 
+// Call initDB FIRST so the tables exist before any migration runs. Migrations
+// previously ran before initDB and produced scary "no such table" errors in
+// the logs (silently swallowed) on every cold start.
+try {
+  initDB();
+} catch (err) {
+  console.error('Failed to initialize database tables:', err);
+}
+
 // Migration: tag submissions with the version they were performed for.
 try {
   const trCols = testsDb.prepare('PRAGMA table_info(test_results)').all();
@@ -179,13 +188,6 @@ try {
   }
 } catch (err) {
   console.error('Migration failed:', err);
-}
-
-// Call initDB immediately to ensure tables are created on startup
-try {
-  initDB();
-} catch (err) {
-  console.error('Failed to initialize database tables:', err);
 }
 
 // Migration: add points column to test_steps if it doesn't exist
