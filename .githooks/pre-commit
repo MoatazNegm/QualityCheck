@@ -1,3 +1,0 @@
-#!/bin/sh
-# QualityCheck pre-commit hook: auto-advance APP_VERSION on source changes.
-node "$(git rev-parse --show-toplevel)/scripts/pre-commit.js"
