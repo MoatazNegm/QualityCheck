@@ -101,17 +101,24 @@ function applyBackup(backup, res) {
   testsDb.pragma('foreign_keys = OFF');
 
   try {
+    // DELETE IN CORRECT ORDER: child tables before parent tables
+    // This ensures no foreign key violations even if foreign_keys is enabled mid-operation
     usersDb.prepare('DELETE FROM user_sessions').run();
-    usersDb.prepare('DELETE FROM users').run();
 
+    // Tables that reference users (delete these BEFORE deleting users)
+    testsDb.prepare('DELETE FROM test_assignments').run();
     testsDb.prepare('DELETE FROM test_results').run();
     testsDb.prepare('DELETE FROM test_submissions').run();
-    testsDb.prepare('DELETE FROM test_assignments').run();
+    testsDb.prepare('DELETE FROM points_log').run();
     testsDb.prepare('DELETE FROM user_loop_state').run();
     testsDb.prepare('DELETE FROM user_test_rounds').run();
-    testsDb.prepare('DELETE FROM points_log').run();
+
+    // Tables that reference tests and test_steps (delete these BEFORE deleting parents)
     testsDb.prepare('DELETE FROM test_steps').run();
     testsDb.prepare('DELETE FROM tests').run();
+
+    // Parent tables last
+    usersDb.prepare('DELETE FROM users').run();
     testsDb.prepare('DELETE FROM versions').run();
 
     const insertUser = usersDb.prepare(`
