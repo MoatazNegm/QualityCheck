@@ -20,8 +20,10 @@ function getCurrentVersionId() {
   return row ? row.id : null;
 }
 
-// Configure uploads
-const uploadDir = path.join(__dirname, '../../uploads');
+// Configure uploads. On Vercel, `dataDir` is /tmp because the deployment
+// filesystem is read-only; locally it is the project root.
+const { dataDir } = require('../utils/dataDir');
+const uploadDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }

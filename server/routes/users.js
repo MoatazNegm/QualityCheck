@@ -60,8 +60,9 @@ router.post('/', async (req, res) => {
 const fs = require('fs');
 const path = require('path');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { dataDir } = require('../utils/dataDir');
 
-const uploadDir = path.join(__dirname, '../../uploads');
+const uploadDir = path.join(dataDir, 'uploads');
 
 // Delete user (admin only) — cascades every piece of data tied to the user so it
 // is as if they were never added: their results, assignments, loop state, points

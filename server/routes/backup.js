@@ -6,8 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { usersDb, testsDb } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { dataDir } = require('../utils/dataDir');
 
-const uploadDir = path.join(__dirname, '../../uploads');
+const uploadDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }

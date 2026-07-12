@@ -1,10 +1,12 @@
 const Database = require('better-sqlite3');
+const path = require('path');
+const { dataDir } = require('../utils/dataDir');
 
 // Users database
-const usersDb = new Database('users.db', { filename: true });
+const usersDb = new Database(path.join(dataDir, 'users.db'), { filename: true });
 
 // Tests database
-const testsDb = new Database('tests.db', { filename: true });
+const testsDb = new Database(path.join(dataDir, 'tests.db'), { filename: true });
 
 // Initialize tables
 function initDB() {

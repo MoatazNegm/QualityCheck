@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 const fs = require('fs');
+const { dataDir } = require('./utils/dataDir');
 
 dotenv.config();
 
@@ -16,8 +17,10 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve static files
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Serve static files. On Vercel uploads are written to /tmp (see utils/dataDir),
+// so the static route must read from the same place or freshly uploaded files
+// would 404.
+app.use('/uploads', express.static(path.join(dataDir, 'uploads')));
 
 // Import routes
 const authRoutes = require('./routes/auth');
