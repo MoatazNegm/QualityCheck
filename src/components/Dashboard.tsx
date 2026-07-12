@@ -13,7 +13,7 @@ interface Test {
 }
 
 const Dashboard: React.FC = () => {
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);

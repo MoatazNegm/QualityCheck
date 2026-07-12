@@ -490,18 +490,6 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const updatePoints = async (testId: number, stepId: number, points: number) => {
-    await fetch(`${API_BASE}/api/tests/${testId}/steps/${stepId}/points`, {
-      method: 'PATCH',
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ points }),
-    });
-    setManagedSteps(prev => ({
-      ...prev,
-      [testId]: (prev[testId] || []).map(s => s.id === stepId ? { ...s, points, value: points } : s)
-    }));
-  };
-
   // Renumber a test's steps sequentially (1..n) after an insert/delete.
   const normalizeSteps = async (testId: number) => {
     try {
