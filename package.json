@@ -37,6 +37,7 @@
     "server": "node server/server.js",
     "dev": "concurrently \"npm run server\" \"npm start\""
   },
+  "proxy": "http://localhost:4005",
   "eslintConfig": {
     "extends": [
       "react-app",

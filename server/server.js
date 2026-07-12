@@ -10,11 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 4006;
 
 // CORS Middleware
-app.use(cors());
-app.use(cors({
-  origin: 'http://localhost:3000', // React dev server
-  credentials: true
-}));
+app.use(cors({ origin: true, credentials: true }));
 
 // Body Middleware
 app.use(express.json({ limit: '50mb' }));
