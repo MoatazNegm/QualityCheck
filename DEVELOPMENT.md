@@ -282,7 +282,7 @@ The app is a single Node service: Express serves both the API and the React prod
 - **Required env vars** (set in `render.yaml` / Render dashboard):
   - `NODE_ENV=production`
   - `JWT_SECRET` — set a strong random value (sessions are signed with it).
-  - `NODE_VERSION` is pinned to `20` for `better-sqlite3` prebuilt binaries.
+  - `NODE_VERSION` is pinned to `24` for `better-sqlite3` prebuilt binaries (Node 20 was deprecated on Vercel as of 2026 and would fail to build).
 - **Google Drive** is disabled and ignored; no `GOOGLE_*` credentials are required.
 
 ### Ephemeral storage caveat
