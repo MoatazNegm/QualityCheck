@@ -106,6 +106,11 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of the **failure comment + file download in reports**, **backup including uploaded files**, and **cascade user deletion with double confirmation** was **`1.0000024`**.
 - The version at the time of making each failed-step upload **uniquely related to its exact user/test/step** (filename carries `u{userId}-t{testId}-s{stepId}`, and a later-round re-failure replaces + deletes the previous file) was **`1.0000025`**.
 - The version at the time of the **round-aware audit ledger** (`test_submissions` append-only table + per-(user,test) `user_test_rounds` counter + `round_id` on `test_results`/`points_log`, with reports, backup, and user-delete cascade covering the new tables) was **`1.0000026`**.
+- The version at the time of fixing **round-aware test execution** (new rounds restart from step 1, `doneStepIds` filtered by `round_id`) and **round-aware reports** (one line per failed submission with individual download links and timestamps) was **`1.0000028`**.
+- The version at the time of fixing **ESLint build errors for Vercel** (removed unused `updatePoints`, unused `user` in Dashboard, unused `useEffect` in LoginScreen) was **`1.0000030`**.
+- The version at the time of making `initializeAdminUser` callable from server bootstrap and fixing `app.use('/api/auth', authRoutes.router)` was **`1.0000031`**.
+- The version at the time of **forcing admin/admin reset on every server startup** (regardless of existing admin user state) to guarantee login works in production was **`1.0000037`**.
+- The version at the time of **switching frontend to relative API URLs** and fixing CORS for multi-user/internet deployment was **`1.0000040`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
@@ -117,17 +122,17 @@ over a configurable date range, filtered by testing version.
   - `startDate`, `endDate`, `versionId`.
   - `totalPointsEarned`, `totalSteps`.
   - `tests`: array of assigned tests with per-test summary (`rounds`, `passes`, `fails`)
-    and `steps` containing only steps with at least one failure (`fails > 0`), showing
-    how many times each step failed during the period.
+    and `failedSubmissions` containing **every failed submission as a separate object**
+    (`stepId`, `stepNumber`, `description`, `comment`, `configFilePath`, `roundId`, `executed_at`),
+    so admins see one row per failure occurrence and can download each file independently.
 - **Frontend UI** (`AdminPanel.tsx` Reports tab):
   - **User selector**: searchable combo box with checkboxes; selected users shown as removable tags.
   - **Version selector**: searchable combo box, defaults to the current version.
   - **Date presets**: Current Month, Last Month (default), Current Year, Last Year, Custom.
   - **Generate Report** button is disabled until at least one user and a version are selected.
-  - Test cards are collapsed by default; clicking a card expands it to show only failed steps
-     with their fail counts. Passed steps are hidden. For each failed step the report now also shows
-     the **comment** the user left and a **Download** link for the config file they uploaded
-     (so an admin reviewing a failure can read what went wrong and fetch the attachment).
+  - Test cards are collapsed by default; clicking a card expands it to show **all failed submissions**,
+    one table row per occurrence, with individual **Download** links, round, timestamp, comment,
+    and uploaded config file. Passed steps are hidden.
 - Reports are scoped to tests assigned to the selected users and only count activity within
   the chosen date range and version.
 
@@ -158,7 +163,7 @@ Backing endpoints (admin-authenticated) in `server/routes/tests.js`:
 ### Configuration
 - **App Root**: Any directory where the project is cloned (e.g. `C:\Users\moata\.gemini\antigravity\scratch\QualityCheck`).
 - **Backend Port**: Configurable via `PORT` (or `PORT_API` if using `server/server.js`). Defaults to `4006`.
-- **Frontend**: Served statically by the backend server on the configured port.
+- **Frontend**: Served statically by the backend server on the configured port. The React app is **stateless and passive** for all business data: every mount/load fetches tests, results, rounds, and points summary fresh from the backend. The only client-side state is the JWT token (stored in `localStorage`) and transient UI state (form inputs, expanded panels). No test data, points, or results are cached in the browser, making this a safe multi-user solution when published on the internet.
 - **Database Files**: Created in the project root directory as `users.db` and `tests.db` at runtime.
 
 ### Environment Variables
@@ -170,7 +175,7 @@ REDIRECT_URI=https://localhost:4006/callback
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
 PORT=4006
 PORT_API=4006
-NODE_ENV=development
+NODE_ENV=production
 ```
 
 ## Component Responsibilities
@@ -185,7 +190,7 @@ NODE_ENV=development
 ### Frontend (src/)
 - React components for UI (Dashboard for users, AdminPanel for admins).
 - Authentication context for state management.
-- API service layer communicating with `${API_BASE}/api/...` (configured via `REACT_APP_API_URL` environment variable during React build step).
+- API service layer communicating with `/api/...` using **relative URLs**. No hardcoded host, port, or absolute API base. All business data is fetched from the backend on every need; the frontend holds no test data, points, or results locally (the only persistent client state is the JWT token in `localStorage` for session reuse).
 
 ## Development Scripts
 - `node seed.js`: Seed the database with sample tests and steps.
@@ -222,14 +227,12 @@ Make sure your root `.env` file contains:
 ```env
 PORT=4005
 PORT_API=4005
-REACT_APP_API_URL=http://localhost:4005
 NODE_ENV=production
 ```
 
 ### 3. Rebuild the React Frontend
-Set `REACT_APP_API_URL` and run the build:
+Run the build:
 ```powershell
-$env:REACT_APP_API_URL="http://localhost:4005"
 cmd.exe /c "npm run build"
 ```
 
@@ -240,7 +243,7 @@ cmd.exe /c "node server/server.js"
 ```
 
 > [!NOTE]
-> The `npm run build` step above produces the **same** production bundle that is deployed to Render.com. Because the frontend now defaults to **relative** API URLs (`REACT_APP_API_URL` falls back to `''`), the `REACT_APP_API_URL` line is optional — when omitted, the app calls `/api/...` on whatever host serves it (the local `:4005` instance or the Render URL). The local instructions keep it explicit for clarity. The server listens on `process.env.PORT_API || process.env.PORT || 4006`, so it binds to Render's injected `PORT` automatically with no change to this rebuild/restart flow.
+> The frontend uses **relative** API URLs (`/api/...`) by default. The server listens on `process.env.PORT_API || process.env.PORT || 4006`, which covers both local and Render's injected `PORT`.
 
 ---
 
@@ -275,7 +278,7 @@ The app is a single Node service: Express serves both the API and the React prod
 - **Build**: `npm install && npm run build`
 - **Start**: `node server/server.js`
 - **Port**: the server listens on `process.env.PORT_API || process.env.PORT || 4006` and binds `0.0.0.0`, so Render's injected `PORT` is used automatically.
-- **API base**: the frontend uses **relative** API URLs (`/api/...`) by default (`REACT_APP_API_URL` falls back to `''`), which works on the Render URL/custom domain with no extra config.
+- **API base**: the frontend uses **relative** API URLs (`/api/...`) by default, which works on any host with no extra config. CORS is set to `origin: true` to allow any authenticated cross-origin request.
 - **Required env vars** (set in `render.yaml` / Render dashboard):
   - `NODE_ENV=production`
   - `JWT_SECRET` — set a strong random value (sessions are signed with it).
@@ -289,5 +292,14 @@ Render's filesystem is **ephemeral** — `users.db`, `tests.db`, and `uploads/` 
 - Passwords are hashed using `bcrypt` / `bcryptjs`.
 - Sessions are managed with JWT tokens.
 - File uploads are validated for type and size.
-- CORS is configured to allow requests from local client development origins.
+- CORS is configured with `origin: true` so the frontend can be served from any origin for multi-user/internet deployment while still requiring authentication.
+- **Admin bootstrap**: on every server startup, `initializeAdminUser()` ensures the `admin` user exists and resets its password to `admin`. This guarantees local and production access even if the database was restored or the user table was cleared.
 - **`uploads/` is never committed.** The `uploads/` directory holds runtime user-uploaded compliance configuration files (submitted on failed steps) and is listed in `.gitignore` so it is always excluded from version control. These are user data, not source — do not add or force-add `uploads/` to the repo. The admin **backup does** bundle every referenced upload (base64 inside the backup JSON) so a restore reproduces the system exactly, including the failure attachments.
+
+## Frontend Design: Stateless and Passive
+
+The React frontend is intentionally kept stateless with respect to all business data:
+- **No cached test data, points, or results.** Every mount/load refetches `tests`, `test_results`, `user_test_rounds`, and `points_log` summaries from the backend.
+- **Relative API URLs only.** No hardcoded `localhost`, IP, or absolute URLs are baked into the build. The app works whether served on `localhost:4005`, a private IP, or a public Render/Vercel domain.
+- **Single source of truth:** the SQLite databases (`users.db`, `tests.db`) owned by the backend. Multiple concurrent users/browsers all query the same backend state, so there is no client-side inconsistency.
+- **Authentication token** is the only persistent client state (`localStorage`). All other state (`tests`, `steps`, `results`, `round`, `monthEarned`) is derived fresh from backend responses on each navigation/render.
