@@ -53,10 +53,16 @@ app.get('/api/health', (req, res) => {
 });
 
 if (process.env.NODE_ENV === 'production' || fs.existsSync(path.join(__dirname, '../build'))) {
-  app.use(express.static(path.join(__dirname, '../build')));
+  const buildDir = path.join(__dirname, '../build');
+  // Serve static files (JS, CSS, images). If a file isn't found, fall through to the
+  // SPA catch-all below. This order works correctly on both local dev and Vercel
+  // serverless where the vercel.json static build would otherwise intercept SPA routes.
+  app.use(express.static(buildDir));
+  // SPA catch-all: serves index.html for any route not matched by an API or static file.
+  // This must come after express.static so actual files are served first.
   app.use((req, res) => {
     try {
-      const content = fs.readFileSync(path.join(__dirname, '../build', 'index.html'), 'utf8');
+      const content = fs.readFileSync(path.join(buildDir, 'index.html'), 'utf8');
       res.setHeader('Content-Type', 'text/html');
       res.send(content);
     } catch (error) {

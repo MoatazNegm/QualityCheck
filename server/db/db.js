@@ -8,6 +8,16 @@ const { dataDir } = require('../utils/dataDir');
 const usersDb = new Database(path.join(dataDir, 'users.db'), { filename: true });
 const testsDb = new Database(path.join(dataDir, 'tests.db'), { filename: true });
 
+// Disable WAL mode on both databases. WAL creates separate .db-wal and .db-shm
+// files that are tied to the specific /tmp inode. On Vercel, multiple serverless
+// instances each have their own /tmp, so each creates its own WAL files. A read
+// can then hit an instance whose WAL hasn't been flushed, seeing stale or empty data.
+// DELETE journal mode keeps a single .db-journal file and is more resilient to
+// multi-instance /tmp isolation. Note: this doesn't fully solve Vercel ephemerality
+// (data is still wiped on cold start) but it prevents cross-instance corruption.
+usersDb.pragma('journal_mode = DELETE');
+testsDb.pragma('journal_mode = DELETE');
+
 // Initialize tables
 function initDB() {
   usersDb.exec(`CREATE TABLE IF NOT EXISTS users (
