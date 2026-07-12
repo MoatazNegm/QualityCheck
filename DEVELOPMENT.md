@@ -91,14 +91,16 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- **After every code change, the version must be advanced BEFORE rebuilding.** The correct order is:
-  1. Make the code change.
-  2. Run `node scripts/advance_version.js` to bump `APP_VERSION`.
-  3. Run `npm run build` to produce the production bundle with the new version.
-  4. Restart the server.
-  5. Commit and push the code change **along with the already-bumped `src/constants.ts`**.
-- The pre-commit hook is a **safety net only**: if you forget to advance the version manually, it will bump and stage `src/constants.ts` at commit time. But the **running app serves the built bundle**, so if you build before advancing, the deployed app will still show the old version even though the committed `constants.ts` has the new one. Always advance before building.
-- Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** need a version bump.
+- The version is advanced **only at commit time**, by the pre-commit hook. The hook runs `scripts/advance_version.js` and stages the bumped `src/constants.ts` automatically whenever a `src/` or `server/` file is committed. There is no need — and no benefit — to manually run `node scripts/advance_version.js` before building. Doing so causes a double bump, which makes the locally-built bundle show one version number while the commit (and the deployed Vercel build) show the next.
+- The correct order for any code change is:
+  1. Make the code change in `src/` or `server/`.
+  2. Build the production bundle: `cmd.exe /c "npm run build"`.
+  3. Restart the server and test locally. The footer will still show the **previous** version because the bump hasn't happened yet — this is expected and intentional, the bump is for the commit, not the build.
+  4. Commit the code change. The pre-commit hook bumps `APP_VERSION` and stages the new `src/constants.ts` automatically.
+  5. Push the commit.
+  6. **Rebuild** the production bundle (the source is now at the new version) and **restart** the server. From this point the local footer matches what Vercel will deploy.
+- This "bump at commit, build after commit" ordering is the only way to keep the locally-served bundle and the deployed Vercel build showing the **same** `APP_VERSION`. If you see a version mismatch between local and Vercel, it almost always means you skipped the post-commit rebuild in step 6.
+- Pure docs/config commits (only `DEVELOPMENT.md`, `README.md`, `.env`, etc.) do **not** trigger the pre-commit hook and **do not** change `APP_VERSION`.
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 - The version at the time of the **version-change auto-end** and **dashboard/header polling** work was **`1.0000019`**.
@@ -113,7 +115,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of **forcing admin/admin reset on every server startup** (regardless of existing admin user state) to guarantee login works in production was **`1.0000037`**.
 - The version at the time of **switching frontend to relative API URLs** and fixing CORS for multi-user/internet deployment was **`1.0000040`**.
 - The version at the time of **bumping `engines.node` to `24.x` (Node 20 was deprecated on Vercel as of 2026 and would fail to build)**, **fixing the User/Test Report "Network error" caused by `new URL()` throwing on a path-only string**, and **redirecting SQLite + uploads to `/tmp` on Vercel (read-only `/var/task/`)** was **`1.0000047`**.
-- The version at the time of **fixing the backup import 413 (Content Too Large) on Vercel** by adding **gzip compression + chunked upload** (3 MB per chunk, with new `/api/backup/import-chunk` and `/api/backup/import-finalize` endpoints, plus a small `dataDir`-aware cleanup), and **moving the SQLite migrations to run after `initDB()`** so the "no such table" error stops showing up in Vercel cold-start logs, was **`1.0000048`**.
+- The version at the time of **fixing the backup import 413 (Content Too Large) on Vercel** by adding **gzip compression + chunked upload** (3 MB per chunk, with new `/api/backup/import-chunk` and `/api/backup/import-finalize` endpoints, plus a small `dataDir`-aware cleanup), and **moving the SQLite migrations to run after `initDB()`** so the "no such table" error stops showing up in Vercel cold-start logs, was **`1.0000049`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
