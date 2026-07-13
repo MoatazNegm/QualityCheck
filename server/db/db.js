@@ -9,7 +9,7 @@ let client;
 let localDb;
 
 if (isTurso) {
-  const { createClient } = require('@libsql/client');
+  const { createClient } = require('@libsql/client/web');
   const dbUrl = process.env.TURSO_DATABASE_URL;
   console.log(`[Database] Connecting to: Turso Cloud (${dbUrl.substring(0, 15)}...)`);
   client = createClient({
