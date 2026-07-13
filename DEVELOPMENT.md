@@ -21,7 +21,7 @@ QualityCheck/
 │   └── App.tsx             # Main App entry point
 ├── uploads/                # Directory for uploaded compliance configuration files
 ├── public/                 # Static assets (Q.png, quickstor-logo.png, etc.)
-├── users.db, tests.db      # SQLite databases (generated at root on startup)
+├── qualitycheck.db         # SQLite database (generated at root on startup)
 ├── seed.js                 # Database seeding script (populates tests.db)
 ├── .env                    # Environment variables file
 ├── DEVELOPMENT.md          # This file
@@ -49,13 +49,8 @@ The application supports two roles:
 
 ## Database Structure
 
-### Users Database (users.db)
-- Stores user credentials and admin status.
-- Tables: `users`, `user_sessions`
-
-### Tests Database (tests.db)
-- Stores test definitions, steps, results, user assignments, and per-user loop state.
-- Tables: `tests`, `test_steps`, `test_results`, `test_submissions`, `test_assignments`, `user_loop_state`, `user_test_rounds`
+The application has been unified to use a single database: **`qualitycheck.db`** (or a single cloud database on Turso).
+- **Tables**: `users`, `user_sessions`, `tests`, `test_steps`, `test_results`, `test_submissions`, `test_assignments`, `user_loop_state`, `user_test_rounds`, `points_log`, `versions`
   - `test_assignments` table columns: `id`, `test_id`, `user_id`, `assigned_at` (ensuring unique mappings for test assignments).
   - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user), `version_id` (the version under which the active test was started). This drives the sequential loop and version-change auto-end behavior described below.
   - `user_test_rounds` table columns: `user_id`, `test_id` (composite PRIMARY KEY), `round_no` (the current loop-round counter for that user+test; bumped each time the test is (re)entered).
@@ -166,7 +161,7 @@ Backing endpoints (admin-authenticated) in `server/routes/tests.js`:
 - **App Root**: Any directory where the project is cloned (e.g. `C:\Users\moata\.gemini\antigravity\scratch\QualityCheck`).
 - **Backend Port**: Configurable via `PORT` (or `PORT_API` if using `server/server.js`). Defaults to `4006`.
 - **Frontend**: Served statically by the backend server on the configured port. The React app is **stateless and passive** for all business data: every mount/load fetches tests, results, rounds, and points summary fresh from the backend. The only client-side state is the JWT token (stored in `localStorage`) and transient UI state (form inputs, expanded panels). No test data, points, or results are cached in the browser, making this a safe multi-user solution when published on the internet.
-- **Database Files**: Created in the project root directory as `users.db` and `tests.db` at runtime.
+- **Database Files**: Created in the project root directory as `qualitycheck.db` at runtime.
 
 ### Environment Variables
 Create a `.env` file in the root directory:
@@ -311,7 +306,7 @@ Routes:
 
 ### Vercel's read-only filesystem and the `dataDir` utility
 
-Vercel serverless functions run with a **read-only** filesystem at `/var/task/` — the only writable location is `/tmp`, which is also **ephemeral** (wiped on every cold start and every redeploy). Anywhere the backend writes to disk — `users.db`, `tests.db`, and `uploads/` — must therefore redirect to `/tmp` on Vercel. Locally those files live in the project root and everything works as-is.
+Vercel serverless functions run with a **read-only** filesystem at `/var/task/` — the only writable location is `/tmp`, which is also **ephemeral** (wiped on every cold start and every redeploy). Anywhere the backend writes to disk — `qualitycheck.db` and `uploads/` — must therefore redirect to `/tmp` on Vercel. Locally those files live in the project root and everything works as-is.
 
 This is centralised in **`server/utils/dataDir.js`**, which every writable path goes through:
 
@@ -323,19 +318,19 @@ module.exports = { dataDir, isVercel };
 ```
 
 Consumers:
-- `server/db/db.js` — opens `users.db` and `tests.db` under `dataDir`.
+- `server/db/db.js` — opens `qualitycheck.db` under `dataDir`.
 - `server/server.js` — the `/uploads` static route reads from `dataDir/uploads` so files written by multer are served from the same place.
 - `server/routes/test-results.js` — failed-step config uploads are written to `dataDir/uploads`.
 - `server/routes/backup.js` — backup restore writes embedded files to `dataDir/uploads`; export reads from the same place.
 - `server/routes/users.js` — cascade-delete on user removal unlinks files from `dataDir/uploads`.
 
 > [!IMPORTANT]
-> **When you add any new server-side code that writes to disk (database files, upload files, caches, logs, anything), always go through `dataDir` from `server/utils/dataDir.js`.** Do not hardcode a relative path like `'users.db'` or `'../../uploads'` — those will work locally and silently crash on Vercel with `SQLITE_CANTOPEN` or `EROFS`. The `process.env.VERCEL` signal is the only thing distinguishing the two environments.
+> **When you add any new server-side code that writes to disk (database files, upload files, caches, logs, anything), always go through `dataDir` from `server/utils/dataDir.js`.** Do not hardcode a relative path like `'qualitycheck.db'` or `'../../uploads'` — those will work locally and silently crash on Vercel with `SQLITE_CANTOPEN` or `EROFS`. The `process.env.VERCEL` signal is the only thing distinguishing the two environments.
 
 ### Vercel ephemeral storage caveat
 
 > [!WARNING]
-> **Vercel's `/tmp` is wiped on every cold start and every redeploy.** This means all runtime data (`users.db`, `tests.db`, `uploads/`) is **lost** after inactivity (cold start) or after pushing a new deploy. You will see only the `admin` user — tests, assignments, results, and logs will all be gone.
+> **Vercel's `/tmp` is wiped on every cold start and every redeploy.** This means all runtime data (`qualitycheck.db`, `uploads/`) is **lost** after inactivity (cold start) or after pushing a new deploy. You will see only the `admin` user — tests, assignments, results, and logs will all be gone.
 >
 > **Workaround:** After every cold start or deploy, the admin must restore via the Backup / Restore tab to bring all data back.
 
