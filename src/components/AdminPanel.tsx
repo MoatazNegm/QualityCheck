@@ -119,6 +119,11 @@ const AdminPanel: React.FC = () => {
   const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
   const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test'>('user');
   const [testReportLineSearch, setTestReportLineSearch] = useState('');
+  const [testReportSteps, setTestReportSteps] = useState<any[]>([]);
+  const [testReportSelectedStepId, setTestReportSelectedStepId] = useState<number | null>(null);
+  const [testReportStepSearch, setTestReportStepSearch] = useState('');
+  const [showStepDropdown, setShowStepDropdown] = useState(false);
+  const testReportInitialMount = useRef(true);
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deletingUser, setDeletingUser] = useState(false);
@@ -136,6 +141,15 @@ const AdminPanel: React.FC = () => {
     setTestReportEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (testReportInitialMount.current) {
+      testReportInitialMount.current = false;
+      return;
+    }
+    fetchTestReportSteps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testReportTestIds]);
 
   const fetchVersions = async () => {
     try {
@@ -352,6 +366,7 @@ const AdminPanel: React.FC = () => {
       url.searchParams.set('startDate', testReportStartDate);
       url.searchParams.set('endDate', testReportEndDate);
       if (testReportVersionId) url.searchParams.set('versionId', String(testReportVersionId));
+      if (testReportSelectedStepId) url.searchParams.set('stepId', String(testReportSelectedStepId));
 
       const res = await fetch(url.toString(), {
         headers: authHeaders
@@ -370,6 +385,26 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const fetchTestReportSteps = async () => {
+    if (testReportTestIds.length === 0) {
+      setTestReportSteps([]);
+      setTestReportSelectedStepId(null);
+      return;
+    }
+    try {
+      const url = new URL(`${API_BASE}/api/tests/steps`, window.location.origin);
+      url.searchParams.set('testIds', testReportTestIds.join(','));
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setTestReportSteps(data);
+        setTestReportSelectedStepId(null);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const toggleTestSelect = (testId: number) => {
     setTestReportTestIds(prev => {
       if (prev.includes(testId)) return prev.filter(id => id !== testId);
@@ -377,6 +412,8 @@ const AdminPanel: React.FC = () => {
     });
     setTestReportData(null);
     setTestReportError('');
+    setTestReportSteps([]);
+    setTestReportSelectedStepId(null);
   };
 
   const toggleAllTests = () => {
@@ -387,6 +424,8 @@ const AdminPanel: React.FC = () => {
     }
     setTestReportData(null);
     setTestReportError('');
+    setTestReportSteps([]);
+    setTestReportSelectedStepId(null);
   };
 
   const toggleAllUsers = () => {
@@ -1316,78 +1355,142 @@ const AdminPanel: React.FC = () => {
           ) : (
             <>
               <h3>Test Report</h3>
-              <p className="admin-hint">
-                Select tests and a date range to view how many times each test was run, how many passed/failed, and which users failed at which steps.
-              </p>
+               <p className="admin-hint">
+                 Select tests, steps, and a date range to view how many times each test was run, how many passed/failed, and which users failed at which steps.
+               </p>
 
               <div className="report-controls">
                 <div className="report-selectors">
-                  <div className="searchable-select">
-                    <label>Tests</label>
-                    <div className="test-select-header">
-                      <button type="button" className="btn-secondary" onClick={toggleAllTests}>
-                        {testReportTestIds.length === tests.length ? 'Deselect All' : 'Select All'}
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      className="user-input"
-                      placeholder="Search tests..."
-                      value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : testReportTestSearch)}
-                      onChange={e => setTestReportTestSearch(e.target.value)}
-                      onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
-                      onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
-                    />
-                    {showTestDropdown && (
-                      <div className="searchable-dropdown">
-                        {tests
-                          .filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
-                          .map(t => (
-                            <label
-                              key={t.id}
-                              className={`searchable-option ${testReportTestIds.includes(t.id) ? 'selected' : ''}`}
-                              onMouseDown={e => e.preventDefault()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={testReportTestIds.includes(t.id)}
-                                onChange={() => toggleTestSelect(t.id)}
-                              />
-                              {t.name}
-                            </label>
-                          ))}
-                        {tests.filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase())).length === 0 && (
-                          <div className="searchable-no-results">No tests found</div>
-                        )}
-                      </div>
-                    )}
-                    {testReportTestIds.length > 0 && (
-                      <div className="selected-tags">
-                        {testReportTestIds.map(id => {
-                          const t = tests.find(x => x.id === id);
-                          return t ? (
-                            <span key={id} className="selected-tag">
-                              {t.name}
-                              <button type="button" onClick={() => toggleTestSelect(id)}>×</button>
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
-                    )}
-                  </div>
+                   <div className="searchable-select">
+                     <label>Tests</label>
+                     <div className="test-select-header">
+                       <button type="button" className="btn-secondary" onClick={toggleAllTests}>
+                         {testReportTestIds.length === tests.length ? 'Deselect All' : 'Select All'}
+                       </button>
+                     </div>
+                     <input
+                       type="text"
+                       className="user-input"
+                       placeholder={testReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
+                       value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : 'All Tests')}
+                       onChange={e => setTestReportTestSearch(e.target.value)}
+                       onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
+                       onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
+                     />
+                     {showTestDropdown && (
+                       <div className="searchable-dropdown">
+                         <label
+                           className={`searchable-option ${testReportTestIds.length === 0 ? 'selected' : ''}`}
+                           onMouseDown={e => e.preventDefault()}
+                         >
+                           <input
+                             type="checkbox"
+                             checked={testReportTestIds.length === 0}
+                             onChange={() => {
+                               if (testReportTestIds.length > 0) {
+                                 setTestReportTestIds([]);
+                                 setTestReportData(null);
+                                 setTestReportError('');
+                                 setTestReportSteps([]);
+                                 setTestReportSelectedStepId(null);
+                               }
+                             }}
+                           />
+                           All Tests
+                         </label>
+                         {tests
+                           .filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
+                           .map(t => (
+                             <label
+                               key={t.id}
+                               className={`searchable-option ${testReportTestIds.includes(t.id) ? 'selected' : ''}`}
+                               onMouseDown={e => e.preventDefault()}
+                             >
+                               <input
+                                 type="checkbox"
+                                 checked={testReportTestIds.includes(t.id)}
+                                 onChange={() => toggleTestSelect(t.id)}
+                               />
+                               {t.name}
+                             </label>
+                           ))}
+                         {tests.filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase())).length === 0 && (
+                           <div className="searchable-no-results">No tests found</div>
+                         )}
+                       </div>
+                     )}
+                     {testReportTestIds.length > 0 && (
+                       <div className="selected-tags">
+                         {testReportTestIds.map(id => {
+                           const t = tests.find(x => x.id === id);
+                           return t ? (
+                             <span key={id} className="selected-tag">
+                               {t.name}
+                               <button type="button" onClick={() => toggleTestSelect(id)}>×</button>
+                             </span>
+                           ) : null;
+                         })}
+                       </div>
+                     )}
+                   </div>
 
-                  {testReportTestIds.length > 0 && (
-                    <div className="searchable-select">
-                      <label>Line Search</label>
-                      <input
-                        type="text"
-                        className="user-input"
-                        placeholder="All Lines (type step number or description...)"
-                        value={testReportLineSearch}
-                        onChange={e => setTestReportLineSearch(e.target.value)}
-                      />
-                    </div>
-                  )}
+                   <div className="searchable-select">
+                     <label>Steps</label>
+                     <input
+                       type="text"
+                       className="user-input"
+                       placeholder={testReportSelectedStepId ? 'Search steps...' : 'All Steps'}
+                       value={showStepDropdown ? testReportStepSearch : (testReportSelectedStepId ? (() => {
+                         for (const test of testReportSteps) {
+                           const step = test.steps.find((s: any) => s.id === testReportSelectedStepId);
+                           if (step) return `${test.testName} - Step ${step.step_number}`;
+                         }
+                         return '';
+                       })() : 'All Steps')}
+                       onChange={e => setTestReportStepSearch(e.target.value)}
+                       onFocus={() => { setShowStepDropdown(true); setTestReportStepSearch(''); fetchTestReportSteps(); }}
+                       onBlur={() => setTimeout(() => setShowStepDropdown(false), 150)}
+                     />
+                     {showStepDropdown && (
+                       <div className="searchable-dropdown">
+                         <div
+                           className={`searchable-option ${testReportSelectedStepId === null ? 'selected' : ''}`}
+                           onMouseDown={e => e.preventDefault()}
+                           onClick={() => setTestReportSelectedStepId(null)}
+                         >
+                           All Steps
+                         </div>
+                         {testReportSteps.map(test => (
+                           test.steps.map((step: any) => (
+                             <div
+                               key={`${test.testId}-${step.id}`}
+                               className={`searchable-option ${testReportSelectedStepId === step.id ? 'selected' : ''}`}
+                               onMouseDown={e => e.preventDefault()}
+                               onClick={() => setTestReportSelectedStepId(step.id)}
+                             >
+                               {test.testName} - Step {step.step_number}: {step.description}
+                             </div>
+                           ))
+                         ))}
+                         {testReportSteps.length === 0 && testReportTestIds.length > 0 && (
+                           <div className="searchable-no-results">No steps found</div>
+                         )}
+                       </div>
+                     )}
+                   </div>
+
+                   {testReportTestIds.length > 0 && (
+                     <div className="searchable-select">
+                       <label>Line Search</label>
+                       <input
+                         type="text"
+                         className="user-input"
+                         placeholder="All Lines (type step number or description...)"
+                         value={testReportLineSearch}
+                         onChange={e => setTestReportLineSearch(e.target.value)}
+                       />
+                     </div>
+                   )}
 
                   <div className="searchable-select">
                     <label>Version</label>
@@ -1509,7 +1612,7 @@ const AdminPanel: React.FC = () => {
                 <button
                   className="btn"
                   onClick={fetchTestReport}
-                  disabled={testReportLoading || (testReportTestIds.length === 0 && tests.length > 0) || !testReportVersionId || !testReportStartDate || !testReportEndDate}
+                  disabled={testReportLoading || !testReportVersionId || !testReportStartDate || !testReportEndDate}
                 >
                   {testReportLoading ? 'Generating...' : 'Generate Report'}
                 </button>

@@ -270,6 +270,7 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
     const startDate = req.query.startDate;
     const endDate = req.query.endDate;
     const versionId = req.query.versionId ? parseInt(req.query.versionId, 10) : null;
+    const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -304,23 +305,24 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
 
     const testPlaceholders = testIds.map(() => '?').join(',');
     const versionFilter = versionId ? ' AND version_id = ? ' : ' ';
+    const stepFilter = stepId ? ' AND step_id = ? ' : ' ';
 
     const testStatsRows = await testsDb.prepare(
       `SELECT test_id, COUNT(*) as rounds,
               SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
               SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions
-       WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter}
+       WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter} ${stepFilter}
        GROUP BY test_id`
-    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []), ...(stepId ? [stepId] : []));
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
     const roundsMapRows = await testsDb.prepare(
       `SELECT test_id, COUNT(*) as rounds
        FROM points_log
-       WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter}
+       WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter} ${stepFilter}
        GROUP BY test_id`
-    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []), ...(stepId ? [stepId] : []));
     const roundsMap = Object.fromEntries(roundsMapRows.map(r => [r.test_id, r.rounds]));
 
     // Usernames live in users.db, which is a separate database from tests.db, so
@@ -345,9 +347,9 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
        FROM test_submissions s
        JOIN test_steps ts ON ts.id = s.step_id
        WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'fail'
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter}
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter} ${stepFilter}
        ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
-    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []), ...(stepId ? [stepId] : []));
 
     const failedUsersByTest = {};
     for (const row of failedSubmissions) {
@@ -392,6 +394,7 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
       startDate,
       endDate,
       versionId: versionId || null,
+      stepId: stepId || null,
       tests: testsReport
     });
   } catch (error) {
