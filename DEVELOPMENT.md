@@ -292,9 +292,9 @@ The same single Node service is deployed to Vercel via `vercel.json` at the proj
 - `@vercel/static-build` reading `package.json`, output dir `build/` — produces the React production bundle.
 - `@vercel/node` on `server/server.js` — the Express API.
 
-Routes:
+Routing (declared as top-level `rewrites` in `vercel.json`, **not** `routes`):
 - `/api/*` → serverless function (`server/server.js`).
-- `/*` → static assets in `build/`; real files (JS/CSS/images) are served directly, while unknown paths are rewritten to `index.html` via the catch-all route in `vercel.json` so the SPA can handle client-side routing on a browser refresh. (The SPA fallback is **not** automatic on Vercel — it must be wired explicitly with the `/(.*)` → `/index.html` rewrite; otherwise refreshing a deep route like `/dashboard` or `/admin` returns "page not found".)
+- `/*` → static assets in `build/`; real files (`manifest.json`, JS/CSS/images) are served directly by Vercel's filesystem layer **before** rewrites are evaluated, while unknown paths are rewritten to `index.html` so the SPA can handle client-side routing on a browser refresh. (The SPA fallback is **not** automatic on Vercel — it must be wired explicitly. It must use the top-level `rewrites` key, **not** `routes`: a `routes` catch-all shadows static assets and returns `index.html` for `manifest.json`/JS bundles, causing `Uncaught SyntaxError: Unexpected token '<'` and a manifest parse error. If a deep route like `/dashboard` or `/admin` 404s on refresh, the rewrite was dropped; if assets break with a `<` syntax error, the catch-all was put under `routes` instead of `rewrites`.)
 
 - **Port**: Vercel injects `PORT`; the server listens on `process.env.PORT_API || process.env.PORT || 4006` and binds `0.0.0.0`.
 - **Node version**: `engines.node` in `package.json` is pinned to `24.x`. Node 20 was deprecated on Vercel in 2026 and any project that still pins it (or has the project setting on 20.x) will fail to build with a hard error. If you have to change the Node version, update **both** the `engines` field in `package.json` **and** the dashboard setting in **Settings → General → Node.js Version**.
