@@ -13,19 +13,19 @@ const TOKEN_EXPIRATION = '24h';
 // Ensure the default admin user exists with password 'admin'.
 async function ensureAdminUser() {
   try {
-    const admin = usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
+    const admin = await usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
     
     const hashedPassword = await bcrypt.hash('admin', 10);
     
     if (!admin) {
-      usersDb.prepare(`
+      await usersDb.prepare(`
         INSERT INTO users (username, password_hash, is_admin)
         VALUES (?, ?, 1)
       `).run('admin', hashedPassword);
       
       console.log('Default admin user (admin/admin) created');
     } else {
-      usersDb.prepare(`
+      await usersDb.prepare(`
         UPDATE users SET password_hash = ? WHERE username = ?
       `).run(hashedPassword, 'admin');
       
@@ -47,7 +47,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
     
-    const user = usersDb.prepare(
+    const user = await usersDb.prepare(
       'SELECT * FROM users WHERE username = ?'
     ).get(username);
     
@@ -68,7 +68,7 @@ router.post('/login', async (req, res) => {
     );
 
     // Store session
-    usersDb.prepare(`
+    await usersDb.prepare(`
       INSERT INTO user_sessions (user_id, token, expires_at)
       VALUES (?, ?, datetime('now', '+24 hours'))
     `).run(user.id, token);
@@ -98,11 +98,15 @@ router.get('/verify', (req, res) => {
 });
 
 // Logout
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   
   if (token) {
-    usersDb.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+    try {
+      await usersDb.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+    } catch (e) {
+      console.error('Logout db error:', e);
+    }
   }
   
   res.json({ message: 'Logged out successfully' });

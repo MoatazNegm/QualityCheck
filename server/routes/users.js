@@ -4,9 +4,9 @@ const bcrypt = require('bcryptjs');
 const { usersDb, testsDb } = require('../db/db');
 
 // Get all users (admin only)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const users = usersDb.prepare(
+    const users = await usersDb.prepare(
       'SELECT id, username, is_admin FROM users'
     ).all();
     
@@ -27,7 +27,7 @@ router.post('/', async (req, res) => {
     
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    const result = usersDb.prepare(`
+    const result = await usersDb.prepare(`
       INSERT INTO users (username, password_hash, is_admin)
       VALUES (?, ?, ?)
     `).run(username, hashedPassword, isAdmin ? 1 : 0);
@@ -36,21 +36,17 @@ router.post('/', async (req, res) => {
 
     // Auto-assign all existing tests to the new non-admin user
     if (!isAdmin) {
-      const allTests = testsDb.prepare('SELECT id FROM tests').all();
-      const insertAssignment = testsDb.prepare(
-        'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)'
-      );
-      const assignAll = testsDb.transaction(() => {
-        for (const test of allTests) {
-          insertAssignment.run(test.id, newUserId);
-        }
-      });
-      assignAll();
+      const allTests = await testsDb.prepare('SELECT id FROM tests').all();
+      const batch = allTests.map(test => ({
+        sql: 'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)',
+        args: [test.id, newUserId]
+      }));
+      await testsDb.client.batch(batch, 'write');
     }
 
     res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0 });
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Username already exists' });
     }
     res.status(500).json({ error: 'Server error' });
@@ -68,7 +64,7 @@ const uploadDir = path.join(dataDir, 'uploads');
 // is as if they were never added: their results, assignments, loop state, points
 // ledger, sessions, the user row itself, and every uploaded config file they
 // submitted (so the failure attachments are removed too).
-router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
+router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = parseInt(id, 10);
@@ -76,13 +72,13 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Invalid user id' });
     }
 
-    const user = usersDb.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+    const user = await usersDb.prepare('SELECT id FROM users WHERE id = ?').get(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     // Capture the uploaded files this user submitted before deleting the rows.
-    const fileRows = testsDb.prepare(
+    const fileRows = await testsDb.prepare(
       'SELECT DISTINCT config_file_path FROM test_results WHERE user_id = ? AND config_file_path IS NOT NULL'
     ).all(userId);
     const filesToDelete = fileRows
@@ -90,18 +86,17 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
       .filter(Boolean)
       .map(p => path.basename(p));
 
-    // Cascade delete in a transaction.
-    const tx = testsDb.transaction(() => {
-      usersDb.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM test_results WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM test_submissions WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM points_log WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM test_assignments WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM user_loop_state WHERE user_id = ?').run(userId);
-      testsDb.prepare('DELETE FROM user_test_rounds WHERE user_id = ?').run(userId);
-      usersDb.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    });
-    tx();
+    // Cascade delete in a transaction batch.
+    await testsDb.client.batch([
+      { sql: 'DELETE FROM user_sessions WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM test_results WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM test_submissions WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM points_log WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM test_assignments WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM user_loop_state WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM user_test_rounds WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
+    ], 'write');
 
     // Remove the user's uploaded files from disk.
     let deletedFiles = 0;
@@ -125,12 +120,12 @@ router.delete('/:id', authenticateToken, requireAdmin, (req, res) => {
 });
 
 // Update user role (admin only)
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { is_admin } = req.body;
     
-    usersDb.prepare(
+    await usersDb.prepare(
       'UPDATE users SET is_admin = ? WHERE id = ?'
     ).run(is_admin ? 1 : 0, id);
     

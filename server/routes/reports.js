@@ -4,11 +4,11 @@ const { testsDb, usersDb } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 // Get detailed test results for a user
-router.get('/test/:testId/user/:userId', (req, res) => {
+router.get('/test/:testId/user/:userId', async (req, res) => {
   try {
     const { testId, userId } = req.params;
     
-    const test = testsDb.prepare(
+    const test = await testsDb.prepare(
       'SELECT * FROM tests WHERE id = ?'
     ).get(testId);
     
@@ -16,7 +16,7 @@ router.get('/test/:testId/user/:userId', (req, res) => {
       return res.status(404).json({ error: 'Test not found' });
     }
     
-    const steps = testsDb.prepare(`
+    const steps = await testsDb.prepare(`
       SELECT ts.*, 
              COALESCE(tr.result, 'pending') as result,
              tr.comment,
@@ -39,16 +39,17 @@ router.get('/test/:testId/user/:userId', (req, res) => {
       totalValue
     });
   } catch (error) {
+    console.error('Get test user report error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get monthly financial summary for a user
-router.get('/monthly/:userId', (req, res) => {
+router.get('/monthly/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     
-    const results = testsDb.prepare(`
+    const results = await testsDb.prepare(`
       SELECT 
         t.name as test_name,
         SUM(CASE WHEN tr.result = 'pass' THEN ts.value ELSE 0 END) as total_value,
@@ -65,6 +66,7 @@ router.get('/monthly/:userId', (req, res) => {
     
     res.json(results);
   } catch (error) {
+    console.error('Get monthly report error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -108,7 +110,7 @@ function getDateRange(preset) {
 }
 
 // Get admin user report for a date range (admin only)
-router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
+router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const userIdsRaw = req.query.userId;
     const startDate = req.query.startDate;
@@ -129,7 +131,7 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
     }
 
     const placeholders = userIds.map(() => '?').join(',');
-    const users = usersDb.prepare(`SELECT id, username FROM users WHERE id IN (${placeholders})`).all(...userIds);
+    const users = await usersDb.prepare(`SELECT id, username FROM users WHERE id IN (${placeholders})`).all(...userIds);
     if (users.length === 0) {
       return res.status(404).json({ error: 'No valid users found' });
     }
@@ -138,16 +140,16 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
     const end = endDate + ' 23:59:59';
 
     const versionFilter = versionId ? ' AND pl.version_id = ? ' : ' ';
-    const versionFilterJoin = versionId ? ' AND tr.version_id = ? ' : ' ';
     const versionFilterSub = versionId ? ' AND s.version_id = ? ' : ' ';
 
-    const totals = testsDb.prepare(
+    const totalsRow = await testsDb.prepare(
       `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
        FROM points_log pl
        WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}`
-    ).all(...userIds, start, end, ...(versionId ? [versionId] : []))[0];
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+    const totals = totalsRow[0];
 
-    const assignedTests = testsDb.prepare(
+    const assignedTests = await testsDb.prepare(
       `SELECT t.id, t.name
        FROM tests t
        INNER JOIN test_assignments ta ON ta.test_id = t.id
@@ -155,19 +157,18 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
        ORDER BY t.id`
     ).all(...userIds);
 
-    const testSubMap = Object.fromEntries(
-      testsDb.prepare(
-        `SELECT test_id, COUNT(*) as submissions
-         FROM points_log pl
-         WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
-         GROUP BY test_id`
-      ).all(...userIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.submissions])
-    );
+    const testSubMapRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) as submissions
+       FROM points_log pl
+       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
+       GROUP BY test_id`
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+    const testSubMap = Object.fromEntries(testSubMapRows.map(r => [r.test_id, r.submissions]));
 
     // Full failure history from the append-only audit ledger. We return every
     // failed submission as its own record so the report can show one line per
     // failure, each with its own comment, uploaded file, and round.
-    const failedSubmissions = testsDb.prepare(
+    const failedSubmissions = await testsDb.prepare(
       `SELECT 
          s.test_id,
          s.step_id,
@@ -200,7 +201,7 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
 
     // Keep per-test stats from the aggregated step data.
     const testLevelStats = {};
-    const stepData = testsDb.prepare(
+    const stepData = await testsDb.prepare(
       `SELECT 
          s.test_id,
          COUNT(s.id) as submissions,
@@ -216,11 +217,15 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
 
     const fullyPassedTests = new Set();
     for (const test of assignedTests) {
-      const stepsCount = testsDb.prepare('SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?').get(test.id).c;
+      const stepsCountRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?').get(test.id);
+      const stepsCount = stepsCountRow ? stepsCountRow.c : 0;
       if (stepsCount === 0) continue;
-      const passedSteps = testsDb.prepare(
+      
+      const passedStepsRow = await testsDb.prepare(
         `SELECT COUNT(*) as c FROM test_results tr WHERE tr.user_id IN (${placeholders}) AND tr.test_id = ? AND tr.result = ? ${versionId ? ' AND tr.version_id = ? ' : ' '}`
-      ).all(...userIds, test.id, 'pass', ...(versionId ? [versionId] : []))[0].c;
+      ).all(...userIds, test.id, 'pass', ...(versionId ? [versionId] : []));
+      const passedSteps = passedStepsRow[0] ? passedStepsRow[0].c : 0;
+      
       const hasActivity = (testSubMap[test.id] || 0) > 0;
       if (passedSteps >= stepsCount && hasActivity) {
         fullyPassedTests.add(test.id);
@@ -247,8 +252,8 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
       startDate,
       endDate,
       versionId: versionId || null,
-      totalPointsEarned: totals.totalPointsEarned,
-      totalSteps: totals.totalSteps,
+      totalPointsEarned: totals ? totals.totalPointsEarned : 0,
+      totalSteps: totals ? totals.totalSteps : 0,
       users: users.map(u => ({ userId: u.id, userName: u.username })),
       tests
     });
@@ -258,10 +263,8 @@ router.get('/user-report', authenticateToken, requireAdmin, (req, res) => {
   }
 });
 
-module.exports = router;
-
 // Get admin test report for a date range (admin only)
-router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
+router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const testIdsRaw = req.query.testId;
     const startDate = req.query.startDate;
@@ -279,7 +282,7 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
     let tests;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
       testIds = tests.map(t => t.id);
     } else {
       testIds = String(testIdsRaw)
@@ -292,7 +295,7 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
     }
 
     if (tests.length === 0) {
@@ -302,36 +305,33 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
     const testPlaceholders = testIds.map(() => '?').join(',');
     const versionFilter = versionId ? ' AND version_id = ? ' : ' ';
 
-    const testStats = Object.fromEntries(
-      testsDb.prepare(
-        `SELECT test_id, COUNT(*) as rounds,
-                SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
-                SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
-         FROM test_submissions
-         WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter}
-         GROUP BY test_id`
-      ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r])
-    );
+    const testStatsRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) as rounds,
+              SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
+              SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
+       FROM test_submissions
+       WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter}
+       GROUP BY test_id`
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+    const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
-    const roundsMap = Object.fromEntries(
-      testsDb.prepare(
-        `SELECT test_id, COUNT(*) as rounds
-         FROM points_log
-         WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter}
-         GROUP BY test_id`
-      ).all(...testIds, start, end, ...(versionId ? [versionId] : [])).map(r => [r.test_id, r.rounds])
-    );
+    const roundsMapRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) as rounds
+       FROM points_log
+       WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter}
+       GROUP BY test_id`
+    ).all(...testIds, start, end, ...(versionId ? [versionId] : []));
+    const roundsMap = Object.fromEntries(roundsMapRows.map(r => [r.test_id, r.rounds]));
 
     // Usernames live in users.db, which is a separate database from tests.db, so
     // we look them up by id rather than JOINing across databases.
-    const userNames = Object.fromEntries(
-      usersDb.prepare('SELECT id, username FROM users').all().map(u => [u.id, u.username])
-    );
+    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
+    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
     // Full failure history from the append-only audit ledger. We return every
     // failed submission as its own record so the report can show one line per
     // failure, each with its own comment, uploaded file, and round.
-    const failedSubmissions = testsDb.prepare(
+    const failedSubmissions = await testsDb.prepare(
       `SELECT 
          s.test_id,
          s.user_id,
@@ -399,3 +399,5 @@ router.get('/test-report', authenticateToken, requireAdmin, (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+module.exports = router;

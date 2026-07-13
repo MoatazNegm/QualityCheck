@@ -22,8 +22,8 @@ function isGzipped(buf) {
 // Read every uploaded config file that is still referenced by a test result (or a
 // submission in the audit ledger) and embed it (base64) into the backup so a restore
 // reproduces the system exactly, including the files users uploaded on failed steps.
-function collectReferencedFiles() {
-  const rows = testsDb.prepare(
+async function collectReferencedFiles() {
+  const rows = await testsDb.prepare(
     `SELECT DISTINCT config_file_path FROM test_results WHERE config_file_path IS NOT NULL
      UNION
      SELECT DISTINCT config_file_path FROM test_submissions WHERE config_file_path IS NOT NULL`
@@ -44,21 +44,21 @@ function collectReferencedFiles() {
 const upload = multer({ storage: multer.memoryStorage() });
 const jsonParser = express.json({ limit: '1mb' });
 
-router.get('/export', authenticateToken, requireAdmin, (req, res) => {
+router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const users = usersDb.prepare('SELECT * FROM users').all();
-    const userSessions = usersDb.prepare('SELECT * FROM user_sessions').all();
-    const tests = testsDb.prepare('SELECT * FROM tests').all();
-    const testSteps = testsDb.prepare('SELECT * FROM test_steps').all();
-    const testResults = testsDb.prepare('SELECT * FROM test_results').all();
-    const testSubmissions = testsDb.prepare('SELECT * FROM test_submissions').all();
-    const testAssignments = testsDb.prepare('SELECT * FROM test_assignments').all();
-    const userLoopState = testsDb.prepare('SELECT * FROM user_loop_state').all();
-    const userTestRounds = testsDb.prepare('SELECT * FROM user_test_rounds').all();
-    const pointsLog = testsDb.prepare('SELECT * FROM points_log').all();
-    const versions = testsDb.prepare('SELECT * FROM versions').all();
+    const users = await usersDb.prepare('SELECT * FROM users').all();
+    const userSessions = await usersDb.prepare('SELECT * FROM user_sessions').all();
+    const tests = await testsDb.prepare('SELECT * FROM tests').all();
+    const testSteps = await testsDb.prepare('SELECT * FROM test_steps').all();
+    const testResults = await testsDb.prepare('SELECT * FROM test_results').all();
+    const testSubmissions = await testsDb.prepare('SELECT * FROM test_submissions').all();
+    const testAssignments = await testsDb.prepare('SELECT * FROM test_assignments').all();
+    const userLoopState = await testsDb.prepare('SELECT * FROM user_loop_state').all();
+    const userTestRounds = await testsDb.prepare('SELECT * FROM user_test_rounds').all();
+    const pointsLog = await testsDb.prepare('SELECT * FROM points_log').all();
+    const versions = await testsDb.prepare('SELECT * FROM versions').all();
 
-    const files = collectReferencedFiles();
+    const files = await collectReferencedFiles();
 
     const backup = {
       metadata: {
@@ -93,148 +93,151 @@ router.get('/export', authenticateToken, requireAdmin, (req, res) => {
 // Apply a parsed backup object to the live databases. Used by both the small
 // single-request /import and the chunked /import-finalize flows. Sends the
 // final JSON response on `res`.
-function applyBackup(backup, res) {
+async function applyBackup(backup, res) {
   if (!backup || !Array.isArray(backup.users) || !Array.isArray(backup.tests)) {
     return res.status(400).json({ error: 'Invalid backup file format' });
   }
 
-  testsDb.pragma('foreign_keys = OFF');
-
   try {
+    const batch = [];
+
     // DELETE IN CORRECT ORDER: child tables before parent tables
     // This ensures no foreign key violations even if foreign_keys is enabled mid-operation
-    usersDb.prepare('DELETE FROM user_sessions').run();
-
-    // Tables that reference users (delete these BEFORE deleting users)
-    testsDb.prepare('DELETE FROM test_assignments').run();
-    testsDb.prepare('DELETE FROM test_results').run();
-    testsDb.prepare('DELETE FROM test_submissions').run();
-    testsDb.prepare('DELETE FROM points_log').run();
-    testsDb.prepare('DELETE FROM user_loop_state').run();
-    testsDb.prepare('DELETE FROM user_test_rounds').run();
+    batch.push({ sql: 'DELETE FROM user_sessions', args: [] });
+    batch.push({ sql: 'DELETE FROM test_assignments', args: [] });
+    batch.push({ sql: 'DELETE FROM test_results', args: [] });
+    batch.push({ sql: 'DELETE FROM test_submissions', args: [] });
+    batch.push({ sql: 'DELETE FROM points_log', args: [] });
+    batch.push({ sql: 'DELETE FROM user_loop_state', args: [] });
+    batch.push({ sql: 'DELETE FROM user_test_rounds', args: [] });
 
     // Tables that reference tests and test_steps (delete these BEFORE deleting parents)
-    testsDb.prepare('DELETE FROM test_steps').run();
-    testsDb.prepare('DELETE FROM tests').run();
+    batch.push({ sql: 'DELETE FROM test_steps', args: [] });
+    batch.push({ sql: 'DELETE FROM tests', args: [] });
 
     // Parent tables last
-    usersDb.prepare('DELETE FROM users').run();
-    testsDb.prepare('DELETE FROM versions').run();
+    batch.push({ sql: 'DELETE FROM users', args: [] });
+    batch.push({ sql: 'DELETE FROM versions', args: [] });
 
-    const insertUser = usersDb.prepare(`
-      INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)
-    `);
-
+    // Insert Users
     for (const user of backup.users) {
       const passwordHash = user.password_hash || bcrypt.hashSync('changeme', 10);
-      insertUser.run(user.id, user.username, passwordHash, user.is_admin ? 1 : 0);
+      batch.push({
+        sql: 'INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)',
+        args: [user.id, user.username, passwordHash, user.is_admin ? 1 : 0]
+      });
     }
 
-    const insertSession = usersDb.prepare(`
-      INSERT INTO user_sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)
-    `);
+    // Insert Sessions
     for (const s of backup.user_sessions || []) {
-      insertSession.run(s.id, s.user_id, s.token, s.expires_at);
+      batch.push({
+        sql: 'INSERT INTO user_sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)',
+        args: [s.id, s.user_id, s.token, s.expires_at]
+      });
     }
 
-    const insertTest = testsDb.prepare('INSERT INTO tests (id, name, description) VALUES (?, ?, ?)');
-    
-    const testStepsCols = testsDb.prepare('PRAGMA table_info(test_steps)').all();
-    const hasPointsCol = testStepsCols.some(c => c.name === 'points');
-    const insertStep = hasPointsCol
-      ? testsDb.prepare(`
-          INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, points, on_failure)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `)
-      : testsDb.prepare(`
-          INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, on_failure)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-
-    const insertResult = testsDb.prepare(`
-      INSERT INTO test_results (id, user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertSubmission = testsDb.prepare(`
-      INSERT INTO test_submissions (id, round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertAssignment = testsDb.prepare(`
-      INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)
-    `);
-    const insertLoopState = testsDb.prepare(`
-      INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)
-    `);
-    const insertUserTestRound = testsDb.prepare(`
-      INSERT OR REPLACE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, ?)
-    `);
-    const insertPointsLog = testsDb.prepare(`
-      INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertVersion = testsDb.prepare(`
-      INSERT INTO versions (id, name, note, is_current, created_at) VALUES (?, ?, ?, ?, ?)
-    `);
-
+    // Insert Tests
     for (const test of backup.tests) {
-      insertTest.run(test.id, test.name, test.description);
+      batch.push({
+        sql: 'INSERT INTO tests (id, name, description) VALUES (?, ?, ?)',
+        args: [test.id, test.name, test.description]
+      });
     }
 
+    // Insert Versions
     for (const v of backup.versions || []) {
-      insertVersion.run(v.id, v.name, v.note, v.is_current ? 1 : 0, v.created_at);
+      batch.push({
+        sql: 'INSERT INTO versions (id, name, note, is_current, created_at) VALUES (?, ?, ?, ?, ?)',
+        args: [v.id, v.name, v.note, v.is_current ? 1 : 0, v.created_at]
+      });
     }
 
+    // Insert Steps
     for (const step of backup.test_steps || []) {
-      if (hasPointsCol) {
-        insertStep.run(step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.points ?? step.value ?? 0, step.on_failure);
-      } else {
-        insertStep.run(step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.on_failure);
-      }
+      batch.push({
+        sql: `INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, points, on_failure)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.points ?? step.value ?? 0, step.on_failure]
+      });
     }
 
+    // Insert Results
     for (const result of backup.test_results || []) {
-      insertResult.run(
-        result.id,
-        result.user_id,
-        result.test_id,
-        result.step_id,
-        result.result,
-        result.comment,
-        result.config_file_path,
-        result.version_id ?? null,
-        result.round_id ?? null,
-        result.executed_at
-      );
+      batch.push({
+        sql: `INSERT INTO test_results (id, user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          result.id,
+          result.user_id,
+          result.test_id,
+          result.step_id,
+          result.result,
+          result.comment,
+          result.config_file_path,
+          result.version_id ?? null,
+          result.round_id ?? null,
+          result.executed_at
+        ]
+      });
     }
 
+    // Insert Submissions
     for (const sub of backup.test_submissions || []) {
-      insertSubmission.run(
-        sub.id,
-        sub.round_id ?? null,
-        sub.user_id,
-        sub.test_id,
-        sub.step_id,
-        sub.result,
-        sub.comment,
-        sub.config_file_path,
-        sub.version_id ?? null,
-        sub.executed_at
-      );
+      batch.push({
+        sql: `INSERT INTO test_submissions (id, round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          sub.id,
+          sub.round_id ?? null,
+          sub.user_id,
+          sub.test_id,
+          sub.step_id,
+          sub.result,
+          sub.comment,
+          sub.config_file_path,
+          sub.version_id ?? null,
+          sub.executed_at
+        ]
+      });
     }
 
+    // Insert Assignments
     for (const assignment of backup.test_assignments || []) {
-      insertAssignment.run(assignment.id, assignment.test_id, assignment.user_id, assignment.assigned_at);
+      batch.push({
+        sql: 'INSERT INTO test_assignments (id, test_id, user_id, assigned_at) VALUES (?, ?, ?, ?)',
+        args: [assignment.id, assignment.test_id, assignment.user_id, assignment.assigned_at]
+      });
     }
 
+    // Insert Loop State
     for (const loop of backup.user_loop_state || []) {
-      insertLoopState.run(loop.user_id, loop.active_test_id, loop.version_id ?? null);
+      batch.push({
+        sql: 'INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)',
+        args: [loop.user_id, loop.active_test_id, loop.version_id ?? null]
+      });
     }
 
+    // Insert Test Rounds
     for (const r of backup.user_test_rounds || []) {
-      insertUserTestRound.run(r.user_id, r.test_id, r.round_no ?? 1);
+      batch.push({
+        sql: 'INSERT OR REPLACE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, ?)',
+        args: [r.user_id, r.test_id, r.round_no ?? 1]
+      });
     }
 
+    // Insert Points Log
     for (const pl of backup.points_log || []) {
-      insertPointsLog.run(pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.version_id ?? null, pl.earned_at);
+      batch.push({
+        sql: 'INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, round_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        args: [pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.version_id ?? null, pl.round_id ?? null, pl.earned_at]
+      });
+    }
+
+    await testsDb.client.execute({ sql: 'PRAGMA foreign_keys = OFF' });
+    try {
+      await testsDb.client.batch(batch, 'write');
+    } finally {
+      await testsDb.client.execute({ sql: 'PRAGMA foreign_keys = ON' });
     }
 
     // Restore the uploaded config files that were embedded in the backup so the
@@ -258,14 +261,12 @@ function applyBackup(backup, res) {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to apply backup' });
     }
-  } finally {
-    testsDb.pragma('foreign_keys = ON');
   }
 }
 
 // Single-request import. Kept for small backups and backwards compatibility.
 // Accepts gzipped JSON (detected via magic bytes) or plain JSON.
-router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (req, res) => {
+router.post('/import', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -290,7 +291,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), (
       return res.status(400).json({ error: 'Invalid JSON in backup file' });
     }
 
-    applyBackup(backup, res);
+    await applyBackup(backup, res);
   } catch (error) {
     console.error('Backup import error:', error);
     res.status(500).json({ error: 'Failed to restore backup' });
@@ -341,7 +342,7 @@ router.post('/import-chunk', authenticateToken, requireAdmin, upload.single('chu
   }
 });
 
-router.post('/import-finalize', authenticateToken, requireAdmin, jsonParser, (req, res) => {
+router.post('/import-finalize', authenticateToken, requireAdmin, jsonParser, async (req, res) => {
   const cleanup = (dir) => {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* ignore */ }
   };
@@ -397,10 +398,7 @@ router.post('/import-finalize', authenticateToken, requireAdmin, jsonParser, (re
       }
     }
 
-    applyBackup(backup, res);
-    // Clean up the chunk directory only on success. On error, applyBackup
-    // has already sent the response and the catch in /import-finalize will
-    // also clean up via its own try/finally.
+    await applyBackup(backup, res);
     cleanup(chunkDir);
   } catch (error) {
     console.error('Import finalize error:', error);

@@ -91,15 +91,13 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 ## Versioning
 
 - The application version is defined in `src/constants.ts` as `APP_VERSION` and is rendered in the footer via `src/components/VersionFooter.tsx`.
-- The version is advanced only after completing any code change.
+- The version is advanced manually in `src/constants.ts` after any coding is completed (i.e. before building the app).
 - The correct order for any code change is:
-  1. Make the code change and advance the app version manually in `src/constants.ts`.
-  2. Build the production bundle: `cmd.exe /c "npm run build"`.
-  3. Restart the server and test locally.
-  4. Commit the code change.
-  5. Push the commit.
-  6. **Rebuild** the production bundle and **restart** the server. From this point the local footer matches what Vercel will deploy.
-- This ordering is the only way to keep the locally-served bundle and the deployed Vercel build showing the **same** `APP_VERSION`. If you see a version mismatch between local and Vercel, it almost always means you skipped the post-commit rebuild in step 6.
+  1. Make the code change.
+  2. Advance the app version manually in `src/constants.ts`.
+  3. Build the production bundle: `cmd.exe /c "npm run build"`.
+  4. Restart the server and test locally.
+  5. Commit and push the code changes.
 - The version included at the time of the sequential per-user loop / `user_loop_state` backup work was **`1.0000003`**.
 - The version at the time of the points-ledger (`points_log`), infinite-loop auto-redo, and hard-stop-default work was **`1.0000007`**.
 - The version at the time of the **version-change auto-end** and **dashboard/header polling** work was **`1.0000019`**.
@@ -343,21 +341,20 @@ Consumers:
 
 ### Persistent storage on Vercel with Turso
 
-For durable data on Vercel, the recommended approach is **[Turso](https://turso.tech)** — a cloud-hosted SQLite (libSQL) service with a free tier (9GB storage, 500 databases).
+For durable data on Vercel, the application has been fully migrated to support **[Turso](https://turso.tech)** (a cloud-hosted SQLite/libSQL service) out of the box.
+
+The database layer in `server/db/db.js` operates in a hybrid mode:
+- **Local Dev Mode**: Connects to a local SQLite file (`qualitycheck.db`) using `better-sqlite3` wrapped in an async-compatible interface.
+- **Production Mode (Vercel)**: Automatically connects to your cloud-hosted Turso database using `@libsql/client` when the environment variables are set.
 
 **Setup steps:**
 1. Create a Turso account at [turso.tech](https://turso.tech)
-2. Install the Turso CLI: `curl -sSfL https://get.tur.so/install.sh | bash`
-3. Create a database: `turso db create qualitycheck`
-4. Get the URL and auth token: `turso db show qualitycheck`
-5. Add to Vercel dashboard → Settings → Environment Variables:
-   - `TURSO_DATABASE_URL` = the `libsql://` URL from step 4
-   - `TURSO_AUTH_TOKEN` = the token from step 4
-6. Install `@libsql/client`: `npm install @libsql/client`
-7. Update `server/db/db.js` to use `@libsql/client` instead of `better-sqlite3` (async API required). The Turso libsql client works over HTTP and persists all data in the cloud — no file writes needed on Vercel.
-
-> [!NOTE]
-> Using `@libsql/client` requires converting all synchronous `better-sqlite3` calls (`db.prepare().all()`, `db.prepare().run()`, `db.exec()`) to `await db.execute()` calls since the libsql HTTP client is async. This is a moderate refactor but is the correct long-term solution for production.
+2. Create a database: `turso db create qualitycheck`
+3. Get the database URL and auth token: `turso db show qualitycheck`
+4. Add the following Environment Variables in the Vercel dashboard (Settings → Environment Variables):
+   - `TURSO_DATABASE_URL` = the `libsql://...` URL
+   - `TURSO_AUTH_TOKEN` = the generated auth token
+5. Commit and push the codebase. Vercel will automatically build the app and connect to your cloud database.
 
 ### Vercel's 4.5 MB request body limit and chunked backup import
 

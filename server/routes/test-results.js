@@ -6,8 +6,8 @@ const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 
-function getAssignedTestsOrdered(userId) {
-  return testsDb.prepare(`
+async function getAssignedTestsOrdered(userId) {
+  return await testsDb.prepare(`
     SELECT t.* FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
     WHERE ta.user_id = ?
@@ -15,8 +15,8 @@ function getAssignedTestsOrdered(userId) {
   `).all(userId);
 }
 
-function getCurrentVersionId() {
-  const row = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+async function getCurrentVersionId() {
+  const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
   return row ? row.id : null;
 }
 
@@ -55,23 +55,24 @@ const upload = multer({
 });
 
 // Get next unattempted step for a user and test
-router.get('/user/:userId/test/:testId/next', (req, res) => {
+router.get('/user/:userId/test/:testId/next', async (req, res) => {
   try {
     const { userId, testId } = req.params;
     
     // Get test name
-    const test = testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+    const test = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
     if (!test) {
       return res.status(404).json({ error: 'Test not found' });
     }
     
     // Get all steps ordered by step_number
-    const steps = testsDb.prepare('SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number').all(testId);
+    const steps = await testsDb.prepare('SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number').all(testId);
     
     // Get attempted step IDs
-    const attemptedStepIds = testsDb.prepare(
+    const attemptedRows = await testsDb.prepare(
       'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ?'
-    ).all(userId, testId).map(row => row.step_id);
+    ).all(userId, testId);
+    const attemptedStepIds = attemptedRows.map(row => row.step_id);
     
     // Find first unattempted step
     const nextStep = steps.find(step => !attemptedStepIds.includes(step.id));
@@ -91,11 +92,11 @@ router.get('/user/:userId/test/:testId/next', (req, res) => {
 });
 
 // Get results for a user and test
-router.get('/user/:userId/test/:testId', (req, res) => {
+router.get('/user/:userId/test/:testId', async (req, res) => {
   try {
     const { userId, testId } = req.params;
     
-    const results = testsDb.prepare(`
+    const results = await testsDb.prepare(`
       SELECT tr.*, ts.description as step_description, ts.success_symptom, ts.value
       FROM test_results tr
       JOIN test_steps ts ON tr.step_id = ts.id
@@ -105,6 +106,7 @@ router.get('/user/:userId/test/:testId', (req, res) => {
     
     res.json(results);
   } catch (error) {
+    console.error('Error getting results:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -127,16 +129,16 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
 
     // The version the user is currently running. Every submission is tagged with
     // it so pass/fail, points, and "# tests done" can later be reported per version.
-    const currentVersion = testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+    const currentVersion = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
     const currentVersionId = currentVersion ? currentVersion.id : null;
 
     // The unique loop-round this submission belongs to (per user+test).
-    const roundNo = getRound(userId, testId);
+    const roundNo = await getRound(userId, testId);
 
     // Append-only audit ledger: every submission gets its own row with a unique
     // id, so a re-failure of the same step in a later round is a distinct,
     // traceable record (result + comment + uploaded file + round_id).
-    const subId = testsDb.prepare(`
+    const subId = await testsDb.prepare(`
       INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId);
@@ -146,15 +148,15 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // we can delete it from disk once the new upload replaces it — this guarantees a
     // later-round re-failure points at a brand-new, distinct file and we never confuse
     // it with an older submission. The full history lives in test_submissions.
-    const prevResult = testsDb.prepare(
+    const prevResult = await testsDb.prepare(
       'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
     ).get(userId, testId, stepId);
 
-    testsDb.prepare(
+    await testsDb.prepare(
       'DELETE FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
     ).run(userId, testId, stepId);
 
-    const resultId = testsDb.prepare(`
+    const resultId = await testsDb.prepare(`
       INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo);
@@ -171,44 +173,46 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
     // current progress is tracked separately via the upserted test_results row.
-    const stepRow = testsDb.prepare(
+    const stepRow = await testsDb.prepare(
       'SELECT COALESCE(points, value, 0) AS pts FROM test_steps WHERE id = ?'
     ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
-    testsDb.prepare(
+    await testsDb.prepare(
       'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(userId, testId, stepId, stepPoints, currentVersionId, roundNo);
 
     // If the current version differs from the version this test was started under,
     // auto-end the test and advance to the next one (new round for that test).
     let autoEnded = false;
-    const loopState = testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+    const loopState = await testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
     if (loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId) {
-      const assigned = getAssignedTestsOrdered(userId);
+      const assigned = await getAssignedTestsOrdered(userId);
       if (assigned.length > 0) {
         const idx = assigned.findIndex(t => t.id === parseInt(testId, 10));
         const nextTest = assigned[(idx + 1) % assigned.length];
-        testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+        await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
           .run(userId, nextTest.id, currentVersionId);
-        bumpRound(userId, nextTest.id);
+        await bumpRound(userId, nextTest.id);
         autoEnded = true;
       }
     }
 
     res.json({ id: resultId.lastInsertRowid, submissionId: subId.lastInsertRowid, roundId: roundNo, message: 'Result submitted successfully', autoEnded });
   } catch (error) {
+    console.error('Submit result error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Clear all results for a user+test (restart)
-router.delete('/user/:userId/test/:testId', authenticateToken, (req, res) => {
+router.delete('/user/:userId/test/:testId', authenticateToken, async (req, res) => {
   try {
-    testsDb.prepare(
+    await testsDb.prepare(
       'DELETE FROM test_results WHERE user_id = ? AND test_id = ?'
     ).run(req.params.userId, req.params.testId);
     res.json({ message: 'Results cleared' });
   } catch (error) {
+    console.error('Clear results error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -217,7 +221,7 @@ router.delete('/user/:userId/test/:testId', authenticateToken, (req, res) => {
 // (sum of the points ledger for every step submitted since the 1st of the
 // current month). The ledger grows on every submission — including re-runs of
 // the loop and failed steps — so points accumulate rather than freeze.
-router.get('/summary', authenticateToken, (req, res) => {
+router.get('/summary', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
     const now = new Date();
@@ -225,24 +229,25 @@ router.get('/summary', authenticateToken, (req, res) => {
     const pad = (n) => String(n).padStart(2, '0');
     const monthStartStr = `${monthStart.getFullYear()}-${pad(monthStart.getMonth() + 1)}-${pad(monthStart.getDate())} ${pad(monthStart.getHours())}:${pad(monthStart.getMinutes())}:${pad(monthStart.getSeconds())}`;
 
-    const row = testsDb.prepare(`
+    const row = await testsDb.prepare(`
       SELECT COALESCE(SUM(points), 0) AS earned
       FROM points_log
       WHERE user_id = ? AND earned_at >= ?
     `).get(userId, monthStartStr);
 
-    res.json({ monthEarned: row.earned, monthStart: monthStartStr });
+    res.json({ monthEarned: row ? row.earned : 0, monthStart: monthStartStr });
   } catch (error) {
+    console.error('Summary error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get all results for user (for reporting)
-router.get('/user/:userId', (req, res) => {
+router.get('/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     
-    const results = testsDb.prepare(`
+    const results = await testsDb.prepare(`
       SELECT tr.*, t.name as test_name, ts.step_number, ts.description as step_description
       FROM test_results tr
       JOIN tests t ON tr.test_id = t.id
@@ -253,6 +258,7 @@ router.get('/user/:userId', (req, res) => {
     
     res.json(results);
   } catch (error) {
+    console.error('Get user results error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
