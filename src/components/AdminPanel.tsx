@@ -118,7 +118,7 @@ const AdminPanel: React.FC = () => {
   const [testReportError, setTestReportError] = useState('');
   const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
   const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test'>('user');
-  const [testReportLineSearch, setTestReportLineSearch] = useState('');
+  const [testReportLineSearch] = useState('');
   const [testReportSteps, setTestReportSteps] = useState<any[]>([]);
   const [testReportSelectedStepId, setTestReportSelectedStepId] = useState<number | null>(null);
   const [testReportStepSearch, setTestReportStepSearch] = useState('');
@@ -410,18 +410,6 @@ const AdminPanel: React.FC = () => {
       if (prev.includes(testId)) return prev.filter(id => id !== testId);
       return [...prev, testId];
     });
-    setTestReportData(null);
-    setTestReportError('');
-    setTestReportSteps([]);
-    setTestReportSelectedStepId(null);
-  };
-
-  const toggleAllTests = () => {
-    if (testReportTestIds.length === tests.length) {
-      setTestReportTestIds([]);
-    } else {
-      setTestReportTestIds(tests.map(t => t.id));
-    }
     setTestReportData(null);
     setTestReportError('');
     setTestReportSteps([]);
@@ -1363,11 +1351,6 @@ const AdminPanel: React.FC = () => {
                 <div className="report-selectors">
                    <div className="searchable-select">
                      <label>Tests</label>
-                     <div className="test-select-header">
-                       <button type="button" className="btn-secondary" onClick={toggleAllTests}>
-                         {testReportTestIds.length === tests.length ? 'Deselect All' : 'Select All'}
-                       </button>
-                     </div>
                      <input
                        type="text"
                        className="user-input"
@@ -1479,53 +1462,40 @@ const AdminPanel: React.FC = () => {
                      )}
                    </div>
 
-                   {testReportTestIds.length > 0 && (
-                     <div className="searchable-select">
-                       <label>Line Search</label>
-                       <input
-                         type="text"
-                         className="user-input"
-                         placeholder="All Lines (type step number or description...)"
-                         value={testReportLineSearch}
-                         onChange={e => setTestReportLineSearch(e.target.value)}
-                       />
-                     </div>
-                   )}
-
-                  <div className="searchable-select">
-                    <label>Version</label>
-                    <input
-                      type="text"
-                      className="user-input"
-                      placeholder="Search versions..."
-                      value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionId ? (versions.find(v => v.id === testReportVersionId)?.name || '') : testReportVersionSearch)}
-                      onChange={e => setTestReportVersionSearch(e.target.value)}
-                      onFocus={() => setShowTestVersionDropdown(true)}
-                      onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
-                    />
-                    {showTestVersionDropdown && (
-                      <div className="searchable-dropdown">
-                        {versions
-                          .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
-                          .map(v => (
-                            <div
-                              key={v.id}
-                              className={`searchable-option ${testReportVersionId === v.id ? 'selected' : ''}`}
-                              onMouseDown={() => {
-                                setTestReportVersionId(v.id);
-                                setShowTestVersionDropdown(false);
-                                setTestReportVersionSearch('');
-                              }}
-                            >
-                              {v.name} {v.is_current ? '(current)' : ''}
-                            </div>
-                          ))}
-                        {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
-                          <div className="searchable-no-results">No versions found</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                   <div className="searchable-select">
+                     <label>Version</label>
+                     <input
+                       type="text"
+                       className="user-input"
+                       placeholder="Search versions..."
+                       value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionId ? (versions.find(v => v.id === testReportVersionId)?.name || '') : testReportVersionSearch)}
+                       onChange={e => setTestReportVersionSearch(e.target.value)}
+                       onFocus={() => setShowTestVersionDropdown(true)}
+                       onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
+                     />
+                     {showTestVersionDropdown && (
+                       <div className="searchable-dropdown">
+                         {versions
+                           .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
+                           .map(v => (
+                             <div
+                               key={v.id}
+                               className={`searchable-option ${testReportVersionId === v.id ? 'selected' : ''}`}
+                               onMouseDown={() => {
+                                 setTestReportVersionId(v.id);
+                                 setShowTestVersionDropdown(false);
+                                 setTestReportVersionSearch('');
+                               }}
+                             >
+                               {v.name} {v.is_current ? '(current)' : ''}
+                             </div>
+                           ))}
+                         {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
+                           <div className="searchable-no-results">No versions found</div>
+                         )}
+                       </div>
+                     )}
+                   </div>
                 </div>
 
                 <div className="report-presets">
