@@ -335,6 +335,61 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/steps', authenticateToken, async (req, res) => {
+  try {
+    const testIdsRaw = req.query.testIds;
+    let testIds = [];
+    let tests;
+
+    if (testIdsRaw === 'all' || !testIdsRaw) {
+      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      testIds = tests.map(t => t.id);
+    } else {
+      testIds = String(testIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+
+      if (testIds.length === 0) {
+        return res.status(400).json({ error: 'At least one valid testId is required' });
+      }
+
+      const placeholders = testIds.map(() => '?').join(',');
+      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+    }
+
+    if (tests.length === 0) {
+      return res.status(404).json({ error: 'No valid tests found' });
+    }
+
+    const testPlaceholders = testIds.map(() => '?').join(',');
+    const steps = await testsDb.prepare(
+      `SELECT test_id, id, step_number, description FROM test_steps WHERE test_id IN (${testPlaceholders}) ORDER BY test_id, step_number`
+    ).all(...testIds);
+
+    const stepsByTest = {};
+    for (const step of steps) {
+      if (!stepsByTest[step.test_id]) stepsByTest[step.test_id] = [];
+      stepsByTest[step.test_id].push({
+        id: step.id,
+        step_number: step.step_number,
+        description: step.description
+      });
+    }
+
+    const result = tests.map(t => ({
+      testId: t.id,
+      testName: t.name,
+      steps: stepsByTest[t.id] || []
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error('Get test steps error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get test with steps
 router.get('/:id', async (req, res) => {
   try {
@@ -453,61 +508,6 @@ router.put('/:testId/steps/reorder', async (req, res) => {
     res.json({ message: 'Steps reordered successfully' });
   } catch (error) {
     console.error('Reorder steps error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-router.get('/steps', authenticateToken, async (req, res) => {
-  try {
-    const testIdsRaw = req.query.testIds;
-    let testIds = [];
-    let tests;
-
-    if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
-      testIds = tests.map(t => t.id);
-    } else {
-      testIds = String(testIdsRaw)
-        .split(',')
-        .map(id => parseInt(id, 10))
-        .filter(id => !isNaN(id));
-
-      if (testIds.length === 0) {
-        return res.status(400).json({ error: 'At least one valid testId is required' });
-      }
-
-      const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
-    }
-
-    if (tests.length === 0) {
-      return res.status(404).json({ error: 'No valid tests found' });
-    }
-
-    const testPlaceholders = testIds.map(() => '?').join(',');
-    const steps = await testsDb.prepare(
-      `SELECT test_id, id, step_number, description FROM test_steps WHERE test_id IN (${testPlaceholders}) ORDER BY test_id, step_number`
-    ).all(...testIds);
-
-    const stepsByTest = {};
-    for (const step of steps) {
-      if (!stepsByTest[step.test_id]) stepsByTest[step.test_id] = [];
-      stepsByTest[step.test_id].push({
-        id: step.id,
-        step_number: step.step_number,
-        description: step.description
-      });
-    }
-
-    const result = tests.map(t => ({
-      testId: t.id,
-      testName: t.name,
-      steps: stepsByTest[t.id] || []
-    }));
-
-    res.json(result);
-  } catch (error) {
-    console.error('Get test steps error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
