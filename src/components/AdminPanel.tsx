@@ -162,8 +162,9 @@ const AdminPanel: React.FC = () => {
         const data = await curRes.json();
         const cv = data.version || null;
         setCurrentVersion(cv);
-        if (cv && reportVersionId === null) {
-          setReportVersionId(cv.id);
+        if (cv) {
+          if (reportVersionId === null) setReportVersionId(cv.id);
+          if (testReportVersionId === null) setTestReportVersionId(cv.id);
         }
       }
     } catch {
@@ -1451,7 +1452,7 @@ const AdminPanel: React.FC = () => {
                                onMouseDown={e => e.preventDefault()}
                                onClick={() => setTestReportSelectedStepId(step.id)}
                              >
-                               {test.testName} - Step {step.step_number}: {step.description}
+                               {test.testName} — Step {step.step_number}: {step.description}
                              </div>
                            ))
                          ))}
