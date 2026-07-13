@@ -294,7 +294,7 @@ The same single Node service is deployed to Vercel via `vercel.json` at the proj
 
 Routes:
 - `/api/*` → serverless function (`server/server.js`).
-- `/*` → static assets in `build/`. Unknown paths within the build output fall back to `index.html` (the SPA catch-all is handled by the static-build output, not the Express server).
+- `/*` → static assets in `build/`; real files (JS/CSS/images) are served directly, while unknown paths are rewritten to `index.html` via the catch-all route in `vercel.json` so the SPA can handle client-side routing on a browser refresh. (The SPA fallback is **not** automatic on Vercel — it must be wired explicitly with the `/(.*)` → `/index.html` rewrite; otherwise refreshing a deep route like `/dashboard` or `/admin` returns "page not found".)
 
 - **Port**: Vercel injects `PORT`; the server listens on `process.env.PORT_API || process.env.PORT || 4006` and binds `0.0.0.0`.
 - **Node version**: `engines.node` in `package.json` is pinned to `24.x`. Node 20 was deprecated on Vercel in 2026 and any project that still pins it (or has the project setting on 20.x) will fail to build with a hard error. If you have to change the Node version, update **both** the `engines` field in `package.json` **and** the dashboard setting in **Settings → General → Node.js Version**.
