@@ -127,6 +127,14 @@ const AdminPanel: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deletingUser, setDeletingUser] = useState(false);
+  const [detailUser, setDetailUser] = useState<User | null>(null);
+  const [detailUserAssignments, setDetailUserAssignments] = useState<Record<number, boolean>>({});
+  const [detailUserLoading, setDetailUserLoading] = useState(false);
+  const [passwordTarget, setPasswordTarget] = useState<User | null>(null);
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -441,6 +449,83 @@ const AdminPanel: React.FC = () => {
     if (res.ok) {
       const userIds: number[] = await res.json();
       setAssignments(prev => ({ ...prev, [testId]: userIds }));
+    }
+  };
+
+  const openUserDetail = async (user: User) => {
+    setDetailUser(user);
+    setDetailUserLoading(true);
+    setDetailUserAssignments({});
+    try {
+      const [testsRes, assignmentsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/tests`, { headers: authHeaders }),
+        fetch(`${API_BASE}/api/tests/user/${user.id}/assignments`, { headers: authHeaders })
+      ]);
+      if (testsRes.ok && assignmentsRes.ok) {
+        const allTests: any[] = await testsRes.json();
+        const assignedIds = new Set(await assignmentsRes.json());
+        const map: Record<number, boolean> = {};
+        allTests.forEach(t => { map[t.id] = assignedIds.has(t.id); });
+        setDetailUserAssignments(map);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setDetailUserLoading(false);
+    }
+  };
+
+  const toggleDetailAssignment = async (testId: number, currentlyAssigned: boolean) => {
+    try {
+      if (currentlyAssigned) {
+        await fetch(`${API_BASE}/api/tests/${testId}/assignments/${detailUser?.id}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        });
+      } else {
+        await fetch(`${API_BASE}/api/tests/${testId}/assignments`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: detailUser?.id }),
+        });
+      }
+      setDetailUserAssignments(prev => ({ ...prev, [testId]: !currentlyAssigned }));
+      setAssignments({});
+    } catch {
+      // ignore
+    }
+  };
+
+  const openChangePassword = (user: User) => {
+    setPasswordTarget(user);
+    setNewUserPassword('');
+    setPasswordError('');
+    setPasswordSuccess('');
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordTarget || !newUserPassword.trim()) return;
+    setPasswordLoading(true);
+    setPasswordError('');
+    setPasswordSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${passwordTarget.id}/password`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newUserPassword.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPasswordError(data.error || 'Failed to change password');
+      } else {
+        setPasswordSuccess('Password updated successfully.');
+        setNewUserPassword('');
+      }
+    } catch {
+      setPasswordError('Network error');
+    } finally {
+      setPasswordLoading(false);
     }
   };
 
@@ -896,12 +981,26 @@ const AdminPanel: React.FC = () => {
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     </button>
-                      <button
-                        className="btn-danger"
-                        onClick={() => openDeleteUser(u)}
-                      >
-                        Delete
-                      </button>
+                    <button
+                      className="btn-icon"
+                      title="Manage user tests"
+                      onClick={() => openUserDetail(u)}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    </button>
+                    <button
+                      className="btn-icon"
+                      title="Change password"
+                      onClick={() => openChangePassword(u)}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </button>
+                    <button
+                      className="btn-danger"
+                      onClick={() => openDeleteUser(u)}
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1801,6 +1900,81 @@ const AdminPanel: React.FC = () => {
                   </tbody>
                 </table>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {detailUser && (
+        <div className="modal-overlay" onClick={() => setDetailUser(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Manage Tests — {detailUser.username}</h3>
+              <button className="modal-close" onClick={() => setDetailUser(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {detailUserLoading ? (
+                <p className="admin-hint">Loading...</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                  <div>
+                    <h4>Assigned Tests</h4>
+                    {tests.filter(t => detailUserAssignments[t.id]).length === 0 ? (
+                      <p className="admin-hint">No assigned tests.</p>
+                    ) : (
+                      <div className="selected-tags">
+                        {tests.filter(t => detailUserAssignments[t.id]).map(t => (
+                          <span key={t.id} className="selected-tag" style={{ border: '1px solid #ef444455', background: '#ef444412', color: '#ef4444' }}>
+                            {t.name}
+                            <button type="button" onClick={() => toggleDetailAssignment(t.id, true)}>×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <h4>Unassigned Tests</h4>
+                    {tests.filter(t => !detailUserAssignments[t.id]).length === 0 ? (
+                      <p className="admin-hint">All tests are assigned.</p>
+                    ) : (
+                      <div className="selected-tags">
+                        {tests.filter(t => !detailUserAssignments[t.id]).map(t => (
+                          <span key={t.id} className="selected-tag" style={{ border: '1px solid #10b98155', background: '#10b98112', color: '#10b981' }}>
+                            {t.name}
+                            <button type="button" onClick={() => toggleDetailAssignment(t.id, false)}>+</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {passwordTarget && (
+        <div className="modal-overlay" onClick={() => setPasswordTarget(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Change Password — {passwordTarget.username}</h3>
+              <button className="modal-close" onClick={() => setPasswordTarget(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleChangePassword} className="create-user-form">
+                <input
+                  type="password"
+                  placeholder="New password"
+                  className="user-input"
+                  value={newUserPassword}
+                  onChange={e => { setNewUserPassword(e.target.value); setPasswordError(''); setPasswordSuccess(''); }}
+                  autoFocus
+                />
+                <button type="submit" className="btn" disabled={passwordLoading || !newUserPassword.trim()}>
+                  {passwordLoading ? 'Saving...' : 'Update Password'}
+                </button>
+              </form>
+              {passwordError && <p className="error-msg">{passwordError}</p>}
+              {passwordSuccess && <p className="success-msg">{passwordSuccess}</p>}
             </div>
           </div>
         </div>

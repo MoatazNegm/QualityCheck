@@ -248,12 +248,20 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
       };
     });
 
+    const totalPassed = tests.reduce((sum, t) => sum + (t.passes || 0), 0);
+    const totalFailed = tests.reduce((sum, t) => sum + (t.fails || 0), 0);
+
     res.json({
       startDate,
       endDate,
       versionId: versionId || null,
       totalPointsEarned: totals ? totals.totalPointsEarned : 0,
       totalSteps: totals ? totals.totalSteps : 0,
+      summary: {
+        totalPoints: totals ? totals.totalPointsEarned : 0,
+        totalPassed,
+        totalFailed
+      },
       users: users.map(u => ({ userId: u.id, userName: u.username })),
       tests
     });

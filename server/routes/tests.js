@@ -280,6 +280,19 @@ router.get('/:id/assignments', authenticateToken, requireAdmin, async (req, res)
   }
 });
 
+// Get all test IDs assigned to a user (admin only)
+router.get('/user/:userId/assignments', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const assignments = await testsDb.prepare(`
+      SELECT test_id FROM test_assignments WHERE user_id = ?
+    `).all(req.params.userId);
+    res.json(assignments.map(a => a.test_id));
+  } catch (error) {
+    console.error('Get user assignments error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Assign a user to a test (admin only)
 router.post('/:id/assignments', authenticateToken, requireAdmin, async (req, res) => {
   try {
