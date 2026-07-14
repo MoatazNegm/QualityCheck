@@ -1028,6 +1028,7 @@ const AdminPanel: React.FC = () => {
                   test={test}
                   steps={managedSteps[test.id]}
                   loading={loadingSteps.has(test.id)}
+                  authHeaders={authHeaders}
                   onExpand={() => fetchTestSteps(test.id)}
                   onSaveStep={(step) => saveStep(test.id, step)}
                   onDeleteStep={(stepId) => deleteStep(test.id, stepId)}
@@ -2039,6 +2040,7 @@ interface ManageTestRowProps {
   test: Test;
   steps: TestStepAdmin[] | undefined;
   loading: boolean;
+  authHeaders: Record<string, string>;
   onExpand: () => void;
   onSaveStep: (step: TestStepAdmin) => void;
   onDeleteStep: (stepId: number) => void;
@@ -2046,7 +2048,7 @@ interface ManageTestRowProps {
   onDelete: () => void;
 }
 
-const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onExpand, onSaveStep, onDeleteStep, onAddStep, onDelete }) => {
+const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, authHeaders, onExpand, onSaveStep, onDeleteStep, onAddStep, onDelete }) => {
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { description: string; points: string; on_failure: string }>>({});
 
@@ -2104,25 +2106,37 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
 
   const sortedSteps = steps ? steps.slice().sort((a, b) => a.step_number - b.step_number) : steps;
 
-  const downloadStepsCsv = () => {
-    if (!sortedSteps || sortedSteps.length === 0) return;
-    const header = 'Step #,Description,Points';
-    const rows = sortedSteps.map(s => {
-      const desc = String(s.description || '').replace(/"/g, '""');
-      const stepNum = s.step_number ?? '';
-      const points = s.points ?? s.value ?? 0;
-      return `"${stepNum}","${desc}","${points}"`;
-    });
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${test.name.replace(/[^a-z0-9_-]/gi, '_')}_steps.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  const downloadStepsCsv = async () => {
+    try {
+      let currentSteps = sortedSteps;
+      if (!currentSteps || currentSteps.length === 0) {
+        const res = await fetch(`${API_BASE}/api/tests/${test.id}`, { headers: authHeaders });
+        if (!res.ok) return;
+        const data = await res.json();
+        currentSteps = (data.steps || []).slice().sort((a: any, b: any) => a.step_number - b.step_number);
+      }
+      if (!currentSteps || currentSteps.length === 0) return;
+
+      const header = 'Step #,Description,Points';
+      const rows = currentSteps.map((s: any) => {
+        const desc = String(s.description || '').replace(/"/g, '""');
+        const stepNum = s.step_number ?? '';
+        const points = s.points ?? s.value ?? 0;
+        return `"${stepNum}","${desc}","${points}"`;
+      });
+      const csv = [header, ...rows].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${String(test.name || 'test').replace(/[^a-z0-9_-]/gi, '_')}_steps.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download steps CSV:', err);
+    }
   };
 
   return (
