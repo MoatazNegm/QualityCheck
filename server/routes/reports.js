@@ -165,11 +165,9 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
     ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
     const testSubMap = Object.fromEntries(testSubMapRows.map(r => [r.test_id, r.submissions]));
 
-    // Full failure history from the append-only audit ledger. We return every
-    // failed submission as its own record so the report can show one line per
-    // failure, each with its own comment, uploaded file, and round.
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
+         s.user_id,
          s.test_id,
          s.step_id,
          ts.step_number,
@@ -182,8 +180,23 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
        JOIN test_steps ts ON ts.id = s.step_id
        WHERE s.user_id IN (${placeholders}) AND s.result = 'fail'
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
-       ORDER BY s.test_id, ts.step_number, s.executed_at DESC`
+       ORDER BY s.user_id, s.test_id, ts.step_number, s.executed_at DESC`
     ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+
+    const failedSubmissionsByUser = {};
+    for (const row of failedSubmissions) {
+      if (!failedSubmissionsByUser[row.user_id]) failedSubmissionsByUser[row.user_id] = [];
+      failedSubmissionsByUser[row.user_id].push({
+        testId: row.test_id,
+        stepId: row.step_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executed_at: row.executed_at
+      });
+    }
 
     const failedSubmissionsByTest = {};
     for (const row of failedSubmissions) {
@@ -199,52 +212,91 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
       });
     }
 
-    // Keep per-test stats from the aggregated step data.
-    const testLevelStats = {};
     const stepData = await testsDb.prepare(
       `SELECT 
+         s.user_id,
          s.test_id,
          COUNT(s.id) as submissions,
          SUM(CASE WHEN s.result = 'pass' THEN 1 ELSE 0 END) as passes,
          SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions s
        WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
-       GROUP BY s.test_id`
+       GROUP BY s.user_id, s.test_id`
     ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+    const userTestStats = {};
     for (const row of stepData) {
-      testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
+      if (!userTestStats[row.user_id]) userTestStats[row.user_id] = {};
+      userTestStats[row.user_id][row.test_id] = { passes: row.passes || 0, fails: row.fails || 0 };
     }
 
-    const fullyPassedTests = new Set();
+    const perUserPointsRows = await testsDb.prepare(
+      `SELECT user_id, COALESCE(SUM(points), 0) as points
+       FROM points_log pl
+       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}
+       GROUP BY user_id`
+    ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
+    const perUserPoints = Object.fromEntries(perUserPointsRows.map(r => [r.user_id, r.points]));
+
+    const fullyPassedTestsByUser = {};
+    for (const user of users) {
+      fullyPassedTestsByUser[user.id] = new Set();
+    }
     for (const test of assignedTests) {
       const stepsCountRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?').get(test.id);
       const stepsCount = stepsCountRow ? stepsCountRow.c : 0;
       if (stepsCount === 0) continue;
       
       const passedStepsRow = await testsDb.prepare(
-        `SELECT COUNT(*) as c FROM test_results tr WHERE tr.user_id IN (${placeholders}) AND tr.test_id = ? AND tr.result = ? ${versionId ? ' AND tr.version_id = ? ' : ' '}`
+        `SELECT user_id, COUNT(*) as c FROM test_results tr 
+         WHERE tr.user_id IN (${placeholders}) AND tr.test_id = ? AND tr.result = ? ${versionId ? ' AND tr.version_id = ? ' : ' '}
+         GROUP BY tr.user_id`
       ).all(...userIds, test.id, 'pass', ...(versionId ? [versionId] : []));
-      const passedSteps = passedStepsRow[0] ? passedStepsRow[0].c : 0;
       
-      const hasActivity = (testSubMap[test.id] || 0) > 0;
-      if (passedSteps >= stepsCount && hasActivity) {
-        fullyPassedTests.add(test.id);
+      for (const row of passedStepsRow) {
+        const hasActivity = (testSubMap[test.id] || 0) > 0;
+        if (row.c >= stepsCount && hasActivity) {
+          fullyPassedTestsByUser[row.user_id].add(test.id);
+        }
       }
     }
 
     const tests = assignedTests.map(test => {
-      const stats = testLevelStats[test.id] || { submissions: 0, passes: 0, fails: 0 };
+      let totalPasses = 0;
+      let totalFails = 0;
+      for (const uid of userIds) {
+        const s = userTestStats[uid] && userTestStats[uid][test.id];
+        if (s) {
+          totalPasses += s.passes;
+          totalFails += s.fails;
+        }
+      }
       const totalSubmissions = testSubMap[test.id] || 0;
 
       return {
         testId: test.id,
         testName: test.name,
         totalSubmissions,
-        rounds: stats.submissions,
-        passes: stats.passes,
-        fails: stats.fails,
+        rounds: totalSubmissions,
+        passes: totalPasses,
+        fails: totalFails,
         failedSubmissions: failedSubmissionsByTest[test.id] || [],
-        fullyPassed: fullyPassedTests.has(test.id)
+        fullyPassed: false
+      };
+    });
+
+    const mappedUsers = users.map(u => {
+      const passedTests = Array.from(fullyPassedTestsByUser[u.id] || []).map(testId => {
+        const test = assignedTests.find(t => t.id === testId);
+        return { testId, testName: test ? test.name : 'Unknown' };
+      });
+      return {
+        userId: u.id,
+        userName: u.username,
+        points: perUserPoints[u.id] || 0,
+        passedSteps: (userTestStats[u.id] && Object.values(userTestStats[u.id]).reduce((sum, s) => sum + s.passes, 0)) || 0,
+        failedSteps: (userTestStats[u.id] && Object.values(userTestStats[u.id]).reduce((sum, s) => sum + s.fails, 0)) || 0,
+        passedTests,
+        failedSubmissions: failedSubmissionsByUser[u.id] || []
       };
     });
 
@@ -262,7 +314,7 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
         totalPassed,
         totalFailed
       },
-      users: users.map(u => ({ userId: u.id, userName: u.username })),
+      users: mappedUsers,
       tests
     });
   } catch (error) {
