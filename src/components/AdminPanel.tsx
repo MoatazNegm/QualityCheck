@@ -2104,6 +2104,27 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
 
   const sortedSteps = steps ? steps.slice().sort((a, b) => a.step_number - b.step_number) : steps;
 
+  const downloadStepsCsv = () => {
+    if (!sortedSteps || sortedSteps.length === 0) return;
+    const header = 'Step #,Description,Points';
+    const rows = sortedSteps.map(s => {
+      const desc = String(s.description || '').replace(/"/g, '""');
+      const stepNum = s.step_number ?? '';
+      const points = s.points ?? s.value ?? 0;
+      return `"${stepNum}","${desc}","${points}"`;
+    });
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${test.name.replace(/[^a-z0-9_-]/gi, '_')}_steps.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="assignment-row">
       <div className="assignment-header" onClick={handleToggle}>
@@ -2111,6 +2132,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, onE
         <span className="assignment-summary">
           {steps !== undefined ? `${steps.length} step(s)` : ''}
         </span>
+        <button
+          className="btn-icon"
+          title="Download steps as CSV"
+          onClick={e => { e.stopPropagation(); downloadStepsCsv(); }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
         <button
           className="btn-icon btn-icon-danger"
           title="Delete this test"
