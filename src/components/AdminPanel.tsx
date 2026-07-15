@@ -83,7 +83,7 @@ const AdminPanel: React.FC = () => {
   const [userError, setUserError] = useState('');
   const [userSuccess, setUserSuccess] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
-  const [userSummaries, setUserSummaries] = useState<Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number }>>({});
+  const [userSummaries, setUserSummaries] = useState<Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number; completedRounds: number }>>({});
   const [userSummariesLoading, setUserSummariesLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupFileRef = useRef<HTMLInputElement>(null);
@@ -304,12 +304,23 @@ const AdminPanel: React.FC = () => {
     try {
       const results = await Promise.all(
         userIds.map(id =>
-          fetch(`${API_BASE}/api/users/${id}/test-summary`, { headers: authHeaders }).then(r => r.ok ? r.json() : null)
+          Promise.all([
+            fetch(`${API_BASE}/api/users/${id}/test-summary`, { headers: authHeaders }).then(r => r.ok ? r.json() : null),
+            fetch(`${API_BASE}/api/users/${id}/completed-rounds`, { headers: authHeaders }).then(r => r.ok ? r.json() : null)
+          ]).then(([summary, rounds]) => ({ summary, rounds }))
         )
       );
-      const map: Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number }> = {};
+      const map: Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number; completedRounds: number }> = {};
       userIds.forEach((id, idx) => {
-        if (results[idx]) map[id] = results[idx];
+        const { summary, rounds } = results[idx];
+        if (summary) {
+          map[id] = {
+            assignedCount: summary.assignedCount || 0,
+            completedCount: summary.completedCount || 0,
+            failedHardStopCount: summary.failedHardStopCount || 0,
+            completedRounds: rounds ? rounds.completedRounds || 0 : 0
+          };
+        }
       });
       setUserSummaries(prev => ({ ...prev, ...map }));
     } catch {
@@ -1138,6 +1149,7 @@ const AdminPanel: React.FC = () => {
                           <span className="user-summary-badge" title="Assigned tests">{summary.assignedCount} assigned</span>
                           <span className="user-summary-badge user-summary-pass" title="Completed tests">{summary.completedCount} passed</span>
                           <span className="user-summary-badge user-summary-fail" title="Hard-stop failed tests">{summary.failedHardStopCount} failed</span>
+                          <span className="user-summary-badge user-summary-rounds" title="Completed rounds">{summary.completedRounds} rounds</span>
                         </>
                       ) : userSummariesLoading ? (
                         <span className="admin-hint">Loading...</span>

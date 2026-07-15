@@ -67,6 +67,25 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
   }
 });
 
+// Get completed rounds count for a user (admin only)
+router.get('/:id/completed-rounds', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const row = await testsDb.prepare(
+      'SELECT COUNT(DISTINCT round_id) as c FROM points_log WHERE user_id = ? AND round_id IS NOT NULL'
+    ).get(userId);
+
+    res.json({ completedRounds: row ? row.c : 0 });
+  } catch (error) {
+    console.error('Get completed rounds error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Create user (admin only)
 router.post('/', async (req, res) => {
   try {
