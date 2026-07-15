@@ -67,6 +67,10 @@ const AdminPanel: React.FC = () => {
   const [assignments, setAssignments] = useState<Record<number, number[]>>({});
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportedTest[] | null>(null);
+  const [importNames, setImportNames] = useState<Record<number, string>>({});
+  const [importSaving, setImportSaving] = useState(false);
+  const [importSaveError, setImportSaveError] = useState('');
+  const [importSaveSuccess, setImportSaveSuccess] = useState('');
   const [importError, setImportError] = useState('');
   const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup'>('upload');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
@@ -616,9 +620,13 @@ const AdminPanel: React.FC = () => {
     setImporting(true);
     setImportError('');
     setImportResult(null);
+    setImportNames({});
+    setImportSaveError('');
+    setImportSaveSuccess('');
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('fileName', file.name);
 
     try {
       const res = await fetch(`${API_BASE}/api/tests/import`, {
@@ -631,6 +639,9 @@ const AdminPanel: React.FC = () => {
         setImportError(data.error || 'Import failed');
       } else {
         setImportResult(data.imported);
+        const nameMap: Record<number, string> = {};
+        data.imported.forEach((t: ImportedTest) => { nameMap[t.id] = t.name; });
+        setImportNames(nameMap);
         fetchTests();
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -638,6 +649,26 @@ const AdminPanel: React.FC = () => {
       setImportError('Network error during import');
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleRenameImport = async () => {
+    if (!importResult) return;
+    setImportSaving(true);
+    setImportSaveError('');
+    setImportSaveSuccess('');
+    try {
+      await Promise.all(importResult.map(t => fetch(`${API_BASE}/api/tests/${t.id}`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: importNames[t.id] || t.name })
+      })));
+      setImportSaveSuccess('Test names updated');
+      fetchTests();
+    } catch {
+      setImportSaveError('Failed to rename tests');
+    } finally {
+      setImportSaving(false);
     }
   };
 
@@ -1008,10 +1039,20 @@ const AdminPanel: React.FC = () => {
               <ul>
                 {importResult.map(t => (
                   <li key={t.id}>
-                    <strong>{t.name}</strong> — {t.stepsCount} step(s)
+                    <input
+                      type="text"
+                      value={importNames[t.id] ?? t.name}
+                      onChange={e => setImportNames(prev => ({ ...prev, [t.id]: e.target.value }))}
+                    />
+                    <span> — {t.stepsCount} step(s)</span>
                   </li>
                 ))}
               </ul>
+              {importSaveError && <p className="error-msg">{importSaveError}</p>}
+              {importSaveSuccess && <p className="success-msg">{importSaveSuccess}</p>}
+              <button type="button" className="btn" disabled={importSaving} onClick={handleRenameImport} style={{ marginTop: '1rem' }}>
+                {importSaving ? 'Saving...' : 'Save Names'}
+              </button>
             </div>
           )}
         </div>

@@ -218,6 +218,9 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const imported = [];
 
+    const rawFileName = req.body.fileName || req.file.originalname || 'import';
+    const baseName = rawFileName.replace(/\.[^/.]+$/, '');
+
     const tx = await testsDb.client.transaction('write');
     try {
       for (const sheetName of workbook.SheetNames) {
@@ -226,15 +229,16 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
 
         if (rows.length === 0) continue;
 
-        // Find column keys case-insensitively
         const sampleKeys = Object.keys(rows[0]);
         const testCaseKey = sampleKeys.find(k => k.toLowerCase().includes('test case')) || sampleKeys[0];
         const successKey = sampleKeys.find(k => k.toLowerCase().includes('expected success'));
         const pointsKey = sampleKeys.find(k => k.toLowerCase().includes('points'));
 
+        const testName = workbook.SheetNames.length === 1 ? baseName : `${baseName} - ${sheetName}`;
+
         const result = await tx.execute({
           sql: 'INSERT INTO tests (name, description) VALUES (?, ?)',
-          args: [sheetName, 'Imported from Excel']
+          args: [testName, 'Imported from Excel']
         });
         const testId = Number(result.lastInsertRowid);
 
@@ -252,7 +256,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
           stepNumber++;
         }
 
-        imported.push({ id: testId, name: sheetName, stepsCount: stepNumber - 1 });
+        imported.push({ id: testId, name: testName, stepsCount: stepNumber - 1 });
       }
       await tx.commit();
     } catch (e) {
@@ -264,6 +268,21 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
   } catch (error) {
     console.error('Import error:', error);
     res.status(500).json({ error: 'Failed to import Excel file' });
+  }
+});
+
+// Rename test (admin only)
+router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Test name is required' });
+    }
+    await testsDb.prepare('UPDATE tests SET name = ? WHERE id = ?').run(name.trim(), req.params.id);
+    res.json({ message: 'Test renamed successfully' });
+  } catch (error) {
+    console.error('Rename test error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
