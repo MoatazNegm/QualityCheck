@@ -203,6 +203,7 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
          SUM(CASE WHEN s.result = 'pass' THEN 1 ELSE 0 END) as passes,
          SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
        WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
        GROUP BY s.test_id`
     ).all(...userIds, start, end, ...(versionId ? [versionId] : []));
