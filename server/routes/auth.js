@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { usersDb } = require('../db/db');
+const { authenticateToken } = require('../middleware/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
@@ -110,6 +111,44 @@ router.post('/logout', async (req, res) => {
   }
   
   res.json({ message: 'Logged out successfully' });
+});
+
+// Change password (authenticated users only)
+router.put('/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.userId;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.trim().length === 0) {
+      return res.status(400).json({ error: 'New password cannot be empty' });
+    }
+
+    const user = await usersDb.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword.trim(), 10);
+
+    await usersDb.prepare(
+      'UPDATE users SET password_hash = ? WHERE id = ?'
+    ).run(hashedPassword, userId);
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 module.exports = { router, ensureAdminUser };
