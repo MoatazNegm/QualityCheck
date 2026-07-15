@@ -1328,7 +1328,10 @@ const AdminPanel: React.FC = () => {
               {reportData && (
                 <div className="report-results">
                   <h4>
-                    User Performance Summary ({reportData.startDate} — {reportData.endDate})
+                    Report for {reportData.users && reportData.users.length > 0
+                      ? reportData.users.map((u: any) => u.userName).join(', ')
+                      : 'selected users'}
+                    {' '}({reportData.startDate} — {reportData.endDate})
                     {reportData.versionId && (
                       <span className="report-version-tag">
                         Version {versions.find(v => v.id === reportData.versionId)?.name || reportData.versionId}
@@ -1338,99 +1341,62 @@ const AdminPanel: React.FC = () => {
 
                   <div className="report-summary">
                     <div className="report-summary-card">
-                      <span className="report-summary-value">{reportData.summary.totalPoints}</span>
-                      <span className="report-summary-label">Total Points</span>
+                      <span className="report-summary-value">{reportData.totalPointsEarned}</span>
+                      <span className="report-summary-label">Points Earned</span>
                     </div>
                     <div className="report-summary-card">
-                      <span className="report-summary-value">{reportData.summary.totalPassed}</span>
-                      <span className="report-summary-label">Steps Passed</span>
-                    </div>
-                    <div className="report-summary-card">
-                      <span className="report-summary-value">{reportData.summary.totalFailed}</span>
-                      <span className="report-summary-label">Steps Failed</span>
+                      <span className="report-summary-value">{reportData.totalSteps}</span>
+                      <span className="report-summary-label">Steps Submitted</span>
                     </div>
                   </div>
 
-                  {reportData.users.length === 0 ? (
-                    <p className="admin-hint">No user activity in this period.</p>
+                  {reportData.tests.length === 0 ? (
+                    <p className="admin-hint">No test activity in this period.</p>
                   ) : (
-                    <div className="report-users-list">
-                      {reportData.users.map((user: any) => {
-                        const isOpen = expandedTests.has(user.userId);
+                    <div className="report-tests-list">
+                      {(reportData.tests || []).map((test: any) => {
+                        const isOpen = expandedTests.has(test.testId);
+                        const failedSteps = (test.steps || []).filter((s: any) => s.fails > 0);
                         return (
-                          <div key={user.userId} className="report-test-row">
-                            <div className="report-test-header" onClick={() => toggleTestExpand(user.userId)}>
-                              <span className="report-test-name">{user.username}</span>
+                          <div key={test.testId} className="report-test-row">
+                            <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
+                              <span className="report-test-name">{test.testName}</span>
                               <span className="report-test-stats">
-                                <span className="report-stat">{user.points} points</span>
-                                <span className="report-stat report-stat-pass">{user.passedSteps} passed</span>
-                                <span className="report-stat report-stat-fail">{user.failedSteps} failed</span>
+                                <span className="report-stat">{test.rounds} rounds</span>
+                                <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                                <span className="report-stat report-stat-fail">{test.fails} failed</span>
                               </span>
+                              {test.fullyPassed && (
+                                <span className="status-badge status-pass">FULLY PASSED</span>
+                              )}
                               <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
                             </div>
-
                             {isOpen && (
                               <div className="report-test-body">
-                                <div style={{ padding: '1rem' }}>
-                                  <h5>Passed Tests:</h5>
-                                  {user.passedTests.length === 0 ? (
-                                    <p className="admin-hint">No completed tests in this period.</p>
-                                  ) : (
-                                    <div className="selected-tags" style={{ marginTop: '0.25rem', marginBottom: '1rem' }}>
-                                      {user.passedTests.map((pt: any) => (
-                                        <span key={pt.testId} className="selected-tag" style={{ border: '1px solid #10b98155', background: '#10b98112', color: '#10b981' }}>
-                                          {pt.testName} (R{pt.roundId})
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  <h5>Failure History:</h5>
-                                  {user.failedSubmissions.length === 0 ? (
-                                    <p className="admin-hint">No failures in this period.</p>
-                                  ) : (
-                                    <table className="report-steps-table">
-                                      <thead>
-                                        <tr>
-                                          <th>Test</th>
-                                          <th>Step</th>
-                                          <th>Round</th>
-                                          <th>Description</th>
-                                          <th>Comment</th>
-                                          <th>File</th>
-                                          <th>Time</th>
+                                {failedSteps.length === 0 ? (
+                                  <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
+                                ) : (
+                                  <table className="report-steps-table">
+                                    <thead>
+                                      <tr>
+                                        <th>Step</th>
+                                        <th>Description</th>
+                                        <th>Fails</th>
+                                        <th>Rounds</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {failedSteps.map((step: any) => (
+                                        <tr key={step.stepId} className="report-step-row-failed">
+                                          <td className="step-num-cell">{step.stepNumber}</td>
+                                          <td>{step.description}</td>
+                                          <td><span className="status-badge status-fail">{step.fails}</span></td>
+                                          <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
                                         </tr>
-                                      </thead>
-                                      <tbody>
-                                        {user.failedSubmissions.map((sub: any) => (
-                                          <tr key={`${sub.testId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-failed">
-                                            <td>{sub.testName}</td>
-                                            <td className="step-num-cell">{sub.stepNumber}</td>
-                                            <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
-                                            <td>{sub.description}</td>
-                                            <td className="report-step-comment">{sub.comment || '—'}</td>
-                                            <td>
-                                              {sub.configFilePath ? (
-                                                <a
-                                                  className="report-file-link"
-                                                  href={`${API_BASE}${sub.configFilePath}`}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  download
-                                                >
-                                                  Download
-                                                </a>
-                                              ) : (
-                                                '—'
-                                              )}
-                                            </td>
-                                            <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                </div>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
                               </div>
                             )}
                           </div>
