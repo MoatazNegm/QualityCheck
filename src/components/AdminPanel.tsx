@@ -118,7 +118,16 @@ const AdminPanel: React.FC = () => {
   const [testReportLoading, setTestReportLoading] = useState(false);
   const [testReportError, setTestReportError] = useState('');
   const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
-  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test'>('user');
+  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'points'>('user');
+  const [pointsUserIds, setPointsUserIds] = useState<number[]>([]);
+  const [pointsPreset, setPointsPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [pointsStartDate, setPointsStartDate] = useState('');
+  const [pointsEndDate, setPointsEndDate] = useState('');
+  const [pointsUserSearch, setPointsUserSearch] = useState('');
+  const [showPointsUserDropdown, setShowPointsUserDropdown] = useState(false);
+  const [pointsData, setPointsData] = useState<any | null>(null);
+  const [pointsLoading, setPointsLoading] = useState(false);
+  const [pointsError, setPointsError] = useState('');
   const [testReportLineSearch] = useState('');
   const [testReportSteps, setTestReportSteps] = useState<any[]>([]);
   const [testReportSelectedStepId, setTestReportSelectedStepId] = useState<number | null>(null);
@@ -148,6 +157,9 @@ const AdminPanel: React.FC = () => {
     setReportEndDate(dates.end);
     setTestReportStartDate(dates.start);
     setTestReportEndDate(dates.end);
+    const pointsDates = getDefaultReportDates('current_month');
+    setPointsStartDate(pointsDates.start);
+    setPointsEndDate(pointsDates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -402,6 +414,62 @@ const AdminPanel: React.FC = () => {
       setTestReportError('Network error');
     } finally {
       setTestReportLoading(false);
+    }
+  };
+
+  const handlePointsPresetChange = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
+    setPointsPreset(preset);
+    if (preset !== 'custom') {
+      const dates = getDefaultReportDates(preset);
+      setPointsStartDate(dates.start);
+      setPointsEndDate(dates.end);
+    }
+    setPointsData(null);
+    setPointsError('');
+  };
+
+  const togglePointsUserSelect = (userId: number) => {
+    setPointsUserIds(prev => {
+      if (prev.includes(userId)) return prev.filter(id => id !== userId);
+      return [...prev, userId];
+    });
+    setPointsData(null);
+    setPointsError('');
+  };
+
+  const toggleAllPointsUsers = () => {
+    setPointsUserIds(prev => prev.length === nonAdminUsers.length ? [] : nonAdminUsers.map(u => u.id));
+    setPointsData(null);
+    setPointsError('');
+  };
+
+  const fetchPointsReport = async () => {
+    if (!pointsStartDate || !pointsEndDate) return;
+    setPointsLoading(true);
+    setPointsError('');
+    setPointsData(null);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
+      if (pointsUserIds.length > 0) {
+        url.searchParams.set('userId', pointsUserIds.join(','));
+      }
+      url.searchParams.set('startDate', pointsStartDate);
+      url.searchParams.set('endDate', pointsEndDate);
+
+      const res = await fetch(url.toString(), {
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPointsError(data.error || 'Failed to load report');
+      } else {
+        setPointsData(data);
+      }
+    } catch (err) {
+      console.error('Points report fetch failed:', err);
+      setPointsError('Network error');
+    } finally {
+      setPointsLoading(false);
     }
   };
 
@@ -1172,9 +1240,17 @@ const AdminPanel: React.FC = () => {
             >
               Test Reports
             </button>
+            <button
+              type="button"
+              className={`tab-btn ${reportsSubTab === 'points' ? 'active' : ''}`}
+              onClick={() => setReportsSubTab('points')}
+              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
+            >
+              Points
+            </button>
           </div>
 
-          {reportsSubTab === 'user' ? (
+          {reportsSubTab === 'user' && (
             <>
               <h3>User Report</h3>
               <p className="admin-hint">
@@ -1466,7 +1542,9 @@ const AdminPanel: React.FC = () => {
                 </div>
               )}
             </>
-          ) : (
+          )}
+
+          {reportsSubTab === 'test' && (
             <>
               <h3>Test Report</h3>
                <p className="admin-hint">
@@ -1808,6 +1886,178 @@ const AdminPanel: React.FC = () => {
                         );
                       })}
                     </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {reportsSubTab === 'points' && (
+            <>
+              <h3>Points Report</h3>
+              <p className="admin-hint">
+                Select a user (or leave it as All Users) and a date range to count the total points earned in that period.
+              </p>
+
+              <div className="report-controls">
+                <div className="report-selectors">
+                  <div className="searchable-select">
+                    <label>Users</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder="Search users..."
+                      value={showPointsUserDropdown ? pointsUserSearch : (pointsUserIds.length > 0 ? pointsUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ') : 'All Users')}
+                      onChange={e => setPointsUserSearch(e.target.value)}
+                      onFocus={() => { setShowPointsUserDropdown(true); setPointsUserSearch(''); }}
+                      onBlur={() => setTimeout(() => setShowPointsUserDropdown(false), 150)}
+                    />
+                    {showPointsUserDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                          <input
+                            type="checkbox"
+                            checked={pointsUserIds.length === nonAdminUsers.length && nonAdminUsers.length > 0}
+                            onChange={toggleAllPointsUsers}
+                          />
+                          <strong>All Users</strong>
+                        </label>
+                        {nonAdminUsers
+                          .filter(u => u.username.toLowerCase().includes(pointsUserSearch.toLowerCase()))
+                          .map(u => (
+                            <label
+                              key={u.id}
+                              className={`searchable-option ${pointsUserIds.includes(u.id) ? 'selected' : ''}`}
+                              onMouseDown={e => e.preventDefault()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={pointsUserIds.includes(u.id)}
+                                onChange={() => togglePointsUserSelect(u.id)}
+                              />
+                              {u.username}
+                            </label>
+                          ))}
+                        {nonAdminUsers.filter(u => u.username.toLowerCase().includes(pointsUserSearch.toLowerCase())).length === 0 && (
+                          <div className="searchable-no-results">No users found</div>
+                        )}
+                      </div>
+                    )}
+                    {pointsUserIds.length > 0 && (
+                      <div className="selected-tags">
+                        {pointsUserIds.map(id => {
+                          const u = nonAdminUsers.find(x => x.id === id);
+                          return u ? (
+                            <span key={id} className="selected-tag">
+                              {u.username}
+                              <button type="button" onClick={() => togglePointsUserSelect(id)}>×</button>
+                            </span>
+                          ) : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="report-presets">
+                  <button
+                    className={`btn-secondary report-preset-btn ${pointsPreset === 'current_month' ? 'active' : ''}`}
+                    onClick={() => handlePointsPresetChange('current_month')}
+                  >
+                    Current Month
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${pointsPreset === 'last_month' ? 'active' : ''}`}
+                    onClick={() => handlePointsPresetChange('last_month')}
+                  >
+                    Last Month
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${pointsPreset === 'current_year' ? 'active' : ''}`}
+                    onClick={() => handlePointsPresetChange('current_year')}
+                  >
+                    Current Year
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${pointsPreset === 'last_year' ? 'active' : ''}`}
+                    onClick={() => handlePointsPresetChange('last_year')}
+                  >
+                    Last Year
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${pointsPreset === 'custom' ? 'active' : ''}`}
+                    onClick={() => handlePointsPresetChange('custom')}
+                  >
+                    Custom
+                  </button>
+                </div>
+
+                <div className="report-dates">
+                  <input
+                    type="date"
+                    className="user-input"
+                    value={pointsStartDate}
+                    onChange={e => { setPointsStartDate(e.target.value); setPointsPreset('custom'); setPointsData(null); setPointsError(''); }}
+                  />
+                  <span className="report-date-sep">to</span>
+                  <input
+                    type="date"
+                    className="user-input"
+                    value={pointsEndDate}
+                    onChange={e => { setPointsEndDate(e.target.value); setPointsPreset('custom'); setPointsData(null); setPointsError(''); }}
+                  />
+                </div>
+
+                <button
+                  className="btn"
+                  onClick={fetchPointsReport}
+                  disabled={pointsLoading || !pointsStartDate || !pointsEndDate}
+                >
+                  {pointsLoading ? 'Counting...' : 'Count Points'}
+                </button>
+              </div>
+
+              {pointsError && <p className="error-msg">{pointsError}</p>}
+
+              {pointsData && (
+                <div className="report-results">
+                  <h4>
+                    Points earned {pointsUserIds.length === 0 ? 'for All Users' : 'for ' + pointsUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ')}
+                    {' '}({pointsData.startDate} — {pointsData.endDate})
+                  </h4>
+
+                  <div className="report-summary">
+                    <div className="report-summary-card">
+                      <span className="report-summary-value">{pointsData.totalPointsEarned}</span>
+                      <span className="report-summary-label">Total Points Earned</span>
+                    </div>
+                    <div className="report-summary-card">
+                      <span className="report-summary-value">{pointsData.totalSteps}</span>
+                      <span className="report-summary-label">Steps Logged</span>
+                    </div>
+                  </div>
+
+                  {pointsData.users.length === 0 ? (
+                    <p className="admin-hint">No points earned in this period.</p>
+                  ) : (
+                    <table className="report-steps-table">
+                      <thead>
+                        <tr>
+                          <th>User</th>
+                          <th>Points Earned</th>
+                          <th>Steps Logged</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(pointsData.users || []).map((u: any) => (
+                          <tr key={u.userId}>
+                            <td>{u.userName}</td>
+                            <td><span className="status-badge status-pass">{u.pointsEarned}</span></td>
+                            <td>{u.steps}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               )}

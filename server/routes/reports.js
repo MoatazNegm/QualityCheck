@@ -294,6 +294,68 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
   }
 });
 
+// Get total points earned per user over a date range (admin only)
+router.get('/points', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const userIdsRaw = req.query.userId;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    let userIds = [];
+    if (userIdsRaw && userIdsRaw !== 'all') {
+      userIds = String(userIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    const hasUserFilter = userIds.length > 0;
+    const userPlaceholders = hasUserFilter ? ` AND pl.user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
+
+    const totalRow = await testsDb.prepare(
+      `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
+       FROM points_log pl
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders}`
+    ).all(...[start, end, ...(hasUserFilter ? userIds : [])]);
+
+    const perUserRows = await testsDb.prepare(
+      `SELECT pl.user_id as userId, COALESCE(SUM(pl.points), 0) as pointsEarned, COUNT(*) as steps
+       FROM points_log pl
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders}
+       GROUP BY pl.user_id
+       ORDER BY pointsEarned DESC`
+    ).all(...[start, end, ...(hasUserFilter ? userIds : [])]);
+
+    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
+    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+
+    const users = perUserRows.map(r => ({
+      userId: r.userId,
+      userName: userNames[r.userId] || ('user ' + r.userId),
+      pointsEarned: r.pointsEarned,
+      steps: r.steps
+    }));
+
+    res.json({
+      startDate,
+      endDate,
+      totalPointsEarned: totalRow[0] ? totalRow[0].totalPointsEarned : 0,
+      totalSteps: totalRow[0] ? totalRow[0].totalSteps : 0,
+      users
+    });
+  } catch (error) {
+    console.error('Points report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get admin test report for a date range (admin only)
 router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => {
   try {
