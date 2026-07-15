@@ -16,6 +16,53 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get test summary for a user (admin only)
+router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const assigned = await testsDb.prepare(
+      'SELECT test_id FROM test_assignments WHERE user_id = ?'
+    ).all(userId);
+
+    const assignedCount = assigned.length;
+    let completedCount = 0;
+    let failedHardStopCount = 0;
+
+    for (const row of assigned) {
+      const testId = row.test_id;
+      const stepCountRow = await testsDb.prepare(
+        'SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?'
+      ).get(testId);
+      const doneCountRow = await testsDb.prepare(
+        'SELECT COUNT(*) as c FROM test_results WHERE user_id = ? AND test_id = ?'
+      ).get(userId, testId);
+
+      if (doneCountRow.c >= stepCountRow.c) {
+        completedCount++;
+      } else {
+        const failRow = await testsDb.prepare(`
+          SELECT COUNT(*) as c FROM test_submissions ts
+          JOIN test_steps tstep ON ts.step_id = tstep.id
+          WHERE ts.user_id = ? AND ts.test_id = ? AND ts.result = 'fail' AND tstep.on_failure = 'stop'
+        `).get(userId, testId);
+
+        if (failRow.c > 0) {
+          failedHardStopCount++;
+        }
+      }
+    }
+
+    res.json({ assignedCount, completedCount, failedHardStopCount });
+  } catch (error) {
+    console.error('Get user test summary error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Create user (admin only)
 router.post('/', async (req, res) => {
   try {

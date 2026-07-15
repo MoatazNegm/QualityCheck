@@ -83,6 +83,8 @@ const AdminPanel: React.FC = () => {
   const [userError, setUserError] = useState('');
   const [userSuccess, setUserSuccess] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
+  const [userSummaries, setUserSummaries] = useState<Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number }>>({});
+  const [userSummariesLoading, setUserSummariesLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupFileRef = useRef<HTMLInputElement>(null);
   const [backupLoading, setBackupLoading] = useState(false);
@@ -166,6 +168,15 @@ const AdminPanel: React.FC = () => {
     setPointsEndDate(pointsDates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!tests.length) return;
+    tests.forEach(t => {
+      fetchTestSteps(t.id);
+      fetchAssignmentsForTest(t.id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tests]);
 
   useEffect(() => {
     if (testReportInitialMount.current) {
@@ -279,7 +290,33 @@ const AdminPanel: React.FC = () => {
 
   const fetchUsers = async () => {
     const res = await fetch(`${API_BASE}/api/users`, { headers: authHeaders });
-    if (res.ok) setUsers(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setUsers(data);
+      if (data.length) {
+        fetchUserSummaries(data.map((u: User) => u.id));
+      }
+    }
+  };
+
+  const fetchUserSummaries = async (userIds: number[]) => {
+    setUserSummariesLoading(true);
+    try {
+      const results = await Promise.all(
+        userIds.map(id =>
+          fetch(`${API_BASE}/api/users/${id}/test-summary`, { headers: authHeaders }).then(r => r.ok ? r.json() : null)
+        )
+      );
+      const map: Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number }> = {};
+      userIds.forEach((id, idx) => {
+        if (results[idx]) map[id] = results[idx];
+      });
+      setUserSummaries(prev => ({ ...prev, ...map }));
+    } catch {
+      // ignore
+    } finally {
+      setUserSummariesLoading(false);
+    }
   };
 
   const getDefaultReportDates = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
@@ -1090,40 +1127,54 @@ const AdminPanel: React.FC = () => {
             <p className="admin-hint">No non-admin users yet.</p>
           ) : (
             <div className="users-list">
-              {nonAdminUsers.map(u => (
-                <div key={u.id} className="user-row">
-                  <span className="user-row-name">{u.username}</span>
-                  <div className="user-row-actions">
-                    <button
-                      className="btn-icon"
-                      title="View test history"
-                      onClick={() => openHistory(u)}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                    </button>
-                    <button
-                      className="btn-icon"
-                      title="Manage user tests"
-                      onClick={() => openUserDetail(u)}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                    </button>
-                    <button
-                      className="btn-icon"
-                      title="Change password"
-                      onClick={() => openChangePassword(u)}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    </button>
-                    <button
-                      className="btn-danger"
-                      onClick={() => openDeleteUser(u)}
-                    >
-                      Delete
-                    </button>
+              {nonAdminUsers.map(u => {
+                const summary = userSummaries[u.id];
+                return (
+                  <div key={u.id} className="user-row">
+                    <span className="user-row-name">{u.username}</span>
+                    <div className="user-row-summary">
+                      {summary ? (
+                        <>
+                          <span className="user-summary-badge" title="Assigned tests">{summary.assignedCount} assigned</span>
+                          <span className="user-summary-badge user-summary-pass" title="Completed tests">{summary.completedCount} passed</span>
+                          <span className="user-summary-badge user-summary-fail" title="Hard-stop failed tests">{summary.failedHardStopCount} failed</span>
+                        </>
+                      ) : userSummariesLoading ? (
+                        <span className="admin-hint">Loading...</span>
+                      ) : null}
+                    </div>
+                    <div className="user-row-actions">
+                      <button
+                        className="btn-icon"
+                        title="View test history"
+                        onClick={() => openHistory(u)}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      </button>
+                      <button
+                        className="btn-icon"
+                        title="Manage user tests"
+                        onClick={() => openUserDetail(u)}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                      </button>
+                      <button
+                        className="btn-icon"
+                        title="Change password"
+                        onClick={() => openChangePassword(u)}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      </button>
+                      <button
+                        className="btn-danger"
+                        onClick={() => openDeleteUser(u)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
