@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { usersDb, testsDb } = require('../db/db');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { dataDir } = require('../utils/dataDir');
+const fs = require('fs');
+const path = require('path');
 
 // Get all users (admin only)
 router.get('/', async (req, res) => {
@@ -99,11 +103,6 @@ router.post('/', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
-
-const fs = require('fs');
-const path = require('path');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { dataDir } = require('../utils/dataDir');
 
 const uploadDir = path.join(dataDir, 'uploads');
 
