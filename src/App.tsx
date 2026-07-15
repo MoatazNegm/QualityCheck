@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard';
 import TestExecution from './components/TestExecution';
 import AdminPanel from './components/AdminPanel';
 import Header from './components/Header';
+import Sidebar from './components/Sidebar';
 import VersionFooter from './components/VersionFooter';
 
 const AppContent: React.FC = () => {
@@ -16,18 +17,21 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      {user && <Header />}
-      <div style={{ flex: 1 }}>
-        <Routes>
-          <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
-          <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
-          <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
-          <Route path="/admin" element={user?.isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" />} />
-          <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
-        </Routes>
+    <div className='app-layout'>
+      {user && <Sidebar />}
+      <div className='app-main'>
+        {user && <Header />}
+        <div className='app-content'>
+          <Routes>
+            <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
+            <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
+            <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
+            <Route path="/admin" element={user?.isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" />} />
+            <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
+          </Routes>
+        </div>
+        <VersionFooter />
       </div>
-      <VersionFooter />
     </div>
   );
 };

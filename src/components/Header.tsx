@@ -89,18 +89,6 @@ const Header: React.FC = () => {
               {currentVersion ? `Version: ${currentVersion}` : 'No version set'}
             </span>
           </div>
-          <div className='header-nav'>
-            {user?.isAdmin ? (
-              <>
-                <NavLink to='/dashboard' className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                  Dashboard
-                </NavLink>
-                <NavLink to='/admin' className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                  Admin Panel
-                </NavLink>
-              </>
-            ) : null}
-          </div>
           <div className='user-info' ref={dropdownRef}>
             {user && (
               <div className='user-dropdown'>
