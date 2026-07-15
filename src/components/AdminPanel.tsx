@@ -2420,6 +2420,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
         <span className="test-name">{test.name}</span>
         <span className="assignment-summary">
           {steps !== undefined ? `${steps.length} step(s)` : ''}
+          {steps !== undefined && steps.length > 0 ? ` • ${steps.reduce((sum, s) => sum + (s.points ?? s.value ?? 0), 0)} pts` : ''}
         </span>
         <button
           className="btn-icon"
