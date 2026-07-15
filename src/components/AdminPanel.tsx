@@ -101,7 +101,7 @@ const AdminPanel: React.FC = () => {
   const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
-  const [reportVersionId, setReportVersionId] = useState<number | null>(null);
+  const [reportVersionIds, setReportVersionIds] = useState<number[]>([]);
   const [reportUserSearch, setReportUserSearch] = useState('');
   const [reportVersionSearch, setReportVersionSearch] = useState('');
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -115,7 +115,7 @@ const AdminPanel: React.FC = () => {
   const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
   const [testReportStartDate, setTestReportStartDate] = useState('');
   const [testReportEndDate, setTestReportEndDate] = useState('');
-  const [testReportVersionId, setTestReportVersionId] = useState<number | null>(null);
+  const [testReportVersionIds, setTestReportVersionIds] = useState<number[]>([]);
   const [testReportTestSearch, setTestReportTestSearch] = useState('');
   const [testReportVersionSearch, setTestReportVersionSearch] = useState('');
   const [showTestDropdown, setShowTestDropdown] = useState(false);
@@ -199,8 +199,8 @@ const AdminPanel: React.FC = () => {
         const cv = data.version || null;
         setCurrentVersion(cv);
         if (cv) {
-          if (reportVersionId === null) setReportVersionId(cv.id);
-          if (testReportVersionId === null) setTestReportVersionId(cv.id);
+          if (reportVersionIds.length === 0) setReportVersionIds([cv.id]);
+          if (testReportVersionIds.length === 0) setTestReportVersionIds([cv.id]);
         }
       }
     } catch {
@@ -388,7 +388,7 @@ const AdminPanel: React.FC = () => {
       url.searchParams.set('userId', reportUserIds.join(','));
       url.searchParams.set('startDate', reportStartDate);
       url.searchParams.set('endDate', reportEndDate);
-      if (reportVersionId) url.searchParams.set('versionId', String(reportVersionId));
+      if (reportVersionIds.length > 0) url.searchParams.set('versionIds', reportVersionIds.join(','));
 
       const res = await fetch(url.toString(), {
         headers: authHeaders
@@ -449,7 +449,7 @@ const AdminPanel: React.FC = () => {
       }
       url.searchParams.set('startDate', testReportStartDate);
       url.searchParams.set('endDate', testReportEndDate);
-      if (testReportVersionId) url.searchParams.set('versionId', String(testReportVersionId));
+      if (testReportVersionIds.length > 0) url.searchParams.set('versionIds', testReportVersionIds.join(','));
       if (testReportSelectedStepId) url.searchParams.set('stepId', String(testReportSelectedStepId));
 
       const res = await fetch(url.toString(), {
@@ -1421,32 +1421,58 @@ const AdminPanel: React.FC = () => {
                   </div>
 
                   <div className="searchable-select">
-                    <label>Version</label>
+                    <label>Versions</label>
                     <input
                       type="text"
                       className="user-input"
-                      placeholder="Search versions..."
-                      value={showVersionDropdown ? reportVersionSearch : (reportVersionId ? (versions.find(v => v.id === reportVersionId)?.name || '') : reportVersionSearch)}
+                      placeholder={reportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showVersionDropdown ? reportVersionSearch : (reportVersionIds.length > 0 ? reportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
                       onChange={e => setReportVersionSearch(e.target.value)}
                       onFocus={() => setShowVersionDropdown(true)}
                       onBlur={() => setTimeout(() => setShowVersionDropdown(false), 150)}
                     />
                     {showVersionDropdown && (
                       <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                          <input
+                            type="checkbox"
+                            checked={reportVersionIds.length === versions.length && versions.length > 0}
+                            onChange={() => {
+                              if (reportVersionIds.length === versions.length) {
+                                setReportVersionIds([]);
+                              } else {
+                                setReportVersionIds(versions.map(v => v.id));
+                              }
+                              setReportData(null);
+                              setReportError('');
+                            }}
+                          />
+                          <strong>Select All</strong>
+                        </label>
                         {versions
                           .filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase()))
                           .map(v => (
-                            <div
+                            <label
                               key={v.id}
-                              className={`searchable-option ${reportVersionId === v.id ? 'selected' : ''}`}
-                              onMouseDown={() => {
-                                setReportVersionId(v.id);
-                                setShowVersionDropdown(false);
-                                setReportVersionSearch('');
-                              }}
+                              className={`searchable-option ${reportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                              onMouseDown={e => e.preventDefault()}
                             >
+                              <input
+                                type="checkbox"
+                                checked={reportVersionIds.includes(v.id)}
+                                onChange={() => {
+                                  setReportVersionIds(prev => {
+                                    if (prev.includes(v.id)) {
+                                      return prev.filter(id => id !== v.id);
+                                    }
+                                    return [...prev, v.id];
+                                  });
+                                  setReportData(null);
+                                  setReportError('');
+                                }}
+                              />
                               {v.name} {v.is_current ? '(current)' : ''}
-                            </div>
+                            </label>
                           ))}
                         {versions.filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase())).length === 0 && (
                           <div className="searchable-no-results">No versions found</div>
@@ -1508,7 +1534,7 @@ const AdminPanel: React.FC = () => {
                 <button
                   className="btn"
                   onClick={fetchUserReport}
-                  disabled={reportLoading || reportUserIds.length === 0 || !reportVersionId || !reportStartDate || !reportEndDate}
+                  disabled={reportLoading || reportUserIds.length === 0 || reportVersionIds.length === 0 || !reportStartDate || !reportEndDate}
                 >
                   {reportLoading ? 'Generating...' : 'Generate Report'}
                 </button>
@@ -1523,9 +1549,9 @@ const AdminPanel: React.FC = () => {
                       ? reportData.users.map((u: any) => u.userName).join(', ')
                       : 'selected users'}
                     {' '}({reportData.startDate} — {reportData.endDate})
-                    {reportData.versionId && (
+                    {reportData.versionIds && reportData.versionIds.length > 0 && (
                       <span className="report-version-tag">
-                        Version {versions.find(v => v.id === reportData.versionId)?.name || reportData.versionId}
+                        Versions {reportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
                       </span>
                     )}
                   </h4>
@@ -1770,40 +1796,66 @@ const AdminPanel: React.FC = () => {
                      )}
                    </div>
 
-                   <div className="searchable-select">
-                     <label>Version</label>
-                     <input
-                       type="text"
-                       className="user-input"
-                       placeholder="Search versions..."
-                       value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionId ? (versions.find(v => v.id === testReportVersionId)?.name || '') : testReportVersionSearch)}
-                       onChange={e => setTestReportVersionSearch(e.target.value)}
-                       onFocus={() => setShowTestVersionDropdown(true)}
-                       onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
-                     />
-                     {showTestVersionDropdown && (
-                       <div className="searchable-dropdown">
-                         {versions
-                           .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
-                           .map(v => (
-                             <div
-                               key={v.id}
-                               className={`searchable-option ${testReportVersionId === v.id ? 'selected' : ''}`}
-                               onMouseDown={() => {
-                                 setTestReportVersionId(v.id);
-                                 setShowTestVersionDropdown(false);
-                                 setTestReportVersionSearch('');
-                               }}
-                             >
-                               {v.name} {v.is_current ? '(current)' : ''}
-                             </div>
-                           ))}
-                         {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
-                           <div className="searchable-no-results">No versions found</div>
-                         )}
-                       </div>
-                     )}
-                   </div>
+                    <div className="searchable-select">
+                      <label>Versions</label>
+                      <input
+                        type="text"
+                        className="user-input"
+                        placeholder={testReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                        value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionIds.length > 0 ? testReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                        onChange={e => setTestReportVersionSearch(e.target.value)}
+                        onFocus={() => setShowTestVersionDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
+                      />
+                      {showTestVersionDropdown && (
+                        <div className="searchable-dropdown">
+                          <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                            <input
+                              type="checkbox"
+                              checked={testReportVersionIds.length === versions.length && versions.length > 0}
+                              onChange={() => {
+                                if (testReportVersionIds.length === versions.length) {
+                                  setTestReportVersionIds([]);
+                                } else {
+                                  setTestReportVersionIds(versions.map(v => v.id));
+                                }
+                                setTestReportData(null);
+                                setTestReportError('');
+                              }}
+                            />
+                            <strong>Select All</strong>
+                          </label>
+                          {versions
+                            .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
+                            .map(v => (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${testReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={testReportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setTestReportVersionIds(prev => {
+                                      if (prev.includes(v.id)) {
+                                        return prev.filter(id => id !== v.id);
+                                      }
+                                      return [...prev, v.id];
+                                    });
+                                    setTestReportData(null);
+                                    setTestReportError('');
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                              </label>
+                            ))}
+                          {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
+                            <div className="searchable-no-results">No versions found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                 </div>
 
                 <div className="report-presets">
@@ -1890,7 +1942,7 @@ const AdminPanel: React.FC = () => {
                 <button
                   className="btn"
                   onClick={fetchTestReport}
-                  disabled={testReportLoading || !testReportVersionId || !testReportStartDate || !testReportEndDate}
+                  disabled={testReportLoading || testReportVersionIds.length === 0 || !testReportStartDate || !testReportEndDate}
                 >
                   {testReportLoading ? 'Generating...' : 'Generate Report'}
                 </button>
@@ -1902,9 +1954,9 @@ const AdminPanel: React.FC = () => {
                 <div className="report-results">
                   <h4>
                     Test Report ({testReportData.startDate} — {testReportData.endDate})
-                    {testReportData.versionId && (
+                    {testReportData.versionIds && testReportData.versionIds.length > 0 && (
                       <span className="report-version-tag">
-                        Version {versions.find(v => v.id === testReportData.versionId)?.name || testReportData.versionId}
+                        Versions {testReportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
                       </span>
                     )}
                   </h4>
