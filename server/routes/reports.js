@@ -241,13 +241,20 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
             stepNumber: sub.stepNumber,
             description: sub.description,
             fails: 0,
-            rounds: []
+            rounds: [],
+            submissions: []
           };
         }
         stepsMap[sub.stepId].fails += 1;
         if (sub.roundId != null) {
           stepsMap[sub.stepId].rounds.push(sub.roundId);
         }
+        stepsMap[sub.stepId].submissions.push({
+          roundId: sub.roundId,
+          comment: sub.comment,
+          configFilePath: sub.configFilePath,
+          executed_at: sub.executed_at
+        });
       }
       const steps = Object.values(stepsMap);
 

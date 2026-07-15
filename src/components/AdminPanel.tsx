@@ -104,6 +104,7 @@ const AdminPanel: React.FC = () => {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState('');
   const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
+  const [expandedReportSteps, setExpandedReportSteps] = useState<Set<string>>(new Set());
   const [testReportTestIds, setTestReportTestIds] = useState<number[]>([]);
   const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
   const [testReportStartDate, setTestReportStartDate] = useState('');
@@ -356,6 +357,16 @@ const AdminPanel: React.FC = () => {
       const next = new Set(prev);
       if (next.has(testId)) next.delete(testId);
       else next.add(testId);
+      return next;
+    });
+  };
+
+  const toggleReportStepExpand = (testId: number, stepId: number) => {
+    const key = `${testId}-${stepId}`;
+    setExpandedReportSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -1371,34 +1382,82 @@ const AdminPanel: React.FC = () => {
                               )}
                               <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
                             </div>
-                            {isOpen && (
-                              <div className="report-test-body">
-                                {failedSteps.length === 0 ? (
-                                  <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
-                                ) : (
-                                  <table className="report-steps-table">
-                                    <thead>
-                                      <tr>
-                                        <th>Step</th>
-                                        <th>Description</th>
-                                        <th>Fails</th>
-                                        <th>Rounds</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {failedSteps.map((step: any) => (
-                                        <tr key={step.stepId} className="report-step-row-failed">
-                                          <td className="step-num-cell">{step.stepNumber}</td>
-                                          <td>{step.description}</td>
-                                          <td><span className="status-badge status-fail">{step.fails}</span></td>
-                                          <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </div>
-                            )}
+                             {isOpen && (
+                               <div className="report-test-body">
+                                 {failedSteps.length === 0 ? (
+                                   <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
+                                 ) : (
+                                   <table className="report-steps-table">
+                                     <thead>
+                                       <tr>
+                                         <th>Step</th>
+                                         <th>Description</th>
+                                         <th>Fails</th>
+                                         <th>Rounds</th>
+                                       </tr>
+                                     </thead>
+                                     <tbody>
+                                       {failedSteps.map((step: any) => {
+                                         const stepKey = `${test.testId}-${step.stepId}`;
+                                         const isStepOpen = expandedReportSteps.has(stepKey);
+                                         return (
+                                           <>
+                                             <tr key={step.stepId} className="report-step-row-failed" style={{ cursor: 'pointer' }} onClick={() => toggleReportStepExpand(test.testId, step.stepId)}>
+                                               <td className="step-num-cell">{step.stepNumber}</td>
+                                               <td>{step.description}</td>
+                                               <td><span className="status-badge status-fail">{step.fails}</span></td>
+                                               <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
+                                             </tr>
+                                             {isStepOpen && step.submissions && step.submissions.length > 0 && (
+                                               <tr key={`${step.stepId}-details`}>
+                                                 <td colSpan={4} style={{ padding: '0', background: 'transparent' }}>
+                                                   <div style={{ padding: '0.5rem 1rem' }}>
+                                                     <table className="report-steps-table" style={{ width: '100%' }}>
+                                                       <thead>
+                                                         <tr>
+                                                           <th>Round</th>
+                                                           <th>Comment</th>
+                                                           <th>Config File</th>
+                                                           <th>Time</th>
+                                                         </tr>
+                                                       </thead>
+                                                       <tbody>
+                                                         {step.submissions.map((sub: any, idx: number) => (
+                                                           <tr key={idx} className="report-step-row-failed">
+                                                             <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
+                                                             <td className="report-step-comment">{sub.comment || '—'}</td>
+                                                             <td>
+                                                               {sub.configFilePath ? (
+                                                                 <a
+                                                                   className="report-file-link"
+                                                                   href={`${API_BASE}${sub.configFilePath}`}
+                                                                   target="_blank"
+                                                                   rel="noopener noreferrer"
+                                                                   download
+                                                                 >
+                                                                   Download
+                                                                 </a>
+                                                               ) : (
+                                                                 '—'
+                                                               )}
+                                                             </td>
+                                                             <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
+                                                           </tr>
+                                                         ))}
+                                                       </tbody>
+                                                     </table>
+                                                   </div>
+                                                 </td>
+                                               </tr>
+                                             )}
+                                           </>
+                                         );
+                                       })}
+                                     </tbody>
+                                   </table>
+                                 )}
+                               </div>
+                             )}
                           </div>
                         );
                       })}
