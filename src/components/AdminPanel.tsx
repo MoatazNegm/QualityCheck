@@ -124,7 +124,7 @@ const AdminPanel: React.FC = () => {
   const [testReportLoading, setTestReportLoading] = useState(false);
   const [testReportError, setTestReportError] = useState('');
   const [expandedTestReportTests, setExpandedTestReportTests] = useState<Set<number>>(new Set());
-  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'points'>('user');
+  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'passed' | 'points'>('user');
   const [pointsUserIds, setPointsUserIds] = useState<number[]>([]);
   const [pointsPreset, setPointsPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
   const [pointsStartDate, setPointsStartDate] = useState('');
@@ -140,6 +140,24 @@ const AdminPanel: React.FC = () => {
   const [testReportStepSearch, setTestReportStepSearch] = useState('');
   const [showStepDropdown, setShowStepDropdown] = useState(false);
   const testReportInitialMount = useRef(true);
+  const [passedReportTestIds, setPassedReportTestIds] = useState<number[]>([]);
+  const [passedReportPreset, setPassedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [passedReportStartDate, setPassedReportStartDate] = useState('');
+  const [passedReportEndDate, setPassedReportEndDate] = useState('');
+  const [passedReportVersionIds, setPassedReportVersionIds] = useState<number[]>([]);
+  const [passedReportTestSearch, setPassedReportTestSearch] = useState('');
+  const [passedReportVersionSearch, setPassedReportVersionSearch] = useState('');
+  const [showPassedTestDropdown, setShowPassedTestDropdown] = useState(false);
+  const [showPassedTestVersionDropdown, setShowPassedTestVersionDropdown] = useState(false);
+  const [passedReportData, setPassedReportData] = useState<any | null>(null);
+  const [passedReportLoading, setPassedReportLoading] = useState(false);
+  const [passedReportError, setPassedReportError] = useState('');
+  const [expandedPassedReportTests, setExpandedPassedReportTests] = useState<Set<number>>(new Set());
+  const [passedReportSteps, setPassedReportSteps] = useState<any[]>([]);
+  const [passedReportSelectedStepId, setPassedReportSelectedStepId] = useState<number | null>(null);
+  const [passedReportStepSearch, setPassedReportStepSearch] = useState('');
+  const [showPassedStepDropdown, setShowPassedStepDropdown] = useState(false);
+  const passedReportInitialMount = useRef(true);
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deletingUser, setDeletingUser] = useState(false);
@@ -187,6 +205,15 @@ const AdminPanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testReportTestIds]);
 
+  useEffect(() => {
+    if (passedReportInitialMount.current) {
+      passedReportInitialMount.current = false;
+      return;
+    }
+    fetchPassedReportSteps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passedReportTestIds]);
+
   const fetchVersions = async () => {
     try {
       const [allRes, curRes] = await Promise.all([
@@ -201,6 +228,7 @@ const AdminPanel: React.FC = () => {
         if (cv) {
           if (reportVersionIds.length === 0) setReportVersionIds([cv.id]);
           if (testReportVersionIds.length === 0) setTestReportVersionIds([cv.id]);
+          if (passedReportVersionIds.length === 0) setPassedReportVersionIds([cv.id]);
         }
       }
     } catch {
@@ -554,6 +582,80 @@ const AdminPanel: React.FC = () => {
     setTestReportError('');
     setTestReportSteps([]);
     setTestReportSelectedStepId(null);
+  };
+
+  const fetchPassedReport = async () => {
+    if ((passedReportTestIds.length === 0 && passedReportTestIds.length !== 0) || !passedReportStartDate || !passedReportEndDate) return;
+    setPassedReportLoading(true);
+    setPassedReportError('');
+    setPassedReportData(null);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/passed-report`, window.location.origin);
+      if (passedReportTestIds.length > 0) {
+        url.searchParams.set('testId', passedReportTestIds.join(','));
+      } else {
+        url.searchParams.set('testId', 'all');
+      }
+      url.searchParams.set('startDate', passedReportStartDate);
+      url.searchParams.set('endDate', passedReportEndDate);
+      if (passedReportVersionIds.length > 0) url.searchParams.set('versionIds', passedReportVersionIds.join(','));
+      if (passedReportSelectedStepId) url.searchParams.set('stepId', String(passedReportSelectedStepId));
+
+      const res = await fetch(url.toString(), {
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPassedReportError(data.error || 'Failed to load report');
+      } else {
+        setPassedReportData(data);
+      }
+    } catch (err) {
+      console.error('Passed report fetch failed:', err);
+      setPassedReportError('Network error');
+    } finally {
+      setPassedReportLoading(false);
+    }
+  };
+
+  const fetchPassedReportSteps = async () => {
+    if (passedReportTestIds.length === 0) {
+      setPassedReportSteps([]);
+      setPassedReportSelectedStepId(null);
+      return;
+    }
+    try {
+      const url = new URL(`${API_BASE}/api/tests/steps`, window.location.origin);
+      url.searchParams.set('testIds', passedReportTestIds.join(','));
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setPassedReportSteps(data);
+        setPassedReportSelectedStepId(null);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const togglePassedTestSelect = (testId: number) => {
+    setPassedReportTestIds(prev => {
+      if (prev.includes(testId)) return prev.filter(id => id !== testId);
+      return [...prev, testId];
+    });
+    setPassedReportData(null);
+    setPassedReportError('');
+    setPassedReportSteps([]);
+    setPassedReportSelectedStepId(null);
+  };
+
+  const togglePassedTestReportExpand = (testId: number) => {
+    setExpandedPassedReportTests(prev => {
+      const next = new Set(prev);
+      if (next.has(testId)) next.delete(testId);
+      else next.add(testId);
+      return next;
+    });
   };
 
   const toggleAllUsers = () => {
@@ -1346,6 +1448,14 @@ const AdminPanel: React.FC = () => {
             </button>
             <button
               type="button"
+              className={`tab-btn ${reportsSubTab === 'passed' ? 'active' : ''}`}
+              onClick={() => setReportsSubTab('passed')}
+              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
+            >
+              Passed Steps
+            </button>
+            <button
+              type="button"
               className={`tab-btn ${reportsSubTab === 'points' ? 'active' : ''}`}
               onClick={() => setReportsSubTab('points')}
               style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
@@ -2010,6 +2120,371 @@ const AdminPanel: React.FC = () => {
                                         return filteredSubs.map((sub: any) => (
                                           <tr key={`${fu.userId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-failed">
                                             <td>{fu.userName}</td>
+                                            <td className="step-num-cell">{sub.stepNumber}</td>
+                                            <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
+                                            <td>{sub.description}</td>
+                                            <td className="report-step-comment">{sub.comment || '—'}</td>
+                                            <td>
+                                              {sub.configFilePath ? (
+                                                <a
+                                                  className="report-file-link"
+                                                  href={`${API_BASE}${sub.configFilePath}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  download
+                                                >
+                                                  Download
+                                                </a>
+                                              ) : (
+                                                '—'
+                                              )}
+                                            </td>
+                                            <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
+                                          </tr>
+                                        ));
+                                      })}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {reportsSubTab === 'passed' && (
+            <>
+              <h3>Passed Steps Report</h3>
+               <p className="admin-hint">
+                 Select tests, steps, and a date range to view passed steps that have comments or uploaded configuration files.
+               </p>
+
+               <div className="report-controls">
+                 <div className="report-selectors">
+                    <div className="searchable-select">
+                      <label>Tests</label>
+                      <input
+                        type="text"
+                        className="user-input"
+                        placeholder={passedReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
+                        value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : 'All Tests')}
+                        onChange={e => setPassedReportTestSearch(e.target.value)}
+                        onFocus={() => { setShowPassedTestDropdown(true); setPassedReportTestSearch(''); }}
+                        onBlur={() => setTimeout(() => setShowPassedTestDropdown(false), 150)}
+                      />
+                      {showPassedTestDropdown && (
+                        <div className="searchable-dropdown">
+                          <label
+                            className={`searchable-option ${passedReportTestIds.length === 0 ? 'selected' : ''}`}
+                            onMouseDown={e => e.preventDefault()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={passedReportTestIds.length === 0}
+                              onChange={() => {
+                                if (passedReportTestIds.length > 0) {
+                                  setPassedReportTestIds([]);
+                                  setPassedReportData(null);
+                                  setPassedReportError('');
+                                  setPassedReportSteps([]);
+                                  setPassedReportSelectedStepId(null);
+                                }
+                              }}
+                            />
+                            All Tests
+                          </label>
+                          {tests
+                            .filter(t => t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase()))
+                            .map(t => (
+                              <label
+                                key={t.id}
+                                className={`searchable-option ${passedReportTestIds.includes(t.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={passedReportTestIds.includes(t.id)}
+                                  onChange={() => togglePassedTestSelect(t.id)}
+                                />
+                                {t.name}
+                              </label>
+                            ))}
+                          {tests.filter(t => t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase())).length === 0 && (
+                            <div className="searchable-no-results">No tests found</div>
+                          )}
+                        </div>
+                      )}
+                      {passedReportTestIds.length > 0 && (
+                        <div className="selected-tags">
+                          {passedReportTestIds.map(id => {
+                            const t = tests.find(x => x.id === id);
+                            return t ? (
+                              <span key={id} className="selected-tag">
+                                {t.name}
+                                <button type="button" onClick={() => togglePassedTestSelect(id)}>×</button>
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="searchable-select">
+                      <label>Steps</label>
+                      <input
+                        type="text"
+                        className="user-input"
+                        placeholder={passedReportSelectedStepId ? 'Search steps...' : 'All Steps'}
+                        value={showPassedStepDropdown ? passedReportStepSearch : (passedReportSelectedStepId ? (() => {
+                          for (const test of passedReportSteps) {
+                            const step = test.steps.find((s: any) => s.id === passedReportSelectedStepId);
+                            if (step) return `${test.testName} - Step ${step.step_number}`;
+                          }
+                          return '';
+                        })() : 'All Steps')}
+                        onChange={e => setPassedReportStepSearch(e.target.value)}
+                        onFocus={() => { setShowPassedStepDropdown(true); setPassedReportStepSearch(''); fetchPassedReportSteps(); }}
+                        onBlur={() => setTimeout(() => setShowPassedStepDropdown(false), 150)}
+                      />
+                      {showPassedStepDropdown && (
+                        <div className="searchable-dropdown">
+                          <div
+                            className={`searchable-option ${passedReportSelectedStepId === null ? 'selected' : ''}`}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => setPassedReportSelectedStepId(null)}
+                          >
+                            All Steps
+                          </div>
+                          {passedReportSteps.map(test => (
+                            test.steps.map((step: any) => (
+                              <div
+                                key={`${test.testId}-${step.id}`}
+                                className={`searchable-option ${passedReportSelectedStepId === step.id ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => setPassedReportSelectedStepId(step.id)}
+                              >
+                                {test.testName} — Step {step.step_number}: {step.description}
+                              </div>
+                            ))
+                          ))}
+                          {passedReportSteps.length === 0 && passedReportTestIds.length > 0 && (
+                            <div className="searchable-no-results">No steps found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                     <div className="searchable-select">
+                       <label>Versions</label>
+                       <input
+                         type="text"
+                         className="user-input"
+                         placeholder={passedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                         value={showPassedTestVersionDropdown ? passedReportVersionSearch : (passedReportVersionIds.length > 0 ? passedReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                         onChange={e => setPassedReportVersionSearch(e.target.value)}
+                         onFocus={() => setShowPassedTestVersionDropdown(true)}
+                         onBlur={() => setTimeout(() => setShowPassedTestVersionDropdown(false), 150)}
+                       />
+                       {showPassedTestVersionDropdown && (
+                         <div className="searchable-dropdown">
+                           <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                             <input
+                               type="checkbox"
+                               checked={passedReportVersionIds.length === versions.length && versions.length > 0}
+                               onChange={() => {
+                                 if (passedReportVersionIds.length === versions.length) {
+                                   setPassedReportVersionIds([]);
+                                 } else {
+                                   setPassedReportVersionIds(versions.map(v => v.id));
+                                 }
+                                 setPassedReportData(null);
+                                 setPassedReportError('');
+                               }}
+                             />
+                             <strong>Select All</strong>
+                           </label>
+                           {versions
+                             .filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase()))
+                             .map(v => (
+                               <label
+                                 key={v.id}
+                                 className={`searchable-option ${passedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                 onMouseDown={e => e.preventDefault()}
+                               >
+                                 <input
+                                   type="checkbox"
+                                   checked={passedReportVersionIds.includes(v.id)}
+                                   onChange={() => {
+                                     setPassedReportVersionIds(prev => {
+                                       if (prev.includes(v.id)) {
+                                         return prev.filter(id => id !== v.id);
+                                       }
+                                       return [...prev, v.id];
+                                     });
+                                     setPassedReportData(null);
+                                     setPassedReportError('');
+                                   }}
+                                 />
+                                 {v.name} {v.is_current ? '(current)' : ''}
+                               </label>
+                             ))}
+                           {versions.filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase())).length === 0 && (
+                             <div className="searchable-no-results">No versions found</div>
+                           )}
+                         </div>
+                       )}
+                     </div>
+                </div>
+
+                <div className="report-presets">
+                  <button
+                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'current_month' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPassedReportPreset('current_month');
+                      const dates = getDefaultReportDates('current_month');
+                      setPassedReportStartDate(dates.start);
+                      setPassedReportEndDate(dates.end);
+                      setPassedReportData(null);
+                      setPassedReportError('');
+                    }}
+                  >
+                    Current Month
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'last_month' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPassedReportPreset('last_month');
+                      const dates = getDefaultReportDates('last_month');
+                      setPassedReportStartDate(dates.start);
+                      setPassedReportEndDate(dates.end);
+                      setPassedReportData(null);
+                      setPassedReportError('');
+                    }}
+                  >
+                    Last Month
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'current_year' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPassedReportPreset('current_year');
+                      const dates = getDefaultReportDates('current_year');
+                      setPassedReportStartDate(dates.start);
+                      setPassedReportEndDate(dates.end);
+                      setPassedReportData(null);
+                      setPassedReportError('');
+                    }}
+                  >
+                    Current Year
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'last_year' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPassedReportPreset('last_year');
+                      const dates = getDefaultReportDates('last_year');
+                      setPassedReportStartDate(dates.start);
+                      setPassedReportEndDate(dates.end);
+                      setPassedReportData(null);
+                      setPassedReportError('');
+                    }}
+                  >
+                    Last Year
+                  </button>
+                  <button
+                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'custom' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPassedReportPreset('custom');
+                      setPassedReportData(null);
+                      setPassedReportError('');
+                    }}
+                  >
+                    Custom
+                  </button>
+                </div>
+
+                <div className="report-dates">
+                  <input
+                    type="date"
+                    className="user-input"
+                    value={passedReportStartDate}
+                    onChange={e => { setPassedReportStartDate(e.target.value); setPassedReportPreset('custom'); setPassedReportData(null); setPassedReportError(''); }}
+                  />
+                  <span className="report-date-sep">to</span>
+                  <input
+                    type="date"
+                    className="user-input"
+                    value={passedReportEndDate}
+                    onChange={e => { setPassedReportEndDate(e.target.value); setPassedReportPreset('custom'); setPassedReportData(null); setPassedReportError(''); }}
+                  />
+                </div>
+
+                <button
+                  className="btn"
+                  onClick={fetchPassedReport}
+                  disabled={passedReportLoading || passedReportVersionIds.length === 0 || !passedReportStartDate || !passedReportEndDate}
+                >
+                  {passedReportLoading ? 'Generating...' : 'Generate Report'}
+                </button>
+              </div>
+
+              {passedReportError && <p className="error-msg">{passedReportError}</p>}
+
+              {passedReportData && (
+                <div className="report-results">
+                  <h4>
+                    Passed Steps Report ({passedReportData.startDate} — {passedReportData.endDate})
+                    {passedReportData.versionIds && passedReportData.versionIds.length > 0 && (
+                      <span className="report-version-tag">
+                        Versions {passedReportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
+                      </span>
+                    )}
+                  </h4>
+
+                  {passedReportData.tests.length === 0 ? (
+                    <p className="admin-hint">No passed steps with comments or files in this period.</p>
+                  ) : (
+                    <div className="report-tests-list">
+                      {passedReportData.tests.map((test: any) => {
+                        const isOpen = expandedPassedReportTests.has(test.testId);
+                        const passedUsers = test.passedUsers || [];
+                        return (
+                          <div key={test.testId} className="report-test-row">
+                            <div className="report-test-header" onClick={() => togglePassedTestReportExpand(test.testId)}>
+                              <span className="report-test-name">{test.testName}</span>
+                              <span className="report-test-stats">
+                                <span className="report-stat">{test.rounds} rounds</span>
+                                <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                                <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                              </span>
+                              <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                            </div>
+                            {isOpen && (
+                              <div className="report-test-body">
+                                {passedUsers.length === 0 ? (
+                                  <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No passed steps with comments or files in this period.</p>
+                                ) : (
+                                  <table className="report-steps-table">
+                                    <thead>
+                                      <tr>
+                                        <th>User</th>
+                                        <th>Step</th>
+                                        <th>Round</th>
+                                        <th>Description</th>
+                                        <th>Comment</th>
+                                        <th>File</th>
+                                        <th>Time</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {passedUsers.map((pu: any) => {
+                                        return pu.submissions.map((sub: any) => (
+                                          <tr key={`${pu.userId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-passed">
+                                            <td>{pu.userName}</td>
                                             <td className="step-num-cell">{sub.stepNumber}</td>
                                             <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                             <td>{sub.description}</td>

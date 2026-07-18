@@ -267,17 +267,17 @@ const TestExecution: React.FC = () => {
           </div>
         </div>
 
-        {result === 'fail' && (
+        {result && (
           <div className='comment-section'>
-            <label>Comment (required for failures):</label>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} required placeholder='Describe what went wrong...' />
+            <label>{result === 'fail' ? 'Comment (required for failures):' : 'Comment (optional):'}</label>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} required={result === 'fail'} placeholder='Describe what went wrong...' />
           </div>
         )}
 
-        {result === 'fail' && (
+        {result && (
           <div className='file-upload'>
-            <label>Configuration File (required for failures):</label>
-            <input type='file' onChange={e => setConfigFile(e.target.files?.[0] || null)} required />
+            <label>{result === 'fail' ? 'Configuration File (required for failures):' : 'Configuration File (optional):'}</label>
+            <input type='file' onChange={e => setConfigFile(e.target.files?.[0] || null)} required={result === 'fail'} />
           </div>
         )}
 

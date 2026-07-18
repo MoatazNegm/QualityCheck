@@ -498,4 +498,142 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
   }
 });
 
+router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const testIdsRaw = req.query.testId;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    const versionIdsRaw = req.query.versionIds;
+    const versionIds = versionIdsRaw
+      ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+      : [];
+    const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    let testIds = [];
+    let tests;
+
+    if (testIdsRaw === 'all' || !testIdsRaw) {
+      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      testIds = tests.map(t => t.id);
+    } else {
+      testIds = String(testIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+
+      if (testIds.length === 0) {
+        return res.status(400).json({ error: 'At least one valid testId is required' });
+      }
+
+      const placeholders = testIds.map(() => '?').join(',');
+      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+    }
+
+    if (tests.length === 0) {
+      return res.status(404).json({ error: 'No valid tests found' });
+    }
+
+    const testPlaceholders = testIds.map(() => '?').join(',');
+    const versionFilter = versionIds.length > 0 ? ' AND version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
+    const stepFilter = stepId ? ' AND step_id = ? ' : ' ';
+
+    const testStatsRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) as rounds,
+              SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
+              SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
+       FROM test_submissions
+       WHERE test_id IN (${testPlaceholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilter} ${stepFilter}
+       GROUP BY test_id`
+    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []));
+    const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
+
+    const roundsMapRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) as rounds
+       FROM points_log
+       WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter} ${stepFilter}
+       GROUP BY test_id`
+    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []));
+    const roundsMap = Object.fromEntries(roundsMapRows.map(r => [r.test_id, r.rounds]));
+
+    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
+    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+
+    const passedSubmissions = await testsDb.prepare(
+      `SELECT 
+         s.test_id,
+         s.user_id,
+         s.step_id,
+         ts.step_number,
+         ts.description,
+         s.comment,
+         s.config_file_path,
+         s.round_id,
+         s.executed_at
+       FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
+         AND ((s.comment IS NOT NULL AND s.comment != '') OR (s.config_file_path IS NOT NULL AND s.config_file_path != ''))
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter} ${stepFilter}
+       ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
+    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []));
+
+    const passedUsersByTest = {};
+    for (const row of passedSubmissions) {
+      if (!passedUsersByTest[row.test_id]) {
+        passedUsersByTest[row.test_id] = {};
+      }
+      if (!passedUsersByTest[row.test_id][row.user_id]) {
+        passedUsersByTest[row.test_id][row.user_id] = {
+          userId: row.user_id,
+          userName: userNames[row.user_id] || ('user ' + row.user_id),
+          submissions: []
+        };
+      }
+      passedUsersByTest[row.test_id][row.user_id].submissions.push({
+        stepId: row.step_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executed_at: row.executed_at
+      });
+    }
+
+    const testsReport = tests.map(test => {
+      const stats = testStats[test.id] || { passes: 0, fails: 0 };
+      const rounds = roundsMap[test.id] || 0;
+      const passedUsersMap = passedUsersByTest[test.id] || {};
+      const passedUsers = Object.values(passedUsersMap);
+
+      return {
+        testId: test.id,
+        testName: test.name,
+        rounds,
+        passes: stats.passes,
+        fails: stats.fails,
+        passedUsers
+      };
+    });
+
+    res.json({
+      startDate,
+      endDate,
+      versionIds: versionIds.length > 0 ? versionIds : null,
+      stepId: stepId || null,
+      tests: testsReport
+    });
+  } catch (error) {
+    console.error('Passed report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
