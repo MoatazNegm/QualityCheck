@@ -18,7 +18,7 @@ const API_BASE = '';
 const TestExecution: React.FC = () => {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
-  const { token, user } = useAuth();
+  const { token, user, refreshUser } = useAuth();
 
   const [testName, setTestName] = useState('');
   const [steps, setSteps] = useState<TestStep[]>([]);
@@ -149,6 +149,7 @@ const TestExecution: React.FC = () => {
         setDoneStepIds(newDone);
         resetForm();
         fetchSummary();
+        refreshUser();
 
         if (data.autoEnded) {
           navigate('/dashboard');
@@ -190,6 +191,7 @@ const TestExecution: React.FC = () => {
       setDoneStepIds(new Set());
       setStepIndex(0);
       resetForm();
+      refreshUser();
     } finally {
       setRestarting(false);
     }
@@ -255,14 +257,19 @@ const TestExecution: React.FC = () => {
       </div>
 
       <form onSubmit={handleSubmit}>
+        {user?.isSuspended && (
+          <p className='admin-hint' style={{ color: 'red', marginBottom: '1rem' }}>
+            Your account is suspended. You cannot submit results.
+          </p>
+        )}
         <div className='result-selection'>
           <label>Result:</label>
           <div>
             <label>
-              <input type='radio' name='result' value='pass' checked={result === 'pass'} onChange={() => setResult('pass')} required /> Pass
+              <input type='radio' name='result' value='pass' checked={result === 'pass'} onChange={() => setResult('pass')} required disabled={user?.isSuspended} /> Pass
             </label>
             <label>
-              <input type='radio' name='result' value='fail' checked={result === 'fail'} onChange={() => setResult('fail')} /> Fail
+              <input type='radio' name='result' value='fail' checked={result === 'fail'} onChange={() => setResult('fail')} disabled={user?.isSuspended} /> Fail
             </label>
           </div>
         </div>
@@ -270,22 +277,22 @@ const TestExecution: React.FC = () => {
         {result && (
           <div className='comment-section'>
             <label>{result === 'fail' ? 'Comment (required for failures):' : 'Comment (optional):'}</label>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} required={result === 'fail'} placeholder='Describe what went wrong...' />
+            <textarea value={comment} onChange={e => setComment(e.target.value)} required={result === 'fail'} placeholder='Describe what went wrong...' disabled={user?.isSuspended} />
           </div>
         )}
 
         {result && (
           <div className='file-upload'>
             <label>{result === 'fail' ? 'Configuration File (required for failures):' : 'Configuration File (optional):'}</label>
-            <input type='file' onChange={e => setConfigFile(e.target.files?.[0] || null)} required={result === 'fail'} />
+            <input type='file' onChange={e => setConfigFile(e.target.files?.[0] || null)} required={result === 'fail'} disabled={user?.isSuspended} />
           </div>
         )}
 
         <div className='step-nav'>
-          <button type='button' className='btn-secondary' onClick={goToPrev} disabled={stepIndex === 0 || submitting}>
+          <button type='button' className='btn-secondary' onClick={goToPrev} disabled={stepIndex === 0 || submitting || user?.isSuspended}>
             ← Previous Step
           </button>
-          <button type='submit' disabled={submitting || !result}>
+          <button type='submit' disabled={submitting || !result || user?.isSuspended}>
             {submitting ? 'Submitting...' : isAlreadyDone ? 'Resubmit & Continue →' : 'Submit & Continue →'}
           </button>
         </div>

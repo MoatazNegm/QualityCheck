@@ -11,6 +11,7 @@ interface User {
   id: number;
   username: string;
   is_admin: boolean;
+  isSuspended: boolean;
 }
 
 interface ImportedTest {
@@ -736,6 +737,25 @@ const AdminPanel: React.FC = () => {
     setPasswordSuccess('');
   };
 
+  const toggleSuspension = async (user: User) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${user.id}/suspend`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_suspended: !user.isSuspended })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setUserError(data.error || 'Failed to update suspension');
+      } else {
+        setUsers(prev => prev.map(u => u.id === user.id ? { ...u, isSuspended: !user.isSuspended } : u));
+        setUserSuccess(`User ${user.username} ${!user.isSuspended ? 'suspended' : 'unsuspended'} successfully.`);
+      }
+    } catch {
+      setUserError('Network error');
+    }
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!passwordTarget || !newUserPassword.trim()) return;
@@ -1258,6 +1278,14 @@ const AdminPanel: React.FC = () => {
                       ) : null}
                     </div>
                     <div className="user-row-actions">
+                      <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
+                        <input
+                          type="checkbox"
+                          checked={!!u.isSuspended}
+                          onChange={() => toggleSuspension(u)}
+                        />
+                        <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
+                      </label>
                       <button
                         className="btn-icon"
                         title="View test history"

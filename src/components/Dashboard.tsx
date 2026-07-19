@@ -13,7 +13,7 @@ interface Test {
 }
 
 const Dashboard: React.FC = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,6 +97,7 @@ const Dashboard: React.FC = () => {
 
   const handleCardClick = (test: Test) => {
     if (test.locked) return;
+    if (user?.isSuspended) return;
     navigate(`/test/${test.id}`);
   };
 
@@ -132,8 +133,8 @@ const Dashboard: React.FC = () => {
               {test.isActive && <span className='badge badge-current'>Current</span>}
               {test.completed && !test.isActive && <span className='badge badge-done'>Completed</span>}
               <span className='badge badge-points'>★ {test.totalPoints} pts</span>
-              {test.locked ? (
-                <span className='btn btn-locked' aria-disabled='true'>🔒 Locked</span>
+              {test.locked || user?.isSuspended ? (
+                <span className='btn btn-locked' aria-disabled='true'>{user?.isSuspended ? '🚫 Suspended' : '🔒 Locked'}</span>
               ) : (
                 <span className='btn'>Start Test</span>
               )}

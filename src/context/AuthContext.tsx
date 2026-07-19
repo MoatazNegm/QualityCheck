@@ -4,6 +4,7 @@ interface User {
   id: number;
   username: string;
   isAdmin: boolean;
+  isSuspended: boolean;
 }
 
 interface AuthContextType {
@@ -12,6 +13,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
   isLoading: boolean;
 }
 
@@ -58,6 +60,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const refreshUser = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/verify`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user);
+      }
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+    }
+  };
+
   const login = async (username: string, password: string) => {
     const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
@@ -98,7 +115,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, changePassword, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, logout, changePassword, refreshUser, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

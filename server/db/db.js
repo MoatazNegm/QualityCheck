@@ -353,6 +353,11 @@ async function runMigrations() {
       await clientWrapper.execute({ sql: 'ALTER TABLE test_steps ADD COLUMN points INTEGER DEFAULT 10' });
       console.log('Migration: added points column to test_steps');
     }
+    const userCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(users)' })).rows;
+    if (!userCols.some(c => c.name === 'is_suspended')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0' });
+      console.log('Migration: added is_suspended column to users');
+    }
     console.log('[Database] Schema initialization and migrations completed successfully.');
   } catch (err) {
     console.error('Database migration/init failed:', err);

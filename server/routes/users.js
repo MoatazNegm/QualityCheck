@@ -11,7 +11,7 @@ const path = require('path');
 router.get('/', async (req, res) => {
   try {
     const users = await usersDb.prepare(
-      'SELECT id, username, is_admin FROM users'
+      'SELECT id, username, is_admin, is_suspended FROM users'
     ).all();
     
     res.json(users);
@@ -195,6 +195,22 @@ router.put('/:id', async (req, res) => {
     ).run(is_admin ? 1 : 0, id);
     
     res.json({ message: 'User updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Toggle user suspension (admin only)
+router.put('/:id/suspend', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_suspended } = req.body;
+    
+    await usersDb.prepare(
+      'UPDATE users SET is_suspended = ? WHERE id = ?'
+    ).run(is_suspended ? 1 : 0, id);
+    
+    res.json({ message: 'User suspension updated successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
