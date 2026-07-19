@@ -101,6 +101,13 @@ const Dashboard: React.FC = () => {
     navigate(`/test/${test.id}`);
   };
 
+  const handleContinue = () => {
+    const activeTest = tests.find(t => t.isActive);
+    if (activeTest && !activeTest.locked && !user?.isSuspended) {
+      navigate(`/test/${activeTest.id}`);
+    }
+  };
+
   return (
     <div className='dashboard'>
       <h2>Available Tests</h2>
@@ -110,6 +117,15 @@ const Dashboard: React.FC = () => {
       <div className='points-summary'>
         Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong>
       </div>
+      {(() => {
+        const activeTest = tests.find(t => t.isActive);
+        if (!activeTest || activeTest.locked || user?.isSuspended) return null;
+        return (
+          <button className='btn btn-continue' onClick={handleContinue} style={{ marginBottom: '1rem' }}>
+            Continue {activeTest.name} →
+          </button>
+        );
+      })()}
       <div className='tests-list'>
         {tests.map(test => (
           <div

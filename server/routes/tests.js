@@ -23,30 +23,38 @@ async function getCurrentVersionId() {
 }
 
 // Returns the currently active (unlocked) test id for a user, creating the
-// default (first assigned test) row on first access.
+// default (first assigned test) row on first access. Always validates that
+// the active test is still assigned to the user; if not, resets to the first
+// assigned test so the dashboard never ends up fully locked.
 async function getActiveTestId(userId) {
+  const assigned = await getAssignedTestsOrdered(userId);
+  if (assigned.length === 0) return null;
+
+  const currentVersionId = await getCurrentVersionId();
   const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+
   if (row) {
-    const currentVersionId = await getCurrentVersionId();
     if (row.version_id && currentVersionId && row.version_id !== currentVersionId) {
-      const assigned = await getAssignedTestsOrdered(userId);
-      if (assigned.length > 0) {
-        const idx = assigned.findIndex(t => t.id === row.active_test_id);
-        const nextTest = assigned[(idx + 1) % assigned.length];
-        await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-          .run(userId, nextTest.id, currentVersionId);
-        return nextTest.id;
-      }
+      const idx = assigned.findIndex(t => t.id === row.active_test_id);
+      const nextTest = assigned[(idx + 1) % assigned.length];
+      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+        .run(userId, nextTest.id, currentVersionId);
+      return nextTest.id;
     }
+
+    const isValid = assigned.some(t => t.id === row.active_test_id);
+    if (!isValid) {
+      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+        .run(userId, assigned[0].id, currentVersionId);
+      return assigned[0].id;
+    }
+
     return row.active_test_id;
   }
-  const assigned = await getAssignedTestsOrdered(userId);
-  const firstId = assigned.length ? assigned[0].id : null;
-  if (firstId !== null) {
-    const currentVersionId = await getCurrentVersionId();
-    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, firstId, currentVersionId);
-  }
+
+  const firstId = assigned[0].id;
+  await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+    .run(userId, firstId, currentVersionId);
   return firstId;
 }
 
