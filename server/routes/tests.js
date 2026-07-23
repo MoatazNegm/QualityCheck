@@ -58,17 +58,17 @@ async function getActiveTestId(userId) {
   return firstId;
 }
 
-// Whether every step of a test has a recorded result for the user
-async function isTestCompleted(userId, testId) {
+// Whether every step of a test has a recorded result for the user in the given round
+async function isTestCompleted(userId, testId, roundNo) {
   const stepCountRow = await testsDb.prepare('SELECT COUNT(*) AS c FROM test_steps WHERE test_id = ?').get(testId);
   const stepCount = stepCountRow ? stepCountRow.c : 0;
   if (stepCount === 0) return false;
-  
+
   const doneCountRow = await testsDb.prepare(
-    'SELECT COUNT(*) AS c FROM test_results WHERE user_id = ? AND test_id = ?'
-  ).get(userId, testId);
+    'SELECT COUNT(*) AS c FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ?'
+  ).get(userId, testId, roundNo);
   const doneCount = doneCountRow ? doneCountRow.c : 0;
-  
+
   return doneCount >= stepCount;
 }
 
@@ -100,7 +100,7 @@ router.get('/', authenticateToken, async (req, res) => {
         ...t,
         locked: t.id !== activeTestId,
         isActive: t.id === activeTestId,
-        completed: await isTestCompleted(req.user.userId, t.id),
+        completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId, t.id)),
         totalPoints: await getTestTotalPoints(t.id)
       })));
     }
@@ -131,7 +131,8 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
 
-    if (!(await isTestCompleted(userId, testId))) {
+    const currentRound = await getRound(userId, testId);
+    if (!(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Cannot complete an unfinished test' });
     }
 
@@ -140,7 +141,7 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
     const nextTest = assigned[(idx + 1) % assigned.length];
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, nextTest.id, currentVersionId);
-    await bumpRound(userId, nextTest.id);
+    await bumpRound(userId, testId);
 
     res.json({ message: 'Test completed', active_test_id: nextTest.id });
   } catch (error) {
@@ -165,7 +166,8 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Test is not assigned to this user' });
     }
     const activeTestId = await getActiveTestId(userId);
-    if (activeTestId !== testId && !(await isTestCompleted(userId, testId))) {
+    const currentRound = await getRound(userId, testId);
+    if (activeTestId !== testId && !(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
     }
 

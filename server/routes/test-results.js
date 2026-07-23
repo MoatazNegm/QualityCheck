@@ -204,6 +204,42 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
   }
 });
 
+// Revert results and points for a single step
+router.delete('/:testId/steps/:stepId', authenticateToken, async (req, res) => {
+  try {
+    const { testId, stepId } = req.params;
+    const userId = req.user.userId;
+    const roundNo = await getRound(userId, testId);
+
+    const prevResult = await testsDb.prepare(
+      'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
+    ).get(userId, testId, stepId);
+
+    // Delete from test_results
+    await testsDb.prepare(
+      'DELETE FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
+    ).run(userId, testId, stepId);
+
+    // Delete from points_log
+    await testsDb.prepare(
+      'DELETE FROM points_log WHERE user_id = ? AND test_id = ? AND step_id = ? AND round_id = ?'
+    ).run(userId, testId, stepId, roundNo);
+
+    // Clean up uploaded file from disk if it exists
+    if (prevResult && prevResult.config_file_path) {
+      const oldAbs = path.join(uploadDir, path.basename(prevResult.config_file_path));
+      if (fs.existsSync(oldAbs)) {
+        try { fs.unlinkSync(oldAbs); } catch (e) { console.error('Failed to delete upload file on revert:', oldAbs, e); }
+      }
+    }
+
+    res.json({ message: 'Step result and points reverted successfully' });
+  } catch (error) {
+    console.error('Revert step result error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Clear all results for a user+test (restart)
 router.delete('/user/:userId/test/:testId', authenticateToken, async (req, res) => {
   try {

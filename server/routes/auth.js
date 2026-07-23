@@ -92,7 +92,15 @@ router.get('/verify', (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     // Coerce is_admin (SQLite INTEGER 0/1) to a real boolean so the client never
     // receives the number 0, which React would render as the literal text "0".
-    res.json({ valid: true, user: { ...decoded, isAdmin: !!decoded.isAdmin, isSuspended: !!decoded.isSuspended } });
+    res.json({
+      valid: true,
+      user: {
+        ...decoded,
+        id: decoded.userId,
+        isAdmin: !!decoded.isAdmin,
+        isSuspended: !!decoded.isSuspended
+      }
+    });
   } catch (error) {
     res.status(401).json({ error: 'Invalid token' });
   }

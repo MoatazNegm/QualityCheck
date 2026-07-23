@@ -29,7 +29,7 @@ const TestExecution: React.FC = () => {
   const [configFile, setConfigFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -37,7 +37,7 @@ const TestExecution: React.FC = () => {
   useEffect(() => {
     if (user) loadTest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [testId, user]);
+  }, [testId, user?.id]);
 
   const fetchSummary = async () => {
     try {
@@ -148,8 +148,8 @@ const TestExecution: React.FC = () => {
         newDone.add(step.id);
         setDoneStepIds(newDone);
         resetForm();
-        fetchSummary();
-        refreshUser();
+        await fetchSummary();
+        await refreshUser();
 
         if (data.autoEnded) {
           navigate('/dashboard');
@@ -157,7 +157,7 @@ const TestExecution: React.FC = () => {
         }
 
         if (result === 'fail' && step.on_failure === 'stop') {
-          endTest(testId!);
+          await endTest(testId!);
           navigate('/dashboard');
           return;
         }
@@ -167,7 +167,7 @@ const TestExecution: React.FC = () => {
 
         const allDone = steps.every(s => newDone.has(s.id));
         if (allDone) {
-          markComplete(testId!);
+          await markComplete(testId!);
         }
       }
     } finally {
@@ -175,32 +175,34 @@ const TestExecution: React.FC = () => {
     }
   };
 
-  const handleRestart = async () => {
-    if (!user) return;
-    if (!window.confirm('Restart this test from the beginning? All previous results for this test will be cleared.')) return;
-    setRestarting(true);
+
+  const goToPrev = async () => {
+    if (stepIndex <= 0) return;
+    const prevStep = steps[stepIndex - 1];
+    if (!prevStep) return;
+
+    setSubmitting(true);
     try {
-      await fetch(`${API_BASE}/api/test-results/user/${user.id}/test/${testId}`, {
+      const res = await fetch(`${API_BASE}/api/test-results/${testId}/steps/${prevStep.id}`, {
         method: 'DELETE',
         headers: authHeaders
       });
-      await fetch(`${API_BASE}/api/tests/${testId}/activate`, {
-        method: 'POST',
-        headers: authHeaders
-      });
-      setDoneStepIds(new Set());
-      setStepIndex(0);
-      resetForm();
-      refreshUser();
+      if (res.ok) {
+        const newDone = new Set(doneStepIds);
+        newDone.delete(prevStep.id);
+        setDoneStepIds(newDone);
+        setStepIndex(stepIndex - 1);
+        resetForm();
+        await fetchSummary();
+      } else {
+        alert('Failed to revert step result. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error reverting step:', err);
+      alert('Network error reverting step.');
     } finally {
-      setRestarting(false);
+      setSubmitting(false);
     }
-  };
-
-  const goToPrev = () => {
-    if (stepIndex <= 0) return;
-    setStepIndex(i => i - 1);
-    resetForm();
   };
 
   if (loading) return <div>Loading...</div>;
@@ -222,11 +224,8 @@ const TestExecution: React.FC = () => {
         <p className='points-summary'>Points earned in this test: <strong>{earnedInTest}/{totalPoints}</strong></p>
         <p className='points-summary'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></p>
         <div className='test-completed-actions'>
-          <button onClick={goToPrev} disabled={steps.length === 0}>
-            ← Go to Last Step
-          </button>
-          <button onClick={handleRestart} disabled={restarting}>
-            {restarting ? 'Restarting...' : 'Restart from Beginning'}
+          <button onClick={goToPrev} disabled={steps.length === 0 || submitting}>
+            {submitting ? 'Reverting...' : '← Go to Last Step'}
           </button>
           <button onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
         </div>
