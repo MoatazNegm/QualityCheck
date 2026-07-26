@@ -40,8 +40,6 @@ async function ensureAdminUser() {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
-    await ensureAdminUser();
-
     const { username, password } = req.body;
     
     if (!username || !password) {
