@@ -66,10 +66,10 @@ const TestExecution: React.FC = () => {
       const allSteps: TestStep[] = testData.steps || [];
       setSteps(allSteps);
 
-      let currentRound = 1;
+      let currentRound = 0;
       if (roundRes.ok) {
         const roundData = await roundRes.json();
-        currentRound = roundData.round || 1;
+        currentRound = typeof roundData.round === 'number' ? roundData.round : 0;
       }
 
       const doneIds = new Set<number>();

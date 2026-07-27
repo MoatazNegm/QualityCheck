@@ -76,10 +76,10 @@ router.get('/:id/completed-rounds', authenticateToken, requireAdmin, async (req,
     }
 
     const row = await testsDb.prepare(
-      'SELECT COUNT(DISTINCT round_id) as c FROM points_log WHERE user_id = ? AND round_id IS NOT NULL'
+      'SELECT round_no as completedRounds FROM user_rounds WHERE user_id = ?'
     ).get(userId);
 
-    res.json({ completedRounds: row ? row.c : 0 });
+    res.json({ completedRounds: row ? row.completedRounds : 0 });
   } catch (error) {
     console.error('Get completed rounds error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -159,7 +159,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       { sql: 'DELETE FROM points_log WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM test_assignments WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM user_loop_state WHERE user_id = ?', args: [userId] },
-      { sql: 'DELETE FROM user_test_rounds WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM user_rounds WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
     ], 'write');
 

@@ -45,15 +45,15 @@ The application supports two roles:
    - Can view user execution history and performance reports.
     - Can dynamically import new tests and steps from Excel spreadsheets (`.xlsx` or `.xls`).
      - Can backup and restore all application data (users, tests, results, assignments, and each user's per-loop state) via the **Backup / Restore** tab in the admin panel.
-     - Backup exports a JSON file containing all database records (including `user_loop_state` and `user_test_rounds`, so each user's loop position/round and locked/unlocked status is preserved, plus the full `test_submissions` audit ledger). It also embeds every uploaded compliance config file that is still referenced by a `test_results` or `test_submissions` row (base64-encoded), so a restore reproduces the system exactly — including every round's comments and the files users uploaded on failed steps, which are written back to `uploads/`. Restore replaces all current data (and writes the embedded files) with the uploaded backup.
+     - Backup exports a JSON file containing all database records (including `user_loop_state` and `user_rounds`, so each user's loop position/round and locked/unlocked status is preserved, plus the full `test_submissions` audit ledger). It also embeds every uploaded compliance config file that is still referenced by a `test_results` or `test_submissions` row (base64-encoded), so a restore reproduces the system exactly — including every round's comments and the files users uploaded on failed steps, which are written back to `uploads/`. Restore replaces all current data (and writes the embedded files) with the uploaded backup.
 
 ## Database Structure
 
 The application has been unified to use a single database: **`qualitycheck.db`** (or a single cloud database on Turso).
-- **Tables**: `users`, `user_sessions`, `tests`, `test_steps`, `test_results`, `test_submissions`, `test_assignments`, `user_loop_state`, `user_test_rounds`, `points_log`, `versions`
+- **Tables**: `users`, `user_sessions`, `tests`, `test_steps`, `test_results`, `test_submissions`, `test_assignments`, `user_loop_state`, `user_rounds`, `points_log`, `versions`
   - `test_assignments` table columns: `id`, `test_id`, `user_id`, `assigned_at` (ensuring unique mappings for test assignments).
   - `user_loop_state` table columns: `user_id` (PRIMARY KEY), `active_test_id` (the test currently unlocked for that user), `version_id` (the version under which the active test was started). This drives the sequential loop and version-change auto-end behavior described below.
-  - `user_test_rounds` table columns: `user_id`, `test_id` (composite PRIMARY KEY), `round_no` (the current loop-round counter for that user+test; bumped each time the test is (re)entered).
+  - `user_rounds` table columns: `user_id` (PRIMARY KEY), `round_no` (the current cycle counter for that user; 0 before completing a full cycle, incremented each time the user wraps around from the last test back to the first).
   - `test_submissions` table columns: `id` (PK, the unique submission/round id), `round_id`, `user_id`, `test_id`, `step_id`, `result`, `comment`, `config_file_path`, `version_id`, `executed_at`. This is the **append-only audit ledger**: one row per submitted step result, so every loop round's attempt (with its comment, uploaded file, and round) is retained for complete, round-aware reporting. `test_results` keeps only the latest upserted row per step for loop logic; `round_id` is also carried on `test_results` and `points_log`.
 
 ## Sequential Test Loop (Per-User Locking)
@@ -100,7 +100,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of the **test-centric admin report** with test selector and failed user/step breakdown was **`1.0000023`**.
 - The version at the time of the **failure comment + file download in reports**, **backup including uploaded files**, and **cascade user deletion with double confirmation** was **`1.0000024`**.
 - The version at the time of making each failed-step upload **uniquely related to its exact user/test/step** (filename carries `u{userId}-t{testId}-s{stepId}`, and a later-round re-failure replaces + deletes the previous file) was **`1.0000025`**.
-- The version at the time of the **round-aware audit ledger** (`test_submissions` append-only table + per-(user,test) `user_test_rounds` counter + `round_id` on `test_results`/`points_log`, with reports, backup, and user-delete cascade covering the new tables) was **`1.0000026`**.
+- The version at the time of the **round-aware audit ledger** (`test_submissions` append-only table + per-user `user_rounds` cycle counter + `round_id` on `test_results`/`points_log`, with reports, backup, and user-delete cascade covering the new tables) was **`1.0000026`**.
 - The version at the time of fixing **round-aware test execution** (new rounds restart from step 1, `doneStepIds` filtered by `round_id`) and **round-aware reports** (one line per failed submission with individual download links and timestamps) was **`1.0000028`**.
 - The version at the time of fixing **ESLint build errors for Vercel** (removed unused `updatePoints`, unused `user` in Dashboard, unused `useEffect` in LoginScreen) was **`1.0000030`**.
 - The version at the time of making `initializeAdminUser` callable from server bootstrap and fixing `app.use('/api/auth', authRoutes.router)` was **`1.0000031`**.
@@ -108,6 +108,8 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of **switching frontend to relative API URLs** and fixing CORS for multi-user/internet deployment was **`1.0000040`**.
 - The version at the time of **bumping `engines.node` to `24.x` (Node 20 was deprecated on Vercel as of 2026 and would fail to build)**, **fixing the User/Test Report "Network error" caused by `new URL()` throwing on a path-only string**, and **redirecting SQLite + uploads to `/tmp` on Vercel (read-only `/var/task/`)** was **`1.0000047`**.
 - The version at the time of **fixing the backup import 413 (Content Too Large) on Vercel** by adding **gzip compression + chunked upload** (3 MB per chunk, with new `/api/backup/import-chunk` and `/api/backup/import-finalize` endpoints, plus a small `dataDir`-aware cleanup), and **moving the SQLite migrations to run after `initDB()`** so the "no such table" error stops showing up in Vercel cold-start logs, was **`1.0000049`**.
+- The version at the time of **fixing the rounds counter** to represent complete cycles through all assigned tests instead of per-test entry counts: replaced `user_test_rounds` (per-user+test counter) with `user_rounds` (per-user cycle counter, 0 before completing a full cycle, incremented only when wrapping around from the last test back to the first), and changed `round_id` on `test_results`/`test_submissions`/`points_log` to use the per-user cycle number, was **`1.0000091`**.
+- The version at the time of **fixing report round calculations** (replaced step-submission `COUNT(*)` in `test-report` and `passed-report` with `COUNT(DISTINCT user_id || '-' || round_id)` so tests show distinct execution cycles rather than step counts) and **fixing round 0 handling in TestExecution.tsx** (replaced `roundData.round || 1` with `typeof roundData.round === 'number' ? roundData.round : 0`) was **`1.0000092`**.
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
 over a configurable date range, filtered by testing version.
@@ -374,7 +376,7 @@ The chunk size is 3 MB (well under the 4.5 MB Vercel limit even with multipart o
 ## Frontend Design: Stateless and Passive
 
 The React frontend is intentionally kept stateless with respect to all business data:
-- **No cached test data, points, or results.** Every mount/load refetches `tests`, `test_results`, `user_test_rounds`, and `points_log` summaries from the backend.
+- **No cached test data, points, or results.** Every mount/load refetches `tests`, `test_results`, `user_rounds`, and `points_log` summaries from the backend.
 - **Relative API URLs only.** No hardcoded `localhost`, IP, or absolute URLs are baked into the build. The app works whether served on `localhost:4005`, a private IP, or a public Render/Vercel domain.
 - **Single source of truth:** the SQLite databases (`users.db`, `tests.db`) owned by the backend. Multiple concurrent users/browsers all query the same backend state, so there is no client-side inconsistency.
 - **Authentication token** is the only persistent client state (`localStorage`). All other state (`tests`, `steps`, `results`, `round`, `monthEarned`) is derived fresh from backend responses on each navigation/render.

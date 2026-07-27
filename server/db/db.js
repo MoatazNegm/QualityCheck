@@ -265,11 +265,9 @@ async function initDB() {
       is_current INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE IF NOT EXISTS user_test_rounds (
-      user_id INTEGER,
-      test_id INTEGER,
-      round_no INTEGER DEFAULT 1,
-      PRIMARY KEY (user_id, test_id)
+    CREATE TABLE IF NOT EXISTS user_rounds (
+      user_id INTEGER PRIMARY KEY,
+      round_no INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS test_submissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,29 +290,31 @@ async function initDB() {
   }
 }
 
-// Return the current loop-round number for a (user, test) pair, initialising it
-// to 1 on first access.
-async function getRound(userId, testId) {
+// Return the current loop-round number for a user, initialising it
+// to 0 on first access. Round 0 means the user hasn't completed
+// a full cycle through all assigned tests yet.
+async function getRound(userId) {
   const row = await testsDb.prepare(
-    'SELECT round_no FROM user_test_rounds WHERE user_id = ? AND test_id = ?'
-  ).get(userId, testId);
+    'SELECT round_no FROM user_rounds WHERE user_id = ?'
+  ).get(userId);
   if (row) return row.round_no;
   await testsDb.prepare(
-    'INSERT OR IGNORE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, 1)'
-  ).run(userId, testId);
-  return 1;
+    'INSERT OR IGNORE INTO user_rounds (user_id, round_no) VALUES (?, 0)'
+  ).run(userId);
+  return 0;
 }
 
-// Advance the loop-round counter for a (user, test) pair. Returns the new round number.
-async function bumpRound(userId, testId) {
+// Advance the loop-round counter for a user (called when wrapping
+// around from the last test back to the first). Returns the new round number.
+async function bumpRound(userId) {
   await testsDb.prepare(
-    `INSERT INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, 1)
-     ON CONFLICT(user_id, test_id) DO UPDATE SET round_no = round_no + 1`
-  ).run(userId, testId);
+    `INSERT INTO user_rounds (user_id, round_no) VALUES (?, 1)
+     ON CONFLICT(user_id) DO UPDATE SET round_no = round_no + 1`
+  ).run(userId);
   const row = await testsDb.prepare(
-    'SELECT round_no FROM user_test_rounds WHERE user_id = ? AND test_id = ?'
-  ).get(userId, testId);
-  return row ? row.round_no : 1;
+    'SELECT round_no FROM user_rounds WHERE user_id = ?'
+  ).get(userId);
+  return row ? row.round_no : 0;
 }
 
 // Perform migrations asynchronously using clientWrapper to prevent deadlocks
@@ -358,6 +358,16 @@ async function runMigrations() {
       await clientWrapper.execute({ sql: 'ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0' });
       console.log('Migration: added is_suspended column to users');
     }
+
+    // Migrate user_test_rounds (per-test counter) to user_rounds (per-user cycle counter)
+    const oldTableCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_test_rounds)' })).rows;
+    if (oldTableCols.length > 0) {
+      // Create user_rounds for all users with round_no = 0 (they haven't completed a full cycle yet)
+      await clientWrapper.execute({ sql: 'INSERT OR IGNORE INTO user_rounds (user_id, round_no) SELECT DISTINCT user_id, 0 FROM user_test_rounds' });
+      await clientWrapper.execute({ sql: 'DROP TABLE user_test_rounds' });
+      console.log('Migration: replaced user_test_rounds with user_rounds');
+    }
+
     console.log('[Database] Schema initialization and migrations completed successfully.');
   } catch (err) {
     console.error('Database migration/init failed:', err);

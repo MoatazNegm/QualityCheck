@@ -132,8 +132,8 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     const currentVersion = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
     const currentVersionId = currentVersion ? currentVersion.id : null;
 
-    // The unique loop-round this submission belongs to (per user+test).
-    const roundNo = await getRound(userId, testId);
+    // The unique loop-round this submission belongs to (per user cycle).
+    const roundNo = await getRound(userId);
 
     // Append-only audit ledger: every submission gets its own row with a unique
     // id, so a re-failure of the same step in a later round is a distinct,
@@ -192,7 +192,9 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
         const nextTest = assigned[(idx + 1) % assigned.length];
         await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
           .run(userId, nextTest.id, currentVersionId);
-        await bumpRound(userId, nextTest.id);
+        if (nextTest.id === assigned[0].id) {
+          await bumpRound(userId);
+        }
         autoEnded = true;
       }
     }
@@ -209,7 +211,7 @@ router.delete('/:testId/steps/:stepId', authenticateToken, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
     const userId = req.user.userId;
-    const roundNo = await getRound(userId, testId);
+    const roundNo = await getRound(userId);
 
     const prevResult = await testsDb.prepare(
       'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'

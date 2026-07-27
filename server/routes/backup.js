@@ -54,7 +54,7 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
     const testSubmissions = await testsDb.prepare('SELECT * FROM test_submissions').all();
     const testAssignments = await testsDb.prepare('SELECT * FROM test_assignments').all();
     const userLoopState = await testsDb.prepare('SELECT * FROM user_loop_state').all();
-    const userTestRounds = await testsDb.prepare('SELECT * FROM user_test_rounds').all();
+    const userTestRounds = await testsDb.prepare('SELECT * FROM user_rounds').all();
     const pointsLog = await testsDb.prepare('SELECT * FROM points_log').all();
     const versions = await testsDb.prepare('SELECT * FROM versions').all();
 
@@ -74,7 +74,7 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
       test_submissions: testSubmissions,
       test_assignments: testAssignments,
       user_loop_state: userLoopState,
-      user_test_rounds: userTestRounds,
+      user_rounds: userTestRounds,
       points_log: pointsLog,
       versions,
       files,
@@ -109,7 +109,7 @@ async function applyBackup(backup, res) {
     batch.push({ sql: 'DELETE FROM test_submissions', args: [] });
     batch.push({ sql: 'DELETE FROM points_log', args: [] });
     batch.push({ sql: 'DELETE FROM user_loop_state', args: [] });
-    batch.push({ sql: 'DELETE FROM user_test_rounds', args: [] });
+    batch.push({ sql: 'DELETE FROM user_rounds', args: [] });
 
     // Tables that reference tests and test_steps (delete these BEFORE deleting parents)
     batch.push({ sql: 'DELETE FROM test_steps', args: [] });
@@ -217,11 +217,11 @@ async function applyBackup(backup, res) {
       });
     }
 
-    // Insert Test Rounds
-    for (const r of backup.user_test_rounds || []) {
+    // Insert User Rounds
+    for (const r of backup.user_rounds || []) {
       batch.push({
-        sql: 'INSERT OR REPLACE INTO user_test_rounds (user_id, test_id, round_no) VALUES (?, ?, ?)',
-        args: [r.user_id, r.test_id, r.round_no ?? 1]
+        sql: 'INSERT OR REPLACE INTO user_rounds (user_id, round_no) VALUES (?, ?)',
+        args: [r.user_id, r.round_no ?? 0]
       });
     }
 

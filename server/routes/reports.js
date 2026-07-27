@@ -169,6 +169,12 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
     ).all(...userIds, start, end, ...versionIds);
     const testSubMap = Object.fromEntries(testSubMapRows.map(r => [r.test_id, r.submissions]));
 
+    // Get per-user cycle count from user_rounds
+    const userRoundsRows = await testsDb.prepare(
+      `SELECT user_id, round_no FROM user_rounds WHERE user_id IN (${placeholders})`
+    ).all(...userIds);
+    const userRoundsMap = Object.fromEntries(userRoundsRows.map(r => [r.user_id, r.round_no]));
+
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
          s.test_id,
@@ -267,7 +273,7 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
         testId: test.id,
         testName: test.name,
         totalSubmissions,
-        rounds: stats.submissions,
+        rounds: userRoundsMap[userIds[0]] || 0,
         passes: stats.passes,
         fails: stats.fails,
         steps,
@@ -408,7 +414,7 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
     const stepFilter = stepId ? ' AND step_id = ? ' : ' ';
 
     const testStatsRows = await testsDb.prepare(
-      `SELECT test_id, COUNT(*) as rounds,
+      `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds,
               SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
               SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions
@@ -418,7 +424,7 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
     const roundsMapRows = await testsDb.prepare(
-      `SELECT test_id, COUNT(*) as rounds
+      `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds
        FROM points_log
        WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter} ${stepFilter}
        GROUP BY test_id`
@@ -545,7 +551,7 @@ router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) =
     const stepFilter = stepId ? ' AND step_id = ? ' : ' ';
 
     const testStatsRows = await testsDb.prepare(
-      `SELECT test_id, COUNT(*) as rounds,
+      `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds,
               SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
               SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions
@@ -555,7 +561,7 @@ router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) =
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
     const roundsMapRows = await testsDb.prepare(
-      `SELECT test_id, COUNT(*) as rounds
+      `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds
        FROM points_log
        WHERE test_id IN (${testPlaceholders}) AND earned_at >= ? AND earned_at <= ? ${versionFilter} ${stepFilter}
        GROUP BY test_id`

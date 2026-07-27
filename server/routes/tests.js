@@ -100,7 +100,7 @@ router.get('/', authenticateToken, async (req, res) => {
         ...t,
         locked: t.id !== activeTestId,
         isActive: t.id === activeTestId,
-        completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId, t.id)),
+        completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId)),
         totalPoints: await getTestTotalPoints(t.id)
       })));
     }
@@ -131,7 +131,7 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
 
-    const currentRound = await getRound(userId, testId);
+    const currentRound = await getRound(userId);
     if (!(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Cannot complete an unfinished test' });
     }
@@ -141,7 +141,9 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
     const nextTest = assigned[(idx + 1) % assigned.length];
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, nextTest.id, currentVersionId);
-    await bumpRound(userId, testId);
+    if (nextTest.id === assigned[0].id) {
+      await bumpRound(userId);
+    }
 
     res.json({ message: 'Test completed', active_test_id: nextTest.id });
   } catch (error) {
@@ -166,7 +168,7 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Test is not assigned to this user' });
     }
     const activeTestId = await getActiveTestId(userId);
-    const currentRound = await getRound(userId, testId);
+    const currentRound = await getRound(userId);
     if (activeTestId !== testId && !(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
     }
@@ -174,7 +176,6 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
     const currentVersionId = await getCurrentVersionId();
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, testId, currentVersionId);
-    await bumpRound(userId, testId);
 
     res.json({ message: 'Test re-opened', active_test_id: testId });
   } catch (error) {
@@ -209,7 +210,9 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
     const nextTest = assigned[(idx + 1) % assigned.length];
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
       .run(userId, nextTest.id, currentVersionId);
-    await bumpRound(userId, nextTest.id);
+    if (nextTest.id === assigned[0].id) {
+      await bumpRound(userId);
+    }
 
     res.json({ message: 'Test ended', active_test_id: nextTest.id });
   } catch (error) {
@@ -458,8 +461,7 @@ router.get('/:id', async (req, res) => {
 router.get('/:testId/round', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const testId = parseInt(req.params.testId, 10);
-    const round = await getRound(userId, testId);
+    const round = await getRound(userId);
     res.json({ round });
   } catch (error) {
     console.error('Get round error:', error);
