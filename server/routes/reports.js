@@ -109,8 +109,8 @@ function getDateRange(preset) {
   };
 }
 
-// Get admin user report for a date range (admin only)
-router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => {
+// Get admin user report for a date range (admin, developer, or tester self-scoped)
+router.get('/user-report', authenticateToken, requireReportAccess, async (req, res) => {
   try {
     const userIdsRaw = req.query.userId;
     const startDate = req.query.startDate;
@@ -120,14 +120,22 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
 
-    if (!userIdsRaw || !startDate || !endDate) {
-      return res.status(400).json({ error: 'userId, startDate, and endDate are required' });
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate, and endDate are required' });
+    }
+    if (req.reportScope !== 'self' && (!userIdsRaw || userIdsRaw === '')) {
+      return res.status(400).json({ error: 'userId is required' });
     }
 
     const userIds = String(userIdsRaw)
       .split(',')
       .map(id => parseInt(id, 10))
       .filter(id => !isNaN(id));
+
+    if (req.reportScope === 'self') {
+      userIds.length = 0;
+      userIds.push(req.selfUserId);
+    }
 
     if (userIds.length === 0) {
       return res.status(400).json({ error: 'At least one valid userId is required' });
@@ -339,12 +347,17 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
   }
 });
 
-// Get total points earned per user over a date range (admin only)
-router.get('/points', authenticateToken, requireAdmin, async (req, res) => {
+// Get total points earned per user over a date range (admin, developer, or tester self-scoped)
+router.get('/points', authenticateToken, requireReportAccess, async (req, res) => {
   try {
     const userIdsRaw = req.query.userId;
+    const testIdsRaw = req.query.testId;
     const startDate = req.query.startDate;
     const endDate = req.query.endDate;
+    const versionIdsRaw = req.query.versionIds;
+    const versionIds = versionIdsRaw
+      ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+      : [];
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -354,8 +367,18 @@ router.get('/points', authenticateToken, requireAdmin, async (req, res) => {
     const end = endDate + ' 23:59:59';
 
     let userIds = [];
-    if (userIdsRaw && userIdsRaw !== 'all') {
+    if (req.reportScope === 'self') {
+      userIds = [req.selfUserId];
+    } else if (userIdsRaw && userIdsRaw !== 'all') {
       userIds = String(userIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    let testIds = [];
+    if (testIdsRaw && testIdsRaw !== 'all') {
+      testIds = String(testIdsRaw)
         .split(',')
         .map(id => parseInt(id, 10))
         .filter(id => !isNaN(id));
@@ -364,19 +387,31 @@ router.get('/points', authenticateToken, requireAdmin, async (req, res) => {
     const hasUserFilter = userIds.length > 0;
     const userPlaceholders = hasUserFilter ? ` AND pl.user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
 
+    const hasTestFilter = testIds.length > 0;
+    const testPlaceholders = hasTestFilter ? ` AND pl.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
+
+    const hasVersionFilter = versionIds.length > 0;
+    const versionPlaceholders = hasVersionFilter ? ` AND pl.version_id IN (${versionIds.map(() => '?').join(',')}) ` : ' ';
+
+    const extraArgs = [
+      ...(hasUserFilter ? userIds : []),
+      ...(hasTestFilter ? testIds : []),
+      ...(hasVersionFilter ? versionIds : [])
+    ];
+
     const totalRow = await testsDb.prepare(
       `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
        FROM points_log pl
-       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders}`
-    ).all(...[start, end, ...(hasUserFilter ? userIds : [])]);
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders}`
+    ).all(start, end, ...extraArgs);
 
     const perUserRows = await testsDb.prepare(
       `SELECT pl.user_id as userId, COALESCE(SUM(pl.points), 0) as pointsEarned, COUNT(*) as steps
        FROM points_log pl
-       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders}
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders}
        GROUP BY pl.user_id
        ORDER BY pointsEarned DESC`
-    ).all(...[start, end, ...(hasUserFilter ? userIds : [])]);
+    ).all(start, end, ...extraArgs);
 
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
@@ -401,8 +436,8 @@ router.get('/points', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Get admin test report for a date range (admin only)
-router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => {
+// Get admin test report for a date range (admin, developer, or tester self-scoped)
+router.get('/test-report', authenticateToken, requireReportAccess, async (req, res) => {
   try {
     const testIdsRaw = req.query.testId;
     const startDate = req.query.startDate;
@@ -484,8 +519,9 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
        JOIN test_steps ts ON ts.id = s.step_id
        WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'fail'
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter} ${stepFilter}
+         ${req.reportScope === 'self' ? ' AND s.user_id = ? ' : ''}
        ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
-    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []));
+    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(req.reportScope === 'self' ? [req.selfUserId] : []));
 
     const failedUsersByTest = {};
     for (const row of failedSubmissions) {
@@ -539,8 +575,9 @@ router.get('/test-report', authenticateToken, requireAdmin, async (req, res) => 
   }
 });
 
-router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/passed-report', authenticateToken, requireReportAccess, async (req, res) => {
   try {
+    const userIdsRaw = req.query.userId;
     const testIdsRaw = req.query.testId;
     const startDate = req.query.startDate;
     const endDate = req.query.endDate;
@@ -556,6 +593,16 @@ router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) =
 
     const start = startDate + ' 00:00:00';
     const end = endDate + ' 23:59:59';
+
+    let userIds = [];
+    if (req.reportScope === 'self') {
+      userIds = [req.selfUserId];
+    } else if (userIdsRaw && userIdsRaw !== 'all') {
+      userIds = String(userIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
 
     let testIds = [];
     let tests;
@@ -584,6 +631,7 @@ router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) =
     const testPlaceholders = testIds.map(() => '?').join(',');
     const versionFilter = versionIds.length > 0 ? ' AND version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
     const stepFilter = stepId ? ' AND step_id = ? ' : ' ';
+    const userFilter = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
     const testStatsRows = await testsDb.prepare(
       `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds,
@@ -621,9 +669,9 @@ router.get('/passed-report', authenticateToken, requireAdmin, async (req, res) =
        JOIN test_steps ts ON ts.id = s.step_id
        WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
          AND ((s.comment IS NOT NULL AND s.comment != '') OR (s.config_file_path IS NOT NULL AND s.config_file_path != ''))
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter} ${stepFilter}
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter} ${stepFilter} ${userFilter}
        ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
-    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []));
+    ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
 
     const passedUsersByTest = {};
     for (const row of passedSubmissions) {

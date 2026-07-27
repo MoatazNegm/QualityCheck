@@ -5,6 +5,7 @@ interface User {
   username: string;
   isAdmin: boolean;
   isSuspended: boolean;
+  userGroups: string[];
 }
 
 interface AuthContextType {

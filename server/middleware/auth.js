@@ -27,7 +27,40 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+const requireDeveloper = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+  const groups = req.user.userGroups || [];
+  const isAuthorized = req.user.isAdmin || groups.includes('admins') || groups.includes('developers');
+  if (!isAuthorized) {
+    return res.status(403).json({ error: 'Developer or admin access required' });
+  }
+  next();
+};
+
+const requireReportAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+  const groups = req.user.userGroups || [];
+  const isFullAccess = req.user.isAdmin || groups.includes('admins') || groups.includes('developers');
+  const isTester = groups.includes('testers');
+  if (!isFullAccess && !isTester) {
+    return res.status(403).json({ error: 'Report access required' });
+  }
+  if (!isFullAccess) {
+    req.reportScope = 'self';
+    req.selfUserId = req.user.userId;
+  } else {
+    req.reportScope = 'all';
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
-  requireAdmin
+  requireAdmin,
+  requireDeveloper,
+  requireReportAccess
 };

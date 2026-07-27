@@ -80,11 +80,13 @@ async function getTestTotalPoints(testId) {
   return row ? row.total : 0;
 }
 
-// Get all tests (filtered by assignment for non-admins, with loop lock status)
+// Get all tests (filtered by assignment for non-admins without developer access, with loop lock status)
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    const groups = req.user.userGroups || [];
+    const isFullAccess = req.user.isAdmin || groups.includes('developers') || groups.includes('admins');
     let tests;
-    if (req.user.isAdmin) {
+    if (isFullAccess) {
       const allTests = await testsDb.prepare('SELECT * FROM tests ORDER BY id').all();
       tests = await Promise.all(allTests.map(async t => ({
         ...t,

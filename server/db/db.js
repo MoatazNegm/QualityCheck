@@ -200,7 +200,8 @@ async function initDB() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      is_admin BOOLEAN DEFAULT 0
+      is_admin BOOLEAN DEFAULT 0,
+      user_groups TEXT DEFAULT '["testers"]'
     );
     CREATE TABLE IF NOT EXISTS user_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -357,6 +358,18 @@ async function runMigrations() {
     if (!userCols.some(c => c.name === 'is_suspended')) {
       await clientWrapper.execute({ sql: 'ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0' });
       console.log('Migration: added is_suspended column to users');
+    }
+    const userGroupsCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(users)' })).rows;
+    if (!userGroupsCols.some(c => c.name === 'user_groups')) {
+      await clientWrapper.execute({ sql: "ALTER TABLE users ADD COLUMN user_groups TEXT DEFAULT '[\"testers\"]'" });
+      console.log('Migration: added user_groups column to users');
+    }
+
+    // Backfill user_groups for existing users without proper groups
+    const backfillUsers = await clientWrapper.execute({ sql: 'SELECT id, is_admin FROM users WHERE user_groups IS NULL OR user_groups = \'\' OR user_groups = \'[]\'' });
+    for (const u of backfillUsers.rows) {
+      const groups = u.is_admin ? JSON.stringify(['admins']) : JSON.stringify(['testers']);
+      await clientWrapper.execute({ sql: 'UPDATE users SET user_groups = ? WHERE id = ?', args: [groups, u.id] });
     }
 
     // Migrate user_test_rounds (per-test counter) to user_rounds (per-user cycle counter)

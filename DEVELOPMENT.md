@@ -382,4 +382,53 @@ The React frontend is intentionally kept stateless with respect to all business 
 - **Relative API URLs only.** No hardcoded `localhost`, IP, or absolute URLs are baked into the build. The app works whether served on `localhost:4005`, a private IP, or a public Render/Vercel domain.
 - **Single source of truth:** the SQLite databases (`users.db`, `tests.db`) owned by the backend. Multiple concurrent users/browsers all query the same backend state, so there is no client-side inconsistency.
 - **Authentication token** is the only persistent client state (`localStorage`). All other state (`tests`, `steps`, `results`, `round`, `monthEarned`) is derived fresh from backend responses on each navigation/render.
-- **`new URL()` requires a base in the browser.** Unlike in Node, the browser's `URL` constructor does **not** fall back to `window.location` as an implicit base when you pass a path-only string. `new URL('/api/foo')` throws `TypeError: Failed to construct 'URL': Invalid URL` even though the page is loaded from a valid origin. The fix is to pass `window.location.origin` explicitly as the second argument — `new URL('/api/foo', window.location.origin)` — or just use a plain template string (`\`${API_BASE}/api/foo\``) and let `fetch` resolve the path against the current page. The User/Test Report fetches in `AdminPanel.tsx` hit this bug; see the commit history around version `1.0000045`.
+- **`new URL()` requires a base in the browser.** Unlike in Node, the browser's `URL` constructor does **not** fall back to `window.location` as an implicit base when you pass a path-only string. `new URL('/api/foo')` throws `TypeError: Failed to construct 'URL': Invalid URL` even though the page is loaded from a valid origin. The fix is to pass `window.location.origin` explicitly as the second argument — `new URL('/api/foo', window.location.origin)` — or just use a plain template string (``${API_BASE}/api/foo``) and let `fetch` resolve the path against the current page. The User/Test Report fetches in `AdminPanel.tsx` hit this bug; see the commit history around version `1.0000045`.
+
+## User Groups (`testers`, `admins`, `developers`)
+
+The application categorizes users into three distinct groups:
+
+1. **`testers`**:
+   - Default group for all newly created users.
+   - Directed to the user dashboard (`/dashboard`), where only assigned tests are shown and clickable.
+   - When accessing Reports (`/reports`), reports are strictly **self-scoped** (User Selector dropdown is hidden/not shown, and results cover only that tester's work).
+2. **`admins`**:
+   - Administration group (`admin` user belongs to this group by default).
+   - Grants full access to the Admin Panel (`/admin`) for managing users, test assignments, test steps, versions, and system backups.
+   - Grants full access to system-wide Reports (`/reports`) with multi-user selection controls.
+3. **`developers`**:
+   - Developer group.
+   - Can access all system-wide Reports (`/reports`) with full multi-user selection capabilities (identical report views as admins).
+   - Retains access to their own user dashboard (`/dashboard`).
+
+---
+
+## Code Location & Chunk Line Number Reference Map
+
+To enable AI agents and developers to locate specific features directly without reading entire files, use the following chunk/line reference map:
+
+### Backend Modules (`server/`)
+
+| Feature / Location | File Path | Line Range (Approx.) | Key Symbols / Exports |
+| :--- | :--- | :--- | :--- |
+| DB Initialization & Schema | [server/db/db.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/db/db.js) | L197-292 | `initDB()`, `users`, `user_groups`, `test_submissions` |
+| Round Counter Helpers | [server/db/db.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/db/db.js) | L297-319 | `getRound()`, `bumpRound()` |
+| Schema Migrations | [server/db/db.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/db/db.js) | L322-388 | `runMigrations()`, `user_groups` backfill |
+| Authentication Middleware | [server/middleware/auth.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/middleware/auth.js) | L5-59 | `authenticateToken`, `requireAdmin`, `requireDeveloper`, `requireReportAccess` |
+| Admin Bootstrap & Login | [server/routes/auth.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/auth.js) | L15-79 | `ensureAdminUser()`, `POST /login` (signs `userGroups`) |
+| User List & Management | [server/routes/users.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/users.js) | L11-21 | `GET /` (returns `user_groups` array) |
+| User Creation API | [server/routes/users.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/users.js) | L94-130 | `POST /` (saves `user_groups` & auto-assigns tests) |
+| User Group & Role Update | [server/routes/users.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/users.js) | L199-215 | `PUT /:id` (updates `user_groups` & `is_admin`) |
+| Cascading User Deletion | [server/routes/users.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/users.js) | L138-191 | `DELETE /:id` |
+| Scoped Reports Endpoints | [server/routes/reports.js](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/server/routes/reports.js) | L113-690 | `GET /user-report`, `GET /points`, `GET /test-report`, `GET /passed-report` |
+
+### Frontend Modules (`src/`)
+
+| Feature / Location | File Path | Line Range (Approx.) | Key Symbols / Components |
+| :--- | :--- | :--- | :--- |
+| Application Routing | [src/App.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/App.tsx) | L23-32 | `<Routes>`, `/dashboard`, `/reports`, `/admin` |
+| User Context & Auth Token | [src/context/AuthContext.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/context/AuthContext.tsx) | L3-120 | `User` interface (`userGroups`), `useAuth` |
+| Sidebar Links & Navigation | [src/components/Sidebar.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/components/Sidebar.tsx) | L33-52 | `<NavLink>`, Reports link, Admin link guard |
+| Standalone Reports View | [src/components/ReportsView.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/components/ReportsView.tsx) | L1-1270 | `<ReportsView />`, User, Test, Passed & Points reports |
+| User Creation & Group Edit | [src/components/AdminPanel.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/components/AdminPanel.tsx) | L1265-1355 | `activeTab === 'users'`, group checkboxes & badges |
+| Admin Panel Reports Tab | [src/components/AdminPanel.tsx](file:///C:/Users/moata/.gemini/antigravity/scratch/QualityCheck/src/components/AdminPanel.tsx) | L1555-1557 | `activeTab === 'reports'` rendering `<ReportsView />` |

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
+import ReportsView from './ReportsView';
 
 interface Test {
   id: number;
@@ -12,6 +13,7 @@ interface User {
   username: string;
   is_admin: boolean;
   isSuspended: boolean;
+  user_groups?: string[];
 }
 
 interface ImportedTest {
@@ -81,6 +83,7 @@ const AdminPanel: React.FC = () => {
   const [loadingSteps, setLoadingSteps] = useState<Set<number>>(new Set());
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [newUserGroups, setNewUserGroups] = useState<string[]>(['testers']);
   const [userError, setUserError] = useState('');
   const [userSuccess, setUserSuccess] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
@@ -863,6 +866,12 @@ const AdminPanel: React.FC = () => {
       fetchAssignmentsForTest(testId);
     }
   };
+  // duplicate state removed
+
+
+
+
+
 
   const nonAdminUsers = users.filter(u => !u.is_admin);
 
@@ -872,11 +881,12 @@ const AdminPanel: React.FC = () => {
     setCreatingUser(true);
     setUserError('');
     setUserSuccess('');
+    const isAdmin = newUserGroups.includes('admins');
     try {
       const res = await fetch(`${API_BASE}/api/users`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: newUsername.trim(), password: newPassword, isAdmin: false }),
+        body: JSON.stringify({ username: newUsername.trim(), password: newPassword, isAdmin, user_groups: newUserGroups }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -885,12 +895,37 @@ const AdminPanel: React.FC = () => {
         setUserSuccess(`User "${newUsername.trim()}" created successfully.`);
         setNewUsername('');
         setNewPassword('');
+        setNewUserGroups(['testers']);
         fetchUsers();
       }
     } catch {
       setUserError('Network error');
     } finally {
       setCreatingUser(false);
+    }
+  };
+
+  const handleToggleUserGroup = async (u: User, groupName: string) => {
+    const current = u.user_groups || (u.is_admin ? ['admins'] : ['testers']);
+    const updated = current.includes(groupName)
+      ? current.filter(g => g !== groupName)
+      : [...current, groupName];
+    if (updated.length === 0) {
+      setUserError('A user must belong to at least one group');
+      return;
+    }
+    const isAdmin = updated.includes('admins');
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${u.id}`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_admin: isAdmin, user_groups: updated })
+      });
+      if (res.ok) {
+        fetchUsers();
+      }
+    } catch {
+      // ignore
     }
   };
 
@@ -1231,24 +1266,53 @@ const AdminPanel: React.FC = () => {
       {activeTab === 'users' && (
         <div className="admin-section">
           <h3>Create New User</h3>
-          <form onSubmit={handleCreateUser} className="create-user-form">
-            <input
-              type="text"
-              placeholder="Username"
-              value={newUsername}
-              onChange={e => { setNewUsername(e.target.value); setUserError(''); setUserSuccess(''); }}
-              className="user-input"
-              autoComplete="off"
-            />
-            <input
-              type="password"
-              placeholder="Password"
-              value={newPassword}
-              onChange={e => { setNewPassword(e.target.value); setUserError(''); setUserSuccess(''); }}
-              className="user-input"
-              autoComplete="new-password"
-            />
-            <button type="submit" className="btn" disabled={creatingUser || !newUsername.trim() || !newPassword.trim()}>
+          <form onSubmit={handleCreateUser} className="create-user-form" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '1rem' }}>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', width: '100%' }}>
+              <input
+                type="text"
+                placeholder="Username"
+                value={newUsername}
+                onChange={e => { setNewUsername(e.target.value); setUserError(''); setUserSuccess(''); }}
+                className="user-input"
+                autoComplete="off"
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={newPassword}
+                onChange={e => { setNewPassword(e.target.value); setUserError(''); setUserSuccess(''); }}
+                className="user-input"
+                autoComplete="new-password"
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Groups:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={newUserGroups.includes('testers')}
+                  onChange={() => setNewUserGroups(prev => prev.includes('testers') ? prev.filter(g => g !== 'testers') : [...prev, 'testers'])}
+                />
+                <span>Testers</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={newUserGroups.includes('admins')}
+                  onChange={() => setNewUserGroups(prev => prev.includes('admins') ? prev.filter(g => g !== 'admins') : [...prev, 'admins'])}
+                />
+                <span>Administrators</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={newUserGroups.includes('developers')}
+                  onChange={() => setNewUserGroups(prev => prev.includes('developers') ? prev.filter(g => g !== 'developers') : [...prev, 'developers'])}
+                />
+                <span>Developers</span>
+              </label>
+            </div>
+            <button type="submit" className="btn" disabled={creatingUser || !newUsername.trim() || !newPassword.trim() || newUserGroups.length === 0}>
               {creatingUser ? 'Creating...' : 'Create User'}
             </button>
           </form>
@@ -1256,15 +1320,49 @@ const AdminPanel: React.FC = () => {
           {userSuccess && <p className="success-msg">{userSuccess}</p>}
 
           <h3 style={{ marginTop: '2rem' }}>Existing Users</h3>
-          {nonAdminUsers.length === 0 ? (
-            <p className="admin-hint">No non-admin users yet.</p>
+          {users.length === 0 ? (
+            <p className="admin-hint">No users yet.</p>
           ) : (
             <div className="users-list">
-              {nonAdminUsers.map(u => {
+              {users.map(u => {
                 const summary = userSummaries[u.id];
+                const currentGroups = u.user_groups || (u.is_admin ? ['admins'] : ['testers']);
                 return (
-                  <div key={u.id} className="user-row">
-                    <span className="user-row-name">{u.username}</span>
+                  <div key={u.id} className="user-row" style={{ flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <span className="user-row-name">{u.username}</span>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        {['testers', 'admins', 'developers'].map(g => {
+                          const isMember = currentGroups.includes(g);
+                          return (
+                            <label
+                              key={g}
+                              title={`Toggle ${g} group`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                fontSize: '0.75rem',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: '12px',
+                                border: '1px solid var(--border-color)',
+                                background: isMember ? 'var(--accent-color, #4f46e5)' : 'transparent',
+                                color: isMember ? '#fff' : 'inherit',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isMember}
+                                onChange={() => handleToggleUserGroup(u, g)}
+                                style={{ margin: 0, width: '12px', height: '12px' }}
+                              />
+                              {g}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <div className="user-row-summary">
                       {summary ? (
                         <>
@@ -1455,7 +1553,8 @@ const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'reports' && (
+      {activeTab === 'reports' && <ReportsView />}
+      {false && activeTab === 'reports' && (
         <div className="admin-section">
           <div className="report-sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
             <button

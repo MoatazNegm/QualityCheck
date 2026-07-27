@@ -38,7 +38,15 @@ const Sidebar: React.FC = () => {
           <span className='sidebar-link-icon'>📊</span>
           {!collapsed && <span className='sidebar-link-text'>Dashboard</span>}
         </NavLink>
-        {user?.isAdmin && (
+        <NavLink
+          to='/reports'
+          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+          title='Reports'
+        >
+          <span className='sidebar-link-icon'>📈</span>
+          {!collapsed && <span className='sidebar-link-text'>Reports</span>}
+        </NavLink>
+        {(user?.isAdmin || user?.userGroups?.includes('admins')) && (
           <NavLink
             to='/admin'
             className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}

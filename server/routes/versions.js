@@ -14,8 +14,8 @@ router.get('/current', authenticateToken, async (req, res) => {
   }
 });
 
-// List all versions (admin only). Current one is flagged.
-router.get('/', authenticateToken, requireAdmin, async (req, res) => {
+// List all versions (admin or developer). Current one is flagged.
+router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const versions = await testsDb.prepare('SELECT * FROM versions ORDER BY created_at DESC, id DESC').all();
     res.json(versions);

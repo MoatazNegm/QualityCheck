@@ -20,14 +20,14 @@ async function ensureAdminUser() {
     
     if (!admin) {
       await usersDb.prepare(`
-        INSERT INTO users (username, password_hash, is_admin)
-        VALUES (?, ?, 1)
+        INSERT INTO users (username, password_hash, is_admin, user_groups)
+        VALUES (?, ?, 1, '["admins"]')
       `).run('admin', hashedPassword);
       
       console.log('Default admin user (admin/admin) created');
     } else {
       await usersDb.prepare(`
-        UPDATE users SET password_hash = ? WHERE username = ?
+        UPDATE users SET password_hash = ?, user_groups = '["admins"]' WHERE username = ?
       `).run(hashedPassword, 'admin');
       
       console.log('Default admin user (admin/admin) password reset');
@@ -61,7 +61,7 @@ router.post('/login', async (req, res) => {
     }
     
     const token = jwt.sign(
-      { userId: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended },
+      { userId: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended, userGroups: user.user_groups ? JSON.parse(user.user_groups) : (user.is_admin ? ['admins'] : ['testers']) },
       JWT_SECRET,
       { expiresIn: TOKEN_EXPIRATION }
     );
@@ -72,7 +72,7 @@ router.post('/login', async (req, res) => {
       VALUES (?, ?, datetime('now', '+24 hours'))
     `).run(user.id, token);
 
-    res.json({ token, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended } });
+    res.json({ token, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended, userGroups: user.user_groups ? JSON.parse(user.user_groups) : (user.is_admin ? ['admins'] : ['testers']) } });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -88,15 +88,15 @@ router.get('/verify', (req, res) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    // Coerce is_admin (SQLite INTEGER 0/1) to a real boolean so the client never
-    // receives the number 0, which React would render as the literal text "0".
+    const userGroups = decoded.userGroups || (decoded.isAdmin ? ['admins'] : ['testers']);
     res.json({
       valid: true,
       user: {
         ...decoded,
         id: decoded.userId,
         isAdmin: !!decoded.isAdmin,
-        isSuspended: !!decoded.isSuspended
+        isSuspended: !!decoded.isSuspended,
+        userGroups
       }
     });
   } catch (error) {

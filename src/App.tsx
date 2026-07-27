@@ -5,6 +5,7 @@ import LoginScreen from './components/LoginScreen';
 import Dashboard from './components/Dashboard';
 import TestExecution from './components/TestExecution';
 import AdminPanel from './components/AdminPanel';
+import ReportsView from './components/ReportsView';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import VersionFooter from './components/VersionFooter';
@@ -16,6 +17,8 @@ const AppContent: React.FC = () => {
     return <div>Loading...</div>;
   }
 
+  const isAdmin = user?.isAdmin || user?.userGroups?.includes('admins');
+
   return (
     <div className='app-layout'>
       {user && <Sidebar />}
@@ -25,8 +28,9 @@ const AppContent: React.FC = () => {
           <Routes>
             <Route path="/login" element={!user ? <LoginScreen /> : <Navigate to="/dashboard" />} />
             <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
+            <Route path="/reports" element={user ? <ReportsView /> : <Navigate to="/login" />} />
             <Route path="/test/:testId" element={user ? <TestExecution /> : <Navigate to="/login" />} />
-            <Route path="/admin" element={user?.isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" />} />
+            <Route path="/admin" element={isAdmin ? <AdminPanel /> : <Navigate to="/dashboard" />} />
             <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
           </Routes>
         </div>

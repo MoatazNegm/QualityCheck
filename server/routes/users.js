@@ -7,14 +7,19 @@ const { dataDir } = require('../utils/dataDir');
 const fs = require('fs');
 const path = require('path');
 
-// Get all users (admin only)
-router.get('/', async (req, res) => {
+// Get all users (admin or developer only)
+router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const users = await usersDb.prepare(
-      'SELECT id, username, is_admin, is_suspended FROM users'
+      'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
     ).all();
     
-    res.json(users);
+    const formatted = users.map(u => ({
+      ...u,
+      user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers']))
+    }));
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -87,9 +92,9 @@ router.get('/:id/completed-rounds', authenticateToken, requireAdmin, async (req,
 });
 
 // Create user (admin only)
-router.post('/', async (req, res) => {
+router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { username, password, isAdmin } = req.body;
+    const { username, password, isAdmin, user_groups } = req.body;
     
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
@@ -97,14 +102,20 @@ router.post('/', async (req, res) => {
     
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    let groups = user_groups;
+    if (!groups || !Array.isArray(groups) || groups.length === 0) {
+      groups = isAdmin ? ['admins'] : ['testers'];
+    }
+    const groupsJson = JSON.stringify(groups);
+
     const result = await usersDb.prepare(`
-      INSERT INTO users (username, password_hash, is_admin)
-      VALUES (?, ?, ?)
-    `).run(username, hashedPassword, isAdmin ? 1 : 0);
+      INSERT INTO users (username, password_hash, is_admin, user_groups)
+      VALUES (?, ?, ?, ?)
+    `).run(username, hashedPassword, isAdmin ? 1 : 0, groupsJson);
 
     const newUserId = result.lastInsertRowid;
 
-    // Auto-assign all existing tests to the new non-admin user
+    // Auto-assign all existing tests to new non-admin users (testers or developers)
     if (!isAdmin) {
       const allTests = await testsDb.prepare('SELECT id FROM tests').all();
       const batch = allTests.map(test => ({
@@ -114,7 +125,7 @@ router.post('/', async (req, res) => {
       await testsDb.client.batch(batch, 'write');
     }
 
-    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0 });
+    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0, user_groups: groups });
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Username already exists' });
@@ -184,18 +195,26 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Update user role (admin only)
-router.put('/:id', async (req, res) => {
+// Update user role and groups (admin only)
+router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_admin } = req.body;
+    const { is_admin, user_groups } = req.body;
+    
+    let groups = user_groups;
+    if (!groups || !Array.isArray(groups)) {
+      groups = is_admin ? ['admins'] : ['testers'];
+    }
+    const isAdminCalc = groups.includes('admins') || (is_admin ? 1 : 0);
+    const groupsJson = JSON.stringify(groups);
     
     await usersDb.prepare(
-      'UPDATE users SET is_admin = ? WHERE id = ?'
-    ).run(is_admin ? 1 : 0, id);
+      'UPDATE users SET is_admin = ?, user_groups = ? WHERE id = ?'
+    ).run(isAdminCalc ? 1 : 0, groupsJson, id);
     
-    res.json({ message: 'User updated successfully' });
+    res.json({ message: 'User updated successfully', user_groups: groups, is_admin: isAdminCalc ? 1 : 0 });
   } catch (error) {
+    console.error('Update user error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
