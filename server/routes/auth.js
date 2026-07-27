@@ -11,26 +11,37 @@ const { authenticateToken } = require('../middleware/auth');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
 
-// Ensure the default admin user exists with password 'admin'.
+// Ensure the default admin user exists (creates with 'admin' password if missing, preserves custom password if already exists).
 async function ensureAdminUser() {
   try {
+    const { dbReady } = require('../db/db');
+    if (dbReady) await dbReady;
+
     const admin = await usersDb.prepare("SELECT * FROM users WHERE username = 'admin'").get();
     
-    const hashedPassword = await bcrypt.hash('admin', 10);
-    
     if (!admin) {
+      const hashedPassword = await bcrypt.hash('admin', 10);
       await usersDb.prepare(`
-        INSERT INTO users (username, password_hash, is_admin, user_groups)
-        VALUES (?, ?, 1, '["admins"]')
+        INSERT INTO users (username, password_hash, is_admin, is_suspended, user_groups)
+        VALUES (?, ?, 1, 0, '["admins"]')
       `).run('admin', hashedPassword);
       
       console.log('Default admin user (admin/admin) created');
     } else {
+      let groups = [];
+      try {
+        groups = typeof admin.user_groups === 'string' ? JSON.parse(admin.user_groups) : (admin.user_groups || []);
+      } catch {
+        groups = [];
+      }
+      if (!groups.includes('admins')) {
+        groups.push('admins');
+      }
       await usersDb.prepare(`
-        UPDATE users SET password_hash = ?, user_groups = '["admins"]' WHERE username = ?
-      `).run(hashedPassword, 'admin');
+        UPDATE users SET is_admin = 1, is_suspended = 0, user_groups = ? WHERE username = 'admin'
+      `).run(JSON.stringify(groups));
       
-      console.log('Default admin user (admin/admin) password reset');
+      console.log('Default admin user permissions verified (password preserved)');
     }
   } catch (error) {
     console.error('Failed to ensure admin user:', error);
@@ -46,22 +57,44 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
     
+    const cleanUsername = String(username).trim();
+    
     const user = await usersDb.prepare(
       'SELECT * FROM users WHERE username = ?'
-    ).get(username);
+    ).get(cleanUsername);
     
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    if (user.is_suspended) {
+      return res.status(403).json({ error: 'Account is suspended. Please contact administrator.' });
+    }
     
-    const isValid = await bcrypt.compare(password, user.password_hash);
+    const isValid = await bcrypt.compare(String(password).trim(), user.password_hash);
     
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
+    let groups = [];
+    try {
+      groups = typeof user.user_groups === 'string' ? JSON.parse(user.user_groups) : (user.user_groups || []);
+    } catch {
+      groups = [];
+    }
+    if (groups.length === 0) {
+      groups = user.is_admin ? ['admins'] : ['testers'];
+    }
+
     const token = jwt.sign(
-      { userId: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended, userGroups: user.user_groups ? JSON.parse(user.user_groups) : (user.is_admin ? ['admins'] : ['testers']) },
+      {
+        userId: user.id,
+        username: user.username,
+        isAdmin: !!user.is_admin,
+        isSuspended: !!user.is_suspended,
+        userGroups: groups
+      },
       JWT_SECRET,
       { expiresIn: TOKEN_EXPIRATION }
     );
@@ -72,8 +105,18 @@ router.post('/login', async (req, res) => {
       VALUES (?, ?, datetime('now', '+24 hours'))
     `).run(user.id, token);
 
-    res.json({ token, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin, isSuspended: !!user.is_suspended, userGroups: user.user_groups ? JSON.parse(user.user_groups) : (user.is_admin ? ['admins'] : ['testers']) } });
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        isAdmin: !!user.is_admin,
+        isSuspended: !!user.is_suspended,
+        userGroups: groups
+      }
+    });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
