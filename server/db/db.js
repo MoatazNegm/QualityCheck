@@ -393,6 +393,7 @@ dbReady = runMigrations();
 module.exports = {
   usersDb,
   testsDb,
+  dbReady,
   initDB,
   getRound,
   bumpRound

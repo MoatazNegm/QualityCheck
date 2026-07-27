@@ -51,6 +51,9 @@ async function ensureAdminUser() {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
+    const { dbReady } = require('../db/db');
+    if (dbReady) await dbReady;
+
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -100,10 +103,14 @@ router.post('/login', async (req, res) => {
     );
 
     // Store session
-    await usersDb.prepare(`
-      INSERT INTO user_sessions (user_id, token, expires_at)
-      VALUES (?, ?, datetime('now', '+24 hours'))
-    `).run(user.id, token);
+    try {
+      await usersDb.prepare(`
+        INSERT INTO user_sessions (user_id, token, expires_at)
+        VALUES (?, ?, datetime('now', '+24 hours'))
+      `).run(user.id, token);
+    } catch (sessionErr) {
+      console.warn('Non-fatal session store error:', sessionErr);
+    }
 
     res.json({
       token,
@@ -116,8 +123,8 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Login route error:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
