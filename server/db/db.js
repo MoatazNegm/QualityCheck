@@ -4,24 +4,49 @@ const { dataDir } = require('../utils/dataDir');
 // Initialize database modes.
 // If process.env.TURSO_DATABASE_URL is set, connect to the remote Turso DB.
 // Otherwise, fall back to a local file-based SQLite database.
-const isTurso = !!process.env.TURSO_DATABASE_URL;
+let isTurso = false;
 let client;
 let localDb;
 
-if (isTurso) {
-  const { createClient } = require('@libsql/client/web');
-  const dbUrl = process.env.TURSO_DATABASE_URL;
+const rawTursoUrl = process.env.TURSO_DATABASE_URL;
+
+if (rawTursoUrl) {
+  isTurso = true;
+  let createClient;
+  try {
+    createClient = require('@libsql/client').createClient;
+  } catch (e) {
+    createClient = require('@libsql/client/web').createClient;
+  }
+  // Convert libsql:// to https:// to ensure web/fetch compatibility
+  const dbUrl = rawTursoUrl.startsWith('libsql://')
+    ? rawTursoUrl.replace(/^libsql:\/\//, 'https://')
+    : rawTursoUrl;
+
   console.log(`[Database] Connecting to: Turso Cloud (${dbUrl.substring(0, 15)}...)`);
   client = createClient({
     url: dbUrl,
     authToken: process.env.TURSO_AUTH_TOKEN
   });
 } else {
-  const Database = require('better-sqlite3');
-  const dbPath = path.join(dataDir, 'qualitycheck.db');
-  console.log(`[Database] Connecting to: Local File SQLite (${dbPath})`);
-  localDb = new Database(dbPath, { filename: true });
-  localDb.pragma('journal_mode = DELETE');
+  try {
+    const Database = require('better-sqlite3');
+    const dbPath = path.join(dataDir, 'qualitycheck.db');
+    console.log(`[Database] Connecting to: Local File SQLite (${dbPath})`);
+    localDb = new Database(dbPath, { filename: true });
+    localDb.pragma('journal_mode = DELETE');
+  } catch (err) {
+    console.warn('[Database] Native better-sqlite3 unavailable, falling back to @libsql/client file driver:', err.message);
+    try {
+      const { createClient } = require('@libsql/client');
+      const dbPath = path.join(dataDir, 'qualitycheck.db');
+      client = createClient({ url: `file:${dbPath}` });
+      isTurso = true;
+      console.log(`[Database] Connected via @libsql/client file driver (${dbPath})`);
+    } catch (fallbackErr) {
+      console.error('[Database] Failed to initialize SQLite drivers:', fallbackErr);
+    }
+  }
 }
 
 // A Promise to track when database initialization and migrations are completed.
