@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { testsDb } = require('../db/db');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 
 // Returns the currently active version (the one users should run tests for).
 // Returns { version: <row> | null }.

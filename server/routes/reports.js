@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { testsDb, usersDb } = require('../db/db');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireReportAccess } = require('../middleware/auth');
 
 // Get detailed test results for a user
 router.get('/test/:testId/user/:userId', async (req, res) => {
