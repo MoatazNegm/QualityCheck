@@ -153,13 +153,23 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
     ).all(...userIds, start, end, ...versionIds);
     const totals = totalsRow[0];
 
-    const assignedTests = await testsDb.prepare(
-      `SELECT t.id, t.name
+    const rawAssignedTests = await testsDb.prepare(
+      `SELECT DISTINCT t.id, t.name
        FROM tests t
        INNER JOIN test_assignments ta ON ta.test_id = t.id
        WHERE ta.user_id IN (${placeholders})
-       ORDER BY t.id`
+       ORDER BY t.name, t.id`
     ).all(...userIds);
+
+    const nameToTestIdsMap = {};
+    const uniqueTests = [];
+    for (const t of rawAssignedTests) {
+      if (!nameToTestIdsMap[t.name]) {
+        nameToTestIdsMap[t.name] = [];
+        uniqueTests.push(t);
+      }
+      nameToTestIdsMap[t.name].push(t.id);
+    }
 
     const testSubMapRows = await testsDb.prepare(
       `SELECT test_id, COUNT(*) as submissions
@@ -169,11 +179,13 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
     ).all(...userIds, start, end, ...versionIds);
     const testSubMap = Object.fromEntries(testSubMapRows.map(r => [r.test_id, r.submissions]));
 
-    // Get per-user cycle count from user_rounds
-    const userRoundsRows = await testsDb.prepare(
-      `SELECT user_id, round_no FROM user_rounds WHERE user_id IN (${placeholders})`
-    ).all(...userIds);
-    const userRoundsMap = Object.fromEntries(userRoundsRows.map(r => [r.user_id, r.round_no]));
+    const roundsMapRows = await testsDb.prepare(
+      `SELECT test_id, COUNT(DISTINCT user_id || '-' || round_id) as rounds
+       FROM test_submissions s
+       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+       GROUP BY test_id`
+    ).all(...userIds, start, end, ...versionIds);
+    const roundsMap = Object.fromEntries(roundsMapRows.map(r => [r.test_id, r.rounds]));
 
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
@@ -222,30 +234,53 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
       testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
     }
 
-    const fullyPassedTests = new Set();
-    for (const test of assignedTests) {
-      const stepsCountRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?').get(test.id);
-      const stepsCount = stepsCountRow ? stepsCountRow.c : 0;
-      if (stepsCount === 0) continue;
-      
-      const passedStepsRow = await testsDb.prepare(
-        `SELECT COUNT(*) as c FROM test_results tr WHERE tr.user_id IN (${placeholders}) AND tr.test_id = ? AND tr.result = ? ${versionFilterTr}`
-      ).all(...userIds, test.id, 'pass', ...versionIds);
-      const passedSteps = passedStepsRow[0] ? passedStepsRow[0].c : 0;
-      
-      const hasActivity = (testSubMap[test.id] || 0) > 0;
-      if (passedSteps >= stepsCount && hasActivity) {
-        fullyPassedTests.add(test.id);
-      }
+    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps GROUP BY test_id').all();
+    const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
+
+    const passedPerUserRows = await testsDb.prepare(
+      `SELECT tr.user_id, tr.test_id, COUNT(*) as c 
+       FROM test_results tr 
+       WHERE tr.user_id IN (${placeholders}) AND tr.result = 'pass' ${versionFilterTr} 
+       GROUP BY tr.user_id, tr.test_id`
+    ).all(...userIds, ...versionIds);
+
+    const userPassedByTest = {};
+    for (const r of passedPerUserRows) {
+      if (!userPassedByTest[r.test_id]) userPassedByTest[r.test_id] = {};
+      userPassedByTest[r.test_id][r.user_id] = r.c;
     }
 
-    const tests = assignedTests.map(test => {
-      const stats = testLevelStats[test.id] || { submissions: 0, passes: 0, fails: 0 };
-      const totalSubmissions = testSubMap[test.id] || 0;
-      const failedSubs = failedSubmissionsByTest[test.id] || [];
+    const tests = uniqueTests.map(uniqueTest => {
+      const testIds = nameToTestIdsMap[uniqueTest.name] || [uniqueTest.id];
+      
+      let passes = 0;
+      let fails = 0;
+      let totalSubmissions = 0;
+      let rounds = 0;
+      let fullyPassed = false;
+      const combinedFailedSubs = [];
+
+      for (const tid of testIds) {
+        const stats = testLevelStats[tid] || { submissions: 0, passes: 0, fails: 0 };
+        passes += stats.passes;
+        fails += stats.fails;
+        totalSubmissions += (testSubMap[tid] || 0);
+        rounds += (roundsMap[tid] || 0);
+        if (failedSubmissionsByTest[tid]) {
+          combinedFailedSubs.push(...failedSubmissionsByTest[tid]);
+        }
+
+        const stepsCount = stepCountsMap[tid] || 0;
+        if (stepsCount > 0) {
+          const userPassedMap = userPassedByTest[tid] || {};
+          const hasActivity = (testSubMap[tid] || 0) > 0;
+          const allPassed = hasActivity && userIds.every(uid => (userPassedMap[uid] || 0) >= stepsCount);
+          if (allPassed) fullyPassed = true;
+        }
+      }
 
       const stepsMap = {};
-      for (const sub of failedSubs) {
+      for (const sub of combinedFailedSubs) {
         if (!stepsMap[sub.stepId]) {
           stepsMap[sub.stepId] = {
             stepId: sub.stepId,
@@ -270,14 +305,14 @@ router.get('/user-report', authenticateToken, requireAdmin, async (req, res) => 
       const steps = Object.values(stepsMap);
 
       return {
-        testId: test.id,
-        testName: test.name,
+        testId: uniqueTest.id,
+        testName: uniqueTest.name,
         totalSubmissions,
-        rounds: userRoundsMap[userIds[0]] || 0,
-        passes: stats.passes,
-        fails: stats.fails,
+        rounds,
+        passes,
+        fails,
         steps,
-        fullyPassed: fullyPassedTests.has(test.id)
+        fullyPassed
       };
     });
 
