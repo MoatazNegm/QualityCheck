@@ -120,6 +120,11 @@ const ReportsView: React.FC = () => {
   const [pointsReportData, setPointsReportData] = useState<any>(null);
   const [pointsReportError, setPointsReportError] = useState('');
 
+  // --- User Progress Drill-Down State (Points Report) ---
+  const [expandedPointsUser, setExpandedPointsUser] = useState<number | null>(null);
+  const [userProgressCache, setUserProgressCache] = useState<Record<number, any>>({});
+  const [userProgressLoading, setUserProgressLoading] = useState<number | null>(null);
+
   const getDefaultReportDates = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
     const now = new Date();
     const start = new Date();
@@ -448,6 +453,40 @@ const ReportsView: React.FC = () => {
       setPointsReportError('Network error');
     } finally {
       setPointsReportLoading(false);
+    }
+  };
+
+  // Fetch per-user test progress for drill-down in Points Report
+  const fetchUserProgress = async (userId: number) => {
+    if (userProgressCache[userId]) {
+      // Already cached — just toggle expand
+      setExpandedPointsUser(prev => prev === userId ? null : userId);
+      return;
+    }
+    setUserProgressLoading(userId);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/user-progress/${userId}`, window.location.origin);
+      url.searchParams.set('startDate', pointsReportStartDate);
+      url.searchParams.set('endDate', pointsReportEndDate);
+      if (pointsReportVersionIds.length > 0) url.searchParams.set('versionIds', pointsReportVersionIds.join(','));
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setUserProgressCache(prev => ({ ...prev, [userId]: data }));
+        setExpandedPointsUser(userId);
+      }
+    } catch (err) {
+      console.error('User progress fetch failed:', err);
+    } finally {
+      setUserProgressLoading(null);
+    }
+  };
+
+  const togglePointsUserExpand = (userId: number) => {
+    if (expandedPointsUser === userId) {
+      setExpandedPointsUser(null);
+    } else {
+      fetchUserProgress(userId);
     }
   };
 
@@ -1502,16 +1541,126 @@ const ReportsView: React.FC = () => {
                       {isFullAccess && <th>User</th>}
                       <th>Points Earned</th>
                       <th>Steps Executed</th>
+                      {isFullAccess && <th></th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {pointsReportData.users.map((u: any) => (
-                      <tr key={u.userId}>
-                        {isFullAccess && <td>{u.userName}</td>}
-                        <td><strong>{u.pointsEarned}</strong> pts</td>
-                        <td>{u.steps} steps</td>
-                      </tr>
-                    ))}
+                    {pointsReportData.users.map((u: any) => {
+                      const isExpanded = expandedPointsUser === u.userId;
+                      const isLoadingThis = userProgressLoading === u.userId;
+                      const progress = userProgressCache[u.userId];
+                      return (
+                        <React.Fragment key={u.userId}>
+                          <tr
+                            style={isFullAccess ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
+                            className={isExpanded ? 'report-step-row-selected' : ''}
+                            onClick={isFullAccess ? () => togglePointsUserExpand(u.userId) : undefined}
+                          >
+                            {isFullAccess && (
+                              <td style={{ fontWeight: 600 }}>
+                                {isLoadingThis ? '⏳ ' : (isExpanded ? '▲ ' : '▼ ')}{u.userName}
+                              </td>
+                            )}
+                            <td><strong>{u.pointsEarned}</strong> pts</td>
+                            <td>{u.steps} steps</td>
+                            {isFullAccess && (
+                              <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                {isExpanded ? 'Collapse' : 'Details'}
+                              </td>
+                            )}
+                          </tr>
+                          {isFullAccess && isExpanded && progress && (
+                            <tr>
+                              <td colSpan={4} style={{ padding: 0, background: 'transparent' }}>
+                                <div style={{
+                                  background: 'var(--card-bg, #1e2433)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: '8px',
+                                  margin: '0.25rem 0.5rem 0.75rem',
+                                  padding: '1rem 1.25rem'
+                                }}>
+                                  {/* Active Test Banner */}
+                                  {progress.activeTestId && (
+                                    <div style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.6rem',
+                                      background: 'rgba(99,179,237,0.12)',
+                                      border: '1px solid rgba(99,179,237,0.35)',
+                                      borderRadius: '6px',
+                                      padding: '0.6rem 1rem',
+                                      marginBottom: '1rem',
+                                      fontSize: '0.92rem'
+                                    }}>
+                                      <span style={{ fontSize: '1.1rem' }}>🔄</span>
+                                      <span>
+                                        <strong>Currently working on:</strong>{' '}
+                                        <span style={{ color: 'var(--accent, #63b3ed)' }}>{progress.activeTestName}</span>
+                                        {progress.currentStepNumber != null && (
+                                          <span style={{ color: 'var(--text-muted)' }}>
+                                            {' '}— Step {progress.currentStepNumber}: {progress.currentStepDescription}
+                                          </span>
+                                        )}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Test Breakdown Table */}
+                                  <table className="report-steps-table" style={{ width: '100%' }}>
+                                    <thead>
+                                      <tr>
+                                        <th>Test</th>
+                                        <th>Status</th>
+                                        <th>Rounds</th>
+                                        <th>Points</th>
+                                        <th>Failed Steps</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(progress.tests || []).map((t: any) => {
+                                        const statusBadge = (() => {
+                                          switch (t.status) {
+                                            case 'fully_passed':
+                                              return <span className="status-badge status-pass">✅ Fully Passed</span>;
+                                            case 'failed':
+                                              return <span className="status-badge status-fail">⚠️ Has Failures</span>;
+                                            case 'in_progress':
+                                              return <span className="status-badge" style={{ background: 'rgba(99,179,237,0.2)', color: '#63b3ed', borderColor: '#63b3ed' }}>🔄 In Progress</span>;
+                                            default:
+                                              return <span style={{ color: 'var(--text-muted)' }}>— Not Started</span>;
+                                          }
+                                        })();
+
+                                        const failedStepsSummary = t.failedSteps && t.failedSteps.length > 0
+                                          ? t.failedSteps.map((fs: any) =>
+                                              `Step ${fs.stepNumber}${fs.roundId != null ? ` (R${fs.roundId})` : ''}`
+                                            ).join(', ')
+                                          : '—';
+
+                                        return (
+                                          <tr
+                                            key={t.testId}
+                                            className={t.status === 'failed' ? 'report-step-row-failed' : ''}
+                                          >
+                                            <td style={{ fontWeight: 500 }}>{t.testName}</td>
+                                            <td>{statusBadge}</td>
+                                            <td>{t.rounds > 0 ? t.rounds : '—'}</td>
+                                            <td><strong>{t.pointsEarned}</strong> pts</td>
+                                            <td style={{ fontSize: '0.85rem', color: t.failedSteps && t.failedSteps.length > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>
+                                              {failedStepsSummary}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

@@ -725,4 +725,169 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
   }
 });
 
+// Get per-user test progress detail (admin/developer only)
+// Returns: which tests the user fully passed, which had failures, which is active now, and current step
+router.get('/user-progress/:userId', authenticateToken, requireReportAccess, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (isNaN(userId)) return res.status(400).json({ error: 'Invalid userId' });
+
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    const versionIdsRaw = req.query.versionIds;
+    const versionIds = versionIdsRaw
+      ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+      : [];
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    // Fetch user info
+    const userRow = await usersDb.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
+    if (!userRow) return res.status(404).json({ error: 'User not found' });
+
+    // Fetch user's assigned tests ordered by test id (the loop order)
+    const assignedTests = await usersDb.prepare(
+      `SELECT DISTINCT t.id, t.name FROM tests t
+       INNER JOIN test_assignments ta ON ta.test_id = t.id
+       WHERE ta.user_id = ?
+       ORDER BY t.id`
+    ).all(userId);
+
+    // Fetch user's active test from loop state
+    const loopState = await usersDb.prepare(
+      'SELECT active_test_id FROM user_loop_state WHERE user_id = ?'
+    ).get(userId);
+    const activeTestId = loopState ? loopState.active_test_id : null;
+
+    // Fetch current round number for the user
+    const roundRow = await usersDb.prepare(
+      'SELECT round_no FROM user_rounds WHERE user_id = ?'
+    ).get(userId);
+    const currentRound = roundRow ? roundRow.round_no : 0;
+
+    const versionFilter = versionIds.length > 0
+      ? ' AND version_id IN (' + versionIds.map(() => '?').join(',') + ') '
+      : ' ';
+
+    // Batch: get points earned per test for this user in the date range
+    const pointsRows = await usersDb.prepare(
+      `SELECT test_id, COALESCE(SUM(points), 0) as pointsEarned
+       FROM points_log
+       WHERE user_id = ? AND earned_at >= ? AND earned_at <= ? ${versionFilter}
+       GROUP BY test_id`
+    ).all(userId, start, end, ...versionIds);
+    const pointsByTest = Object.fromEntries(pointsRows.map(r => [r.test_id, r.pointsEarned]));
+
+    // Batch: get submission stats per test (rounds, pass count, fail count) in date range
+    const subStatsRows = await usersDb.prepare(
+      `SELECT test_id,
+              COUNT(DISTINCT round_id) as rounds,
+              SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) as passes,
+              SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) as fails
+       FROM test_submissions
+       WHERE user_id = ? AND executed_at >= ? AND executed_at <= ? ${versionFilter}
+       GROUP BY test_id`
+    ).all(userId, start, end, ...versionIds);
+    const subStatsByTest = Object.fromEntries(subStatsRows.map(r => [r.test_id, r]));
+
+    // Batch: get failed submissions per test (step number, round) for the user
+    const failedSubRows = await usersDb.prepare(
+      `SELECT s.test_id, ts.step_number, ts.description, s.round_id
+       FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.user_id = ? AND s.result = 'fail'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilter}
+       ORDER BY s.test_id, ts.step_number, s.round_id`
+    ).all(userId, start, end, ...versionIds);
+
+    // Group failed steps by test, collapsing duplicate step+round pairs
+    const failedByTest = {};
+    for (const row of failedSubRows) {
+      if (!failedByTest[row.test_id]) failedByTest[row.test_id] = {};
+      const key = `${row.step_number}-${row.round_id}`;
+      if (!failedByTest[row.test_id][key]) {
+        failedByTest[row.test_id][key] = {
+          stepNumber: row.step_number,
+          description: row.description,
+          roundId: row.round_id,
+          fails: 0
+        };
+      }
+      failedByTest[row.test_id][key].fails += 1;
+    }
+
+    // Determine active test step: first step not yet submitted in the current round
+    let activeTestName = null;
+    let currentStepNumber = null;
+    let currentStepDescription = null;
+
+    if (activeTestId) {
+      const activeTest = assignedTests.find(t => t.id === activeTestId);
+      if (activeTest) {
+        activeTestName = activeTest.name;
+        // Get all steps for the active test
+        const allSteps = await usersDb.prepare(
+          'SELECT id, step_number, description FROM test_steps WHERE test_id = ? ORDER BY step_number'
+        ).all(activeTestId);
+        // Get step IDs already submitted in the current round
+        const doneRows = await usersDb.prepare(
+          'SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ?'
+        ).all(userId, activeTestId, currentRound);
+        const doneStepIds = new Set(doneRows.map(r => r.step_id));
+        // First step not done
+        const nextStep = allSteps.find(s => !doneStepIds.has(s.id));
+        if (nextStep) {
+          currentStepNumber = nextStep.step_number;
+          currentStepDescription = nextStep.description;
+        }
+      }
+    }
+
+    // Build per-test result array
+    const tests = assignedTests.map(test => {
+      const stats = subStatsByTest[test.id] || { rounds: 0, passes: 0, fails: 0 };
+      const pointsEarned = pointsByTest[test.id] || 0;
+      const failedSteps = Object.values(failedByTest[test.id] || {});
+
+      let status;
+      if (test.id === activeTestId) {
+        status = 'in_progress';
+      } else if (stats.rounds === 0) {
+        status = 'not_started';
+      } else if (stats.fails === 0) {
+        status = 'fully_passed';
+      } else {
+        status = 'failed';
+      }
+
+      return {
+        testId: test.id,
+        testName: test.name,
+        rounds: stats.rounds,
+        pointsEarned,
+        status,
+        failedSteps
+      };
+    });
+
+    res.json({
+      userId,
+      userName: userRow.username,
+      activeTestId,
+      activeTestName,
+      currentStepNumber,
+      currentStepDescription,
+      tests
+    });
+  } catch (error) {
+    console.error('User progress report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
