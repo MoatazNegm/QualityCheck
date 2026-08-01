@@ -134,14 +134,28 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
 
     // The unique loop-round this submission belongs to (per user cycle).
     const roundNo = await getRound(userId);
+    const nowIso = new Date().toISOString();
+
+    // Query preceding failed step submission before inserting the new submission
+    const prevFailed = await testsDb.prepare(`
+      SELECT ts.test_id, ts.step_id, ts.executed_at,
+             t.name AS test_name,
+             st.step_number, st.description AS step_description
+      FROM test_submissions ts
+      JOIN tests t ON ts.test_id = t.id
+      JOIN test_steps st ON ts.step_id = st.id
+      WHERE ts.user_id = ? AND ts.result = 'fail'
+      ORDER BY ts.id DESC
+      LIMIT 1
+    `).get(userId);
 
     // Append-only audit ledger: every submission gets its own row with a unique
     // id, so a re-failure of the same step in a later round is a distinct,
     // traceable record (result + comment + uploaded file + round_id).
     const subId = await testsDb.prepare(`
-      INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId);
+      INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, nowIso);
 
     // Upsert: keep exactly ONE result row per (user, test, step) so the loop/next-step
     // logic and the per-step current view work. Capture the previously saved file so
@@ -157,9 +171,9 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     ).run(userId, testId, stepId);
 
     const resultId = await testsDb.prepare(`
-      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo);
+      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo, nowIso);
 
     // Remove the now-orphaned previous upload for this step (it can no longer be
     // referenced, so leaving it would only create stale/confusing duplicates).
@@ -174,12 +188,47 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // across loop iterations (and for both pass and fail results). The loop's
     // current progress is tracked separately via the upserted test_results row.
     const stepRow = await testsDb.prepare(
-      'SELECT COALESCE(points, value, 0) AS pts FROM test_steps WHERE id = ?'
+      'SELECT COALESCE(points, value, 0) AS pts, step_number, description FROM test_steps WHERE id = ?'
     ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
+
+    let pointsAwarded = stepPoints;
+    let warningCreated = null;
+
+    // Cross-test consecutive failure rule check:
+    // If the user fails a step and their preceding failed step was in another test
+    // within the configured time threshold (default 3 minutes = 180 seconds),
+    // 0 points are counted and a warning message is stored.
+    const settingRow = await testsDb.prepare("SELECT value FROM settings WHERE key = 'consecutive_failure_threshold_seconds'").get();
+    const thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
+
+    if (result === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
+      const prevTimeMs = new Date(prevFailed.executed_at).getTime();
+      const diffSec = (Date.now() - prevTimeMs) / 1000;
+      if (diffSec >= 0 && diffSec <= thresholdSec) {
+        pointsAwarded = 0;
+
+        const currentTestRow = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+        const curTestName = currentTestRow ? currentTestRow.name : `Test ${testId}`;
+        const curStepNum = stepRow ? stepRow.step_number : stepId;
+        const curStepDesc = stepRow ? stepRow.description : '';
+
+        const prevTestName = prevFailed.test_name;
+        const prevStepNum = prevFailed.step_number;
+        const prevStepDesc = prevFailed.step_description;
+
+        warningCreated = `The points for Step ${curStepNum} (${curStepDesc}) in test '${curTestName}' are not counted due to the user seems he depended on the preceding Step ${prevStepNum} (${prevStepDesc}) in test '${prevTestName}'.`;
+
+        await testsDb.prepare(`
+          INSERT INTO user_warnings (user_id, message, created_round, created_at)
+          VALUES (?, ?, ?, ?)
+        `).run(userId, warningCreated, roundNo, nowIso);
+      }
+    }
+
     await testsDb.prepare(
-      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(userId, testId, stepId, stepPoints, currentVersionId, roundNo);
+      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(userId, testId, stepId, pointsAwarded, currentVersionId, roundNo, nowIso);
 
     // If the current version differs from the version this test was started under,
     // auto-end the test and advance to the next one (new round for that test).
@@ -199,9 +248,27 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
       }
     }
 
-    res.json({ id: resultId.lastInsertRowid, submissionId: subId.lastInsertRowid, roundId: roundNo, message: 'Result submitted successfully', autoEnded });
+    res.json({ id: resultId.lastInsertRowid, submissionId: subId.lastInsertRowid, roundId: roundNo, message: 'Result submitted successfully', autoEnded, warning: warningCreated });
   } catch (error) {
     console.error('Submit result error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get active rule warnings for the logged-in user (visible for 2 rounds)
+router.get('/warnings', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const currentRound = await getRound(userId);
+    const warnings = await testsDb.prepare(`
+      SELECT id, message, created_round, created_at
+      FROM user_warnings
+      WHERE user_id = ? AND (? - created_round) >= 0 AND (? - created_round) < 2
+      ORDER BY id DESC
+    `).all(userId, currentRound, currentRound);
+    res.json({ warnings });
+  } catch (error) {
+    console.error('Error fetching warnings:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

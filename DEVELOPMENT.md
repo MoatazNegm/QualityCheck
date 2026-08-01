@@ -113,6 +113,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of **fixing User Report multi-user aggregation** (added `DISTINCT` to `assignedTests` query so each assigned test is reported once instead of being duplicated for every selected user, computed test execution rounds via `COUNT(DISTINCT user_id || '-' || round_id)`, and evaluated `fullyPassed` status per user) was **`1.0000093`**.
 - The version at the time of **optimizing User Report multi-user deduplication & performance** (deduplicated assigned tests by unique test name so each test is listed exactly once in the report even if multiple test IDs exist with the same name, and eliminated N+1 database loop queries with 2 batch queries for instant response) was **`1.0000094`**.
 - The version at the time of **fixing report version fetching for tester users** (removed `requireDeveloper` restriction from `GET /api/versions` so tester users can retrieve testing versions in Reports view and generate reports without receiving a 403 Forbidden error) was **`1.0000100`**.
+- The version at the time of **adding configurable cross-test consecutive failure time threshold (default 3 minutes = 180 seconds)** with a new **Settings** tab in the Admin Panel (`GET/PUT /api/settings`, backed by `settings` table, embedded in backups) and descriptive admin guidance explaining how cross-test step failure point penalties and warning logs are evaluated was **`1.0000101`**.
 
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports

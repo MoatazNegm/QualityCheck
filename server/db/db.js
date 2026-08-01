@@ -306,6 +306,20 @@ async function initDB() {
       config_file_path TEXT,
       version_id INTEGER,
       executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS user_warnings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      message TEXT NOT NULL,
+      created_round INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      description TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `.split(';')
    .map(s => s.trim())
@@ -404,6 +418,17 @@ async function runMigrations() {
       await clientWrapper.execute({ sql: 'INSERT OR IGNORE INTO user_rounds (user_id, round_no) SELECT DISTINCT user_id, 0 FROM user_test_rounds' });
       await clientWrapper.execute({ sql: 'DROP TABLE user_test_rounds' });
       console.log('Migration: replaced user_test_rounds with user_rounds');
+    }
+
+    // Seed default consecutive failure threshold setting (180s = 3 minutes) if not present
+    const hasSetting = await clientWrapper.execute({
+      sql: "SELECT 1 FROM settings WHERE key = 'consecutive_failure_threshold_seconds' LIMIT 1"
+    });
+    if (hasSetting.rows.length === 0) {
+      await clientWrapper.execute({
+        sql: "INSERT INTO settings (key, value, description) VALUES ('consecutive_failure_threshold_seconds', '180', 'Consecutive Cross-Test Failure Time Threshold in seconds (default 3 minutes = 180 seconds)')"
+      });
+      console.log('Seeded default consecutive failure threshold setting (180s = 3 minutes)');
     }
 
     console.log('[Database] Schema initialization and migrations completed successfully.');

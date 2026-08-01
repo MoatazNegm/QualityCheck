@@ -75,7 +75,12 @@ const AdminPanel: React.FC = () => {
   const [importSaveError, setImportSaveError] = useState('');
   const [importSaveSuccess, setImportSaveSuccess] = useState('');
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings'>('upload');
+  const [thresholdMinutes, setThresholdMinutes] = useState<string>('3');
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSuccess, setSettingsSuccess] = useState('');
+  const [settingsError, setSettingsError] = useState('');
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -180,6 +185,7 @@ const AdminPanel: React.FC = () => {
     fetchTests();
     fetchUsers();
     fetchVersions();
+    fetchSettings();
     const dates = getDefaultReportDates('last_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
@@ -1169,6 +1175,65 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const fetchSettings = async () => {
+    setSettingsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        const thresh = data['consecutive_failure_threshold_seconds'];
+        if (thresh && thresh.value) {
+          const sec = parseInt(thresh.value, 10);
+          if (!isNaN(sec)) {
+            setThresholdMinutes((sec / 60).toString());
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch settings:', err);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsSaving(true);
+    setSettingsError('');
+    setSettingsSuccess('');
+
+    const min = parseFloat(thresholdMinutes);
+    if (isNaN(min) || min < 0) {
+      setSettingsError('Please enter a valid non-negative number of minutes.');
+      setSettingsSaving(false);
+      return;
+    }
+
+    const sec = Math.round(min * 60);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'consecutive_failure_threshold_seconds',
+          value: sec.toString()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSettingsError(data.error || 'Failed to save settings');
+      } else {
+        setSettingsSuccess(`Threshold successfully updated to ${min} minute(s) (${sec} seconds).`);
+      }
+    } catch (err) {
+      console.error('Save settings error:', err);
+      setSettingsError('Network error while saving settings');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   return (
     <div className="admin-panel">
       <h2>Admin Panel</h2>
@@ -1215,6 +1280,12 @@ const AdminPanel: React.FC = () => {
           onClick={() => setActiveTab('backup')}
         >
           Backup / Restore
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          Settings
         </button>
       </div>
 
@@ -3011,6 +3082,117 @@ const AdminPanel: React.FC = () => {
               {passwordSuccess && <p className="success-msg">{passwordSuccess}</p>}
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'settings' && (
+        <div className="admin-section">
+          <h3>System Settings</h3>
+          <p className="admin-hint">
+            Configure application-wide business rules and time thresholds.
+          </p>
+
+          {settingsLoading ? (
+            <p className="admin-hint">Loading settings...</p>
+          ) : (
+            <div style={{ maxWidth: '780px', margin: '1rem 0' }}>
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>⏱️</span> Consecutive Cross-Test Failure Time Threshold
+                  </h4>
+                  <span
+                    style={{
+                      background: 'rgba(99, 179, 237, 0.15)',
+                      color: 'var(--accent, #63b3ed)',
+                      border: '1px solid rgba(99, 179, 237, 0.3)',
+                      padding: '0.2rem 0.65rem',
+                      borderRadius: '12px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    Default: 3 Minutes
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(235, 130, 60, 0.08)',
+                    borderLeft: '4px solid #ed8936',
+                    borderRadius: '6px',
+                    padding: '1rem 1.1rem',
+                    marginBottom: '1.5rem',
+                    fontSize: '0.92rem',
+                    lineHeight: '1.5'
+                  }}
+                >
+                  <strong style={{ color: '#ed8936', display: 'block', marginBottom: '0.4rem' }}>
+                    💡 What does this setting mean?
+                  </strong>
+                  <p style={{ margin: '0 0 0.5rem 0' }}>
+                    When a tester user is executing tests in sequence:
+                  </p>
+                  <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
+                    <li>
+                      If the user submits a <strong>failed step</strong> in one test, and then fails a step in a <strong>different test</strong> within this time window (e.g. 3 minutes), the system assumes the user relied on or repeated the prior test's failure pattern.
+                    </li>
+                    <li>
+                      <strong>0 Points Awarded:</strong> The points for the second failed step are zeroed out in the points ledger.
+                    </li>
+                    <li>
+                      <strong>Audit Warning Logged:</strong> A warning entry is recorded in the audit log explaining that the cross-test step points were withheld due to rapid consecutive failures.
+                    </li>
+                  </ul>
+                  <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                    <em>Changing this threshold adjusts the time window (in minutes) required between cross-test step failures for points eligibility.</em>
+                  </p>
+                </div>
+
+                <form onSubmit={handleSaveSettings}>
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Time Threshold (Minutes)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        className="user-input"
+                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
+                        value={thresholdMinutes}
+                        onChange={e => setThresholdMinutes(e.target.value)}
+                        required
+                      />
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        minutes (= {Math.round((parseFloat(thresholdMinutes) || 0) * 60)} seconds)
+                      </span>
+                    </div>
+                  </div>
+
+                  {settingsError && <p className="error-msg" style={{ marginBottom: '1rem' }}>{settingsError}</p>}
+                  {settingsSuccess && (
+                    <p className="success-msg" style={{ color: '#48bb78', marginBottom: '1rem', fontWeight: 500 }}>
+                      ✅ {settingsSuccess}
+                    </p>
+                  )}
+
+                  <button type="submit" className="btn" disabled={settingsSaving}>
+                    {settingsSaving ? 'Saving...' : 'Save Settings'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

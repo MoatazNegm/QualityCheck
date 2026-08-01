@@ -30,6 +30,7 @@ const testResultRoutes = require('./routes/test-results');
 const reportRoutes = require('./routes/reports');
 const backupRoutes = require('./routes/backup');
 const versionRoutes = require('./routes/versions');
+const settingsRoutes = require('./routes/settings');
 
 (async () => {
   try {
@@ -46,6 +47,7 @@ app.use('/api/test-results', testResultRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/versions', versionRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

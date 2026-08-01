@@ -57,6 +57,8 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
     const userTestRounds = await testsDb.prepare('SELECT * FROM user_rounds').all();
     const pointsLog = await testsDb.prepare('SELECT * FROM points_log').all();
     const versions = await testsDb.prepare('SELECT * FROM versions').all();
+    const userWarnings = await testsDb.prepare('SELECT * FROM user_warnings').all();
+    const settings = await testsDb.prepare('SELECT * FROM settings').all();
 
     const files = await collectReferencedFiles();
 
@@ -77,6 +79,8 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
       user_rounds: userTestRounds,
       points_log: pointsLog,
       versions,
+      user_warnings: userWarnings,
+      settings,
       files,
     };
 
@@ -110,6 +114,7 @@ async function applyBackup(backup, res) {
     batch.push({ sql: 'DELETE FROM points_log', args: [] });
     batch.push({ sql: 'DELETE FROM user_loop_state', args: [] });
     batch.push({ sql: 'DELETE FROM user_rounds', args: [] });
+    batch.push({ sql: 'DELETE FROM user_warnings', args: [] });
 
     // Tables that reference tests and test_steps (delete these BEFORE deleting parents)
     batch.push({ sql: 'DELETE FROM test_steps', args: [] });
@@ -230,6 +235,22 @@ async function applyBackup(backup, res) {
       batch.push({
         sql: 'INSERT INTO points_log (id, user_id, test_id, step_id, points, version_id, round_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         args: [pl.id, pl.user_id, pl.test_id, pl.step_id, pl.points, pl.version_id ?? null, pl.round_id ?? null, pl.earned_at]
+      });
+    }
+
+    // Insert User Warnings
+    for (const uw of backup.user_warnings || []) {
+      batch.push({
+        sql: 'INSERT INTO user_warnings (id, user_id, message, created_round, created_at) VALUES (?, ?, ?, ?, ?)',
+        args: [uw.id, uw.user_id, uw.message, uw.created_round, uw.created_at]
+      });
+    }
+
+    // Insert Settings
+    for (const s of backup.settings || []) {
+      batch.push({
+        sql: 'INSERT OR REPLACE INTO settings (key, value, description, updated_at) VALUES (?, ?, ?, ?)',
+        args: [s.key, s.value, s.description || null, s.updated_at || null]
       });
     }
 

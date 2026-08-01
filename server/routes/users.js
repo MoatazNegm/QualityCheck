@@ -171,6 +171,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       { sql: 'DELETE FROM test_assignments WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM user_loop_state WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM user_rounds WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM user_warnings WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
     ], 'write');
 

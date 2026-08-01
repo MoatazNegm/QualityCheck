@@ -12,6 +12,13 @@ interface Test {
   totalPoints: number;
 }
 
+interface UserWarning {
+  id: number;
+  message: string;
+  created_round: number;
+  created_at: string;
+}
+
 const Dashboard: React.FC = () => {
   const { token, user } = useAuth();
   const navigate = useNavigate();
@@ -19,6 +26,7 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
   const [currentVersionId, setCurrentVersionId] = useState<number | null>(null);
+  const [warnings, setWarnings] = useState<UserWarning[]>([]);
 
   const API_BASE = '';
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -26,6 +34,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     fetchTests();
     fetchSummary();
+    fetchWarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -83,6 +92,18 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const fetchWarnings = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/test-results/warnings`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setWarnings(data.warnings || []);
+      }
+    } catch (error) {
+      console.error('Error fetching warnings:', error);
+    }
+  };
+
   if (loading) return <div>Loading tests...</div>;
 
   if (tests.length === 0) {
@@ -114,6 +135,21 @@ const Dashboard: React.FC = () => {
       <p className='loop-hint'>
         Complete each test in order. Only the current test is unlocked; finish it to unlock the next. The cycle repeats endlessly.
       </p>
+
+      {warnings.length > 0 && (
+        <div className='user-warnings-area'>
+          {warnings.map(w => (
+            <div key={w.id} className='warning-banner'>
+              <span className='warning-icon'>⚠️</span>
+              <div className='warning-content'>
+                <strong>Points Not Counted Notice</strong>
+                <p>{w.message}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className='points-summary'>
         Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong>
       </div>

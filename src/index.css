@@ -2212,3 +2212,46 @@ body {
     width: 3.5rem;
   }
 }
+
+/* User Rule Warnings Banner Area */
+.user-warnings-area {
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.warning-banner {
+  background-color: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-left: 4px solid var(--color-danger);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  color: #fca5a5;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.warning-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.warning-content strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ef4444;
+  margin-bottom: 0.25rem;
+}
+
+.warning-content p {
+  margin: 0;
+  color: #fef2f2;
+  font-size: 0.9rem;
+}
+

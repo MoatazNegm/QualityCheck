@@ -13,6 +13,13 @@ interface TestStep {
   points: number;
 }
 
+interface UserWarning {
+  id: number;
+  message: string;
+  created_round: number;
+  created_at: string;
+}
+
 const API_BASE = '';
 
 const TestExecution: React.FC = () => {
@@ -31,6 +38,7 @@ const TestExecution: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
+  const [warnings, setWarnings] = useState<UserWarning[]>([]);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -48,6 +56,18 @@ const TestExecution: React.FC = () => {
       }
     } catch (error) {
       console.error('Error fetching points summary:', error);
+    }
+  };
+
+  const fetchWarnings = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/test-results/warnings`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setWarnings(data.warnings || []);
+      }
+    } catch (error) {
+      console.error('Error fetching warnings:', error);
     }
   };
 
@@ -90,6 +110,7 @@ const TestExecution: React.FC = () => {
         setStepIndex(firstUnattempted);
       }
       fetchSummary();
+      fetchWarnings();
     } finally {
       setLoading(false);
     }
@@ -149,6 +170,7 @@ const TestExecution: React.FC = () => {
         setDoneStepIds(newDone);
         resetForm();
         await fetchSummary();
+        await fetchWarnings();
         await refreshUser();
 
         if (data.autoEnded) {
@@ -194,6 +216,7 @@ const TestExecution: React.FC = () => {
         setStepIndex(stepIndex - 1);
         resetForm();
         await fetchSummary();
+        await fetchWarnings();
       } else {
         alert('Failed to revert step result. Please try again.');
       }
@@ -235,6 +258,20 @@ const TestExecution: React.FC = () => {
 
   return (
     <div className='test-execution'>
+      {warnings.length > 0 && (
+        <div className='user-warnings-area'>
+          {warnings.map(w => (
+            <div key={w.id} className='warning-banner'>
+              <span className='warning-icon'>⚠️</span>
+              <div className='warning-content'>
+                <strong>Points Not Counted Notice</strong>
+                <p>{w.message}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className='step-header'>
         <h2>{testName}</h2>
         <span className='step-counter'>Step {currentStep.step_number} of {steps.length}</span>
