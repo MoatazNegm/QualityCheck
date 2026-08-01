@@ -431,6 +431,17 @@ async function runMigrations() {
       console.log('Seeded default consecutive failure threshold setting (180s = 3 minutes)');
     }
 
+    // Seed default maximum test rounds per month setting (8 rounds) if not present
+    const hasMaxRoundsSetting = await clientWrapper.execute({
+      sql: "SELECT 1 FROM settings WHERE key = 'max_monthly_test_rounds' LIMIT 1"
+    });
+    if (hasMaxRoundsSetting.rows.length === 0) {
+      await clientWrapper.execute({
+        sql: "INSERT INTO settings (key, value, description) VALUES ('max_monthly_test_rounds', '8', 'Maximum test rounds per month allowed per test per user (default 8 rounds)')"
+      });
+      console.log('Seeded default max_monthly_test_rounds setting (8 rounds)');
+    }
+
     console.log('[Database] Schema initialization and migrations completed successfully.');
   } catch (err) {
     console.error('Database migration/init failed:', err);

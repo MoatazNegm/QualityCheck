@@ -22,40 +22,79 @@ async function getCurrentVersionId() {
   return row ? row.id : null;
 }
 
-// Returns the currently active (unlocked) test id for a user, creating the
-// default (first assigned test) row on first access. Always validates that
-// the active test is still assigned to the user; if not, resets to the first
-// assigned test so the dashboard never ends up fully locked.
+// Get maximum allowed monthly test rounds setting (default 8)
+async function getMaxMonthlyTestRounds() {
+  const row = await testsDb.prepare("SELECT value FROM settings WHERE key = 'max_monthly_test_rounds'").get();
+  return row ? (parseInt(row.value, 10) || 8) : 8;
+}
+
+// Count distinct rounds for a specific test and user in the current calendar month
+async function getTestMonthlyRounds(userId, testId) {
+  const distinctRow = await testsDb.prepare(`
+    SELECT COUNT(DISTINCT r_id) AS c FROM (
+      SELECT round_id AS r_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+      UNION
+      SELECT round_id AS r_id FROM test_results WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+    )
+  `).get(userId, testId, userId, testId);
+
+  return distinctRow ? (distinctRow.c || 0) : 0;
+}
+
+// Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests.
 async function getActiveTestId(userId) {
   const assigned = await getAssignedTestsOrdered(userId);
   if (assigned.length === 0) return null;
+
+  const maxRounds = await getMaxMonthlyTestRounds();
+  
+  // Find assigned tests that have NOT reached their monthly round limit
+  const availableAssigned = [];
+  for (const t of assigned) {
+    const rounds = await getTestMonthlyRounds(userId, t.id);
+    if (rounds < maxRounds) {
+      availableAssigned.push(t);
+    }
+  }
+
+  // If ALL assigned tests have reached their monthly limit, return null (all tests locked)
+  if (availableAssigned.length === 0) {
+    return null;
+  }
 
   const currentVersionId = await getCurrentVersionId();
   const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
 
   if (row) {
+    const isValidAndAvailable = availableAssigned.some(t => t.id === row.active_test_id);
+    
+    if (!isValidAndAvailable) {
+      const oldIdx = assigned.findIndex(t => t.id === row.active_test_id);
+      let candidate = availableAssigned[0];
+      if (oldIdx !== -1) {
+        const after = availableAssigned.find(t => t.id > row.active_test_id);
+        if (after) candidate = after;
+      }
+      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+        .run(userId, candidate.id, currentVersionId);
+      return candidate.id;
+    }
+
     if (row.version_id && currentVersionId && row.version_id !== currentVersionId) {
-      const idx = assigned.findIndex(t => t.id === row.active_test_id);
-      const nextTest = assigned[(idx + 1) % assigned.length];
+      const idx = availableAssigned.findIndex(t => t.id === row.active_test_id);
+      const nextTest = availableAssigned[(idx + 1) % availableAssigned.length];
       await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
         .run(userId, nextTest.id, currentVersionId);
       return nextTest.id;
     }
 
-    const isValid = assigned.some(t => t.id === row.active_test_id);
-    if (!isValid) {
-      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-        .run(userId, assigned[0].id, currentVersionId);
-      return assigned[0].id;
-    }
-
     return row.active_test_id;
   }
 
-  const firstId = assigned[0].id;
+  const firstCandidate = availableAssigned[0];
   await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-    .run(userId, firstId, currentVersionId);
-  return firstId;
+    .run(userId, firstCandidate.id, currentVersionId);
+  return firstCandidate.id;
 }
 
 // Whether every step of a test has a recorded result for the user in the given round
@@ -93,18 +132,32 @@ router.get('/', authenticateToken, async (req, res) => {
         locked: false,
         isActive: false,
         completed: false,
-        totalPoints: await getTestTotalPoints(t.id)
+        totalPoints: await getTestTotalPoints(t.id),
+        monthlyRounds: 0,
+        maxMonthlyRounds: 8,
+        isMonthlyLocked: false
       })));
     } else {
+      const maxRounds = await getMaxMonthlyTestRounds();
       const assigned = await getAssignedTestsOrdered(req.user.userId);
       const activeTestId = await getActiveTestId(req.user.userId);
-      tests = await Promise.all(assigned.map(async t => ({
-        ...t,
-        locked: t.id !== activeTestId,
-        isActive: t.id === activeTestId,
-        completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId)),
-        totalPoints: await getTestTotalPoints(t.id)
-      })));
+
+      tests = await Promise.all(assigned.map(async t => {
+        const mRounds = await getTestMonthlyRounds(req.user.userId, t.id);
+        const isMonthlyLocked = mRounds >= maxRounds;
+        const isLocked = isMonthlyLocked || (t.id !== activeTestId);
+        const isActive = !isMonthlyLocked && (t.id === activeTestId);
+        return {
+          ...t,
+          locked: isLocked,
+          isActive: isActive,
+          completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId)),
+          totalPoints: await getTestTotalPoints(t.id),
+          monthlyRounds: mRounds,
+          maxMonthlyRounds: maxRounds,
+          isMonthlyLocked: isMonthlyLocked
+        };
+      }));
     }
     res.json(tests);
   } catch (error) {
@@ -140,14 +193,19 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
 
     const currentVersionId = await getCurrentVersionId();
     const idx = assigned.findIndex(t => t.id === testId);
-    const nextTest = assigned[(idx + 1) % assigned.length];
+    const candidateNext = assigned[(idx + 1) % assigned.length];
+    
+    // Tentatively update loop state to candidateNext
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, nextTest.id, currentVersionId);
-    if (nextTest.id === assigned[0].id) {
+      .run(userId, candidateNext.id, currentVersionId);
+    if (candidateNext.id === assigned[0].id) {
       await bumpRound(userId);
     }
 
-    res.json({ message: 'Test completed', active_test_id: nextTest.id });
+    // Evaluate active test ID considering monthly round limits
+    const nextActiveId = await getActiveTestId(userId);
+
+    res.json({ message: 'Test completed', active_test_id: nextActiveId });
   } catch (error) {
     console.error('Complete test error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -169,6 +227,13 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
     if (!assigned.some(t => t.id === testId)) {
       return res.status(400).json({ error: 'Test is not assigned to this user' });
     }
+
+    const maxRounds = await getMaxMonthlyTestRounds();
+    const mRounds = await getTestMonthlyRounds(userId, testId);
+    if (mRounds >= maxRounds) {
+      return res.status(400).json({ error: 'This test has reached its maximum monthly round limit.' });
+    }
+
     const activeTestId = await getActiveTestId(userId);
     const currentRound = await getRound(userId);
     if (activeTestId !== testId && !(await isTestCompleted(userId, testId, currentRound))) {
@@ -209,14 +274,16 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
 
     const currentVersionId = await getCurrentVersionId();
     const idx = assigned.findIndex(t => t.id === testId);
-    const nextTest = assigned[(idx + 1) % assigned.length];
+    const candidateNext = assigned[(idx + 1) % assigned.length];
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, nextTest.id, currentVersionId);
-    if (nextTest.id === assigned[0].id) {
+      .run(userId, candidateNext.id, currentVersionId);
+    if (candidateNext.id === assigned[0].id) {
       await bumpRound(userId);
     }
 
-    res.json({ message: 'Test ended', active_test_id: nextTest.id });
+    const nextActiveId = await getActiveTestId(userId);
+
+    res.json({ message: 'Test ended', active_test_id: nextActiveId });
   } catch (error) {
     console.error('End test error:', error);
     res.status(500).json({ error: 'Server error' });

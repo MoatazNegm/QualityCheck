@@ -77,6 +77,7 @@ const AdminPanel: React.FC = () => {
   const [importError, setImportError] = useState('');
   const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings'>('upload');
   const [thresholdMinutes, setThresholdMinutes] = useState<string>('3');
+  const [maxMonthlyRounds, setMaxMonthlyRounds] = useState<string>('8');
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSuccess, setSettingsSuccess] = useState('');
@@ -1188,6 +1189,10 @@ const AdminPanel: React.FC = () => {
             setThresholdMinutes((sec / 60).toString());
           }
         }
+        const maxRoundsSetting = data['max_monthly_test_rounds'];
+        if (maxRoundsSetting && maxRoundsSetting.value) {
+          setMaxMonthlyRounds(maxRoundsSetting.value);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch settings:', err);
@@ -1209,10 +1214,18 @@ const AdminPanel: React.FC = () => {
       return;
     }
 
+    const rounds = parseInt(maxMonthlyRounds, 10);
+    if (isNaN(rounds) || rounds < 1) {
+      setSettingsError('Please enter a valid positive number for maximum monthly test rounds.');
+      setSettingsSaving(false);
+      return;
+    }
+
     const sec = Math.round(min * 60);
 
     try {
-      const res = await fetch(`${API_BASE}/api/settings`, {
+      // Update consecutive failure threshold setting
+      const res1 = await fetch(`${API_BASE}/api/settings`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1220,11 +1233,21 @@ const AdminPanel: React.FC = () => {
           value: sec.toString()
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setSettingsError(data.error || 'Failed to save settings');
+
+      // Update max monthly test rounds setting
+      const res2 = await fetch(`${API_BASE}/api/settings`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'max_monthly_test_rounds',
+          value: rounds.toString()
+        })
+      });
+
+      if (!res1.ok || !res2.ok) {
+        setSettingsError('Failed to save one or more settings');
       } else {
-        setSettingsSuccess(`Threshold successfully updated to ${min} minute(s) (${sec} seconds).`);
+        setSettingsSuccess(`Settings successfully updated! Consecutive failure window: ${min} minute(s), Max monthly rounds: ${rounds} rounds/month.`);
       }
     } catch (err) {
       console.error('Save settings error:', err);
@@ -3158,9 +3181,9 @@ const AdminPanel: React.FC = () => {
                 </div>
 
                 <form onSubmit={handleSaveSettings}>
-                  <div style={{ marginBottom: '1.25rem' }}>
+                  <div style={{ marginBottom: '1.75rem' }}>
                     <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Time Threshold (Minutes)
+                      Consecutive Failure Time Threshold (Minutes)
                     </label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <input
@@ -3175,6 +3198,75 @@ const AdminPanel: React.FC = () => {
                       />
                       <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                         minutes (= {Math.round((parseFloat(thresholdMinutes) || 0) * 60)} seconds)
+                      </span>
+                    </div>
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>🔒</span> Maximum Test Rounds per Month
+                      </h4>
+                      <span
+                        style={{
+                          background: 'rgba(99, 179, 237, 0.15)',
+                          color: 'var(--accent, #63b3ed)',
+                          border: '1px solid rgba(99, 179, 237, 0.3)',
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '12px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        Default: 8 Rounds
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        background: 'rgba(66, 153, 225, 0.08)',
+                        borderLeft: '4px solid #4299e1',
+                        borderRadius: '6px',
+                        padding: '1rem 1.1rem',
+                        marginBottom: '1.25rem',
+                        fontSize: '0.92rem',
+                        lineHeight: '1.5'
+                      }}
+                    >
+                      <strong style={{ color: '#4299e1', display: 'block', marginBottom: '0.4rem' }}>
+                        💡 What does this setting mean?
+                      </strong>
+                      <p style={{ margin: '0 0 0.5rem 0' }}>
+                        Specifies the maximum number of times (rounds) a tester user can start or attempt a specific test within the current calendar month (started, completed, or stopped due to a failed step or new version).
+                      </p>
+                      <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
+                        <li>
+                          <strong>Automatic Test Locking:</strong> Once a user visits/attempts a specific test for this number of rounds in the current month, that test will be locked for the user, and the system automatically advances to the next available assigned test.
+                        </li>
+                        <li>
+                          <strong>Global User Lock:</strong> If all assigned tests for a user reach this monthly limit, all tests become locked and a clear message is displayed to the tester: <em>"You have consumed all your allowed test rounds for this month. Please refer to management."</em>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Maximum Test Rounds per Month (per test per user)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        className="user-input"
+                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
+                        value={maxMonthlyRounds}
+                        onChange={e => setMaxMonthlyRounds(e.target.value)}
+                        required
+                      />
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        rounds per month per test
                       </span>
                     </div>
                   </div>

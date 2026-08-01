@@ -10,6 +10,9 @@ interface Test {
   isActive: boolean;
   completed: boolean;
   totalPoints: number;
+  monthlyRounds?: number;
+  maxMonthlyRounds?: number;
+  isMonthlyLocked?: boolean;
 }
 
 interface UserWarning {
@@ -116,6 +119,8 @@ const Dashboard: React.FC = () => {
     );
   }
 
+  const allMonthlyTestsLocked = !user?.isAdmin && tests.length > 0 && tests.every(t => t.isMonthlyLocked);
+
   const handleCardClick = (test: Test) => {
     if (test.locked) return;
     if (user?.isSuspended) return;
@@ -135,6 +140,29 @@ const Dashboard: React.FC = () => {
       <p className='loop-hint'>
         Complete each test in order. Only the current test is unlocked; finish it to unlock the next. The cycle repeats endlessly.
       </p>
+
+      {allMonthlyTestsLocked && (
+        <div className='all-tests-locked-banner' style={{
+          background: 'rgba(245, 101, 101, 0.12)',
+          border: '2px solid #f56565',
+          borderRadius: '12px',
+          padding: '1.5rem',
+          margin: '1.5rem 0',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(245, 101, 101, 0.2)'
+        }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>⛔</div>
+          <h3 style={{ color: '#f56565', margin: '0 0 0.5rem 0', fontSize: '1.4rem' }}>
+            All Test Rounds Consumed For This Month
+          </h3>
+          <p style={{ fontSize: '1.05rem', margin: '0 0 0.5rem 0', fontWeight: 500 }}>
+            You have consumed all your allowed test rounds for this month. Please refer to management.
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
+            <em>Every assigned test has reached its monthly round limit. Access will reset automatically next month or when updated by an administrator.</em>
+          </p>
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <div className='user-warnings-area'>
@@ -170,7 +198,7 @@ const Dashboard: React.FC = () => {
             onClick={() => handleCardClick(test)}
           >
             {test.locked && (
-              <div className='lock-overlay' title='Locked — finish the previous test first'>
+              <div className='lock-overlay' title={test.isMonthlyLocked ? 'Monthly test round limit reached' : 'Locked — finish the previous test first'}>
                 <svg width='34' height='34' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
                   <rect x='3' y='11' width='18' height='11' rx='2' ry='2' />
                   <path d='M7 11V7a5 5 0 0 1 10 0v4' />
@@ -184,9 +212,18 @@ const Dashboard: React.FC = () => {
             <div className='test-card-footer'>
               {test.isActive && <span className='badge badge-current'>Current</span>}
               {test.completed && !test.isActive && <span className='badge badge-done'>Completed</span>}
+              {typeof test.monthlyRounds === 'number' && typeof test.maxMonthlyRounds === 'number' && (
+                <span className={`badge ${test.isMonthlyLocked ? 'badge-monthly-locked' : 'badge-rounds'}`} style={{
+                  background: test.isMonthlyLocked ? 'rgba(245, 101, 101, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                  color: test.isMonthlyLocked ? '#feb2b2' : 'inherit',
+                  border: test.isMonthlyLocked ? '1px solid #f56565' : '1px solid rgba(255, 255, 255, 0.15)'
+                }}>
+                  {test.isMonthlyLocked ? `🔒 Monthly Limit (${test.monthlyRounds}/${test.maxMonthlyRounds})` : `🔄 Rounds: ${test.monthlyRounds}/${test.maxMonthlyRounds}`}
+                </span>
+              )}
               <span className='badge badge-points'>★ {test.totalPoints} pts</span>
               {test.locked || user?.isSuspended ? (
-                <span className='btn btn-locked' aria-disabled='true'>{user?.isSuspended ? '🚫 Suspended' : '🔒 Locked'}</span>
+                <span className='btn btn-locked' aria-disabled='true'>{user?.isSuspended ? '🚫 Suspended' : (test.isMonthlyLocked ? '🔒 Limit Reached' : '🔒 Locked')}</span>
               ) : (
                 <span className='btn'>Start Test</span>
               )}
