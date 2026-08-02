@@ -1532,6 +1532,12 @@ const ReportsView: React.FC = () => {
                   <span className="report-summary-value">{pointsReportData.totalSteps}</span>
                   <span className="report-summary-label">Total Steps Executed</span>
                 </div>
+                {pointsReportData.totalWarnings > 0 && (
+                  <div className="report-summary-card" style={{ borderLeft: '4px solid #ed8936', background: 'rgba(235, 130, 60, 0.1)' }}>
+                    <span className="report-summary-value" style={{ color: '#ed8936' }}>{pointsReportData.totalWarnings}</span>
+                    <span className="report-summary-label">Point Penalty Alerts</span>
+                  </div>
+                )}
               </div>
 
               {pointsReportData.users && pointsReportData.users.length > 0 && (
@@ -1541,6 +1547,7 @@ const ReportsView: React.FC = () => {
                       {isFullAccess && <th>User</th>}
                       <th>Points Earned</th>
                       <th>Steps Executed</th>
+                      {isFullAccess && <th>Alerts</th>}
                       {isFullAccess && <th></th>}
                     </tr>
                   </thead>
@@ -1564,6 +1571,28 @@ const ReportsView: React.FC = () => {
                             <td><strong>{u.pointsEarned}</strong> pts</td>
                             <td>{u.steps} steps</td>
                             {isFullAccess && (
+                              <td>
+                                {u.warningsCount > 0 ? (
+                                  <span
+                                    style={{
+                                      background: 'rgba(235, 130, 60, 0.2)',
+                                      color: '#ed8936',
+                                      border: '1px solid rgba(235, 130, 60, 0.4)',
+                                      padding: '0.15rem 0.55rem',
+                                      borderRadius: '10px',
+                                      fontSize: '0.78rem',
+                                      fontWeight: 600
+                                    }}
+                                    title={`${u.warningsCount} consecutive failure point penalty alert(s) in this period`}
+                                  >
+                                    ⚠️ {u.warningsCount} Alert{u.warningsCount > 1 ? 's' : ''}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>—</span>
+                                )}
+                              </td>
+                            )}
+                            {isFullAccess && (
                               <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                                 {isExpanded ? 'Collapse' : 'Details'}
                               </td>
@@ -1571,7 +1600,7 @@ const ReportsView: React.FC = () => {
                           </tr>
                           {isFullAccess && isExpanded && progress && (
                             <tr>
-                              <td colSpan={4} style={{ padding: 0, background: 'transparent' }}>
+                              <td colSpan={5} style={{ padding: 0, background: 'transparent' }}>
                                 <div style={{
                                   background: 'var(--card-bg, #1e2433)',
                                   border: '1px solid var(--border-color)',
@@ -1579,6 +1608,38 @@ const ReportsView: React.FC = () => {
                                   margin: '0.25rem 0.5rem 0.75rem',
                                   padding: '1rem 1.25rem'
                                 }}>
+                                  {/* Point Penalty Warnings Section */}
+                                  {progress.warnings && progress.warnings.length > 0 && (
+                                    <div style={{
+                                      background: 'rgba(235, 130, 60, 0.08)',
+                                      borderLeft: '4px solid #ed8936',
+                                      borderRadius: '6px',
+                                      padding: '0.75rem 1rem',
+                                      marginBottom: '1rem',
+                                      fontSize: '0.88rem'
+                                    }}>
+                                      <strong style={{ color: '#ed8936', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                                        <span>⚠️</span> Consecutive Failure Point Penalty Alerts ({progress.warnings.length})
+                                      </strong>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                        {progress.warnings.map((w: any) => (
+                                          <div key={w.id} style={{
+                                            background: 'rgba(0,0,0,0.18)',
+                                            border: '1px solid rgba(235, 130, 60, 0.25)',
+                                            padding: '0.5rem 0.75rem',
+                                            borderRadius: '4px',
+                                            color: 'var(--text-color, #e2e8f0)'
+                                          }}>
+                                            <p style={{ margin: '0 0 0.25rem 0', lineHeight: 1.4 }}>{w.message}</p>
+                                            <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                              Logged in Round {w.created_round} on {new Date(w.created_at).toLocaleString()}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
                                   {/* Active Test Banner */}
                                   {progress.activeTestId && (
                                     <div style={{

@@ -416,11 +416,34 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
+    // Fetch cross-test consecutive failure warnings logged in the date range
+    const userWarnFilter = hasUserFilter ? ` AND user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
+    const warnArgs = [start, end, ...(hasUserFilter ? userIds : [])];
+    const warningsRows = await testsDb.prepare(
+      `SELECT id, user_id, message, created_round, created_at
+       FROM user_warnings
+       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter}
+       ORDER BY id DESC`
+    ).all(...warnArgs);
+
+    const warningsByUser = {};
+    for (const w of warningsRows) {
+      if (!warningsByUser[w.user_id]) warningsByUser[w.user_id] = [];
+      warningsByUser[w.user_id].push({
+        id: w.id,
+        message: w.message,
+        created_round: w.created_round,
+        created_at: w.created_at
+      });
+    }
+
     const users = perUserRows.map(r => ({
       userId: r.userId,
       userName: userNames[r.userId] || ('user ' + r.userId),
       pointsEarned: r.pointsEarned,
-      steps: r.steps
+      steps: r.steps,
+      warningsCount: (warningsByUser[r.userId] || []).length,
+      warnings: warningsByUser[r.userId] || []
     }));
 
     res.json({
@@ -428,6 +451,11 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       endDate,
       totalPointsEarned: totalRow[0] ? totalRow[0].totalPointsEarned : 0,
       totalSteps: totalRow[0] ? totalRow[0].totalSteps : 0,
+      totalWarnings: warningsRows.length,
+      warnings: warningsRows.map(w => ({
+        ...w,
+        userName: userNames[w.user_id] || ('user ' + w.user_id)
+      })),
       users
     });
   } catch (error) {
@@ -875,6 +903,14 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       };
     });
 
+    // Fetch cross-test consecutive failure warnings logged for this user in date range
+    const userWarnings = await usersDb.prepare(
+      `SELECT id, message, created_round, created_at
+       FROM user_warnings
+       WHERE user_id = ? AND created_at >= ? AND created_at <= ?
+       ORDER BY id DESC`
+    ).all(userId, start, end);
+
     res.json({
       userId,
       userName: userRow.username,
@@ -882,6 +918,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       activeTestName,
       currentStepNumber,
       currentStepDescription,
+      warnings: userWarnings,
       tests
     });
   } catch (error) {
