@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb, usersDb, getRound, bumpRound } = require('../db/db');
+const { testsDb, usersDb, getRound, bumpRound, cache } = require('../db/db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -16,8 +16,12 @@ async function getAssignedTestsOrdered(userId) {
 }
 
 async function getCurrentVersionId() {
+  const cached = cache.get('currentVersionId');
+  if (cached !== undefined) return cached;
   const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
-  return row ? row.id : null;
+  const val = row ? row.id : null;
+  cache.set('currentVersionId', val);
+  return val;
 }
 
 // Configure uploads. On Vercel, `dataDir` is /tmp because the deployment
@@ -199,8 +203,14 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // If the user fails a step and their preceding failed step was in another test
     // within the configured time threshold (default 3 minutes = 180 seconds),
     // 0 points are counted and a warning message is stored.
-    const settingRow = await testsDb.prepare("SELECT value FROM settings WHERE key = 'consecutive_failure_threshold_seconds'").get();
-    const thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
+    let thresholdSec = 180;
+    const cachedSettings = cache.get('settings');
+    if (cachedSettings && cachedSettings.consecutive_failure_threshold_seconds) {
+      thresholdSec = parseInt(cachedSettings.consecutive_failure_threshold_seconds.value, 10) || 180;
+    } else {
+      const settingRow = await testsDb.prepare("SELECT value FROM settings WHERE key = 'consecutive_failure_threshold_seconds'").get();
+      thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
+    }
 
     if (result === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
       const prevTimeMs = new Date(prevFailed.executed_at).getTime();

@@ -35,9 +35,29 @@ const Dashboard: React.FC = () => {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
-    fetchTests();
-    fetchSummary();
-    fetchWarnings();
+    // Check sessionStorage cache to avoid refetching on rapid tab toggles
+    const cachedTests = sessionStorage.getItem('qc_dashboard_tests');
+    const cachedSummary = sessionStorage.getItem('qc_dashboard_summary');
+    const cachedWarnings = sessionStorage.getItem('qc_dashboard_warnings');
+    const cachedTime = sessionStorage.getItem('qc_dashboard_time');
+    const now = Date.now();
+
+    if (cachedTests && cachedTime && (now - Number(cachedTime) < 30000)) {
+      try {
+        setTests(JSON.parse(cachedTests));
+        if (cachedSummary !== null) setMonthEarned(JSON.parse(cachedSummary));
+        if (cachedWarnings !== null) setWarnings(JSON.parse(cachedWarnings));
+        setLoading(false);
+      } catch {
+        fetchTests();
+        fetchSummary();
+        fetchWarnings();
+      }
+    } else {
+      fetchTests();
+      fetchSummary();
+      fetchWarnings();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -54,14 +74,17 @@ const Dashboard: React.FC = () => {
             setCurrentVersionId(vid);
             const testsRes = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
             if (testsRes.ok) {
-              setTests(await testsRes.json());
+              const testsData = await testsRes.json();
+              setTests(testsData);
+              sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(testsData));
+              sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
             }
           }
         }
       } catch (err) {
         console.error('Failed to poll current version:', err);
       }
-    }, 5000);
+    }, 30000); // Poll every 30s instead of 5s to reduce Turso row reads
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, currentVersionId]);
@@ -75,6 +98,8 @@ const Dashboard: React.FC = () => {
       if (response.ok) {
         const data = await response.json();
         setTests(data);
+        sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(data));
+        sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
       }
     } catch (error) {
       console.error('Error fetching tests:', error);
@@ -89,6 +114,7 @@ const Dashboard: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setMonthEarned(data.monthEarned);
+        sessionStorage.setItem('qc_dashboard_summary', JSON.stringify(data.monthEarned));
       }
     } catch (error) {
       console.error('Error fetching points summary:', error);
@@ -101,6 +127,7 @@ const Dashboard: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setWarnings(data.warnings || []);
+        sessionStorage.setItem('qc_dashboard_warnings', JSON.stringify(data.warnings || []));
       }
     } catch (error) {
       console.error('Error fetching warnings:', error);

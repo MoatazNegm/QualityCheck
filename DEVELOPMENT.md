@@ -1,5 +1,14 @@
 # QualityCheck App Development Documentation
 
+## Version History
+- **v1.0000104**: Turso cloud database row-read optimization release:
+  - Added composite indexes (`test_submissions`, `points_log`, `test_results`, `test_steps`, `test_assignments`, `user_warnings`) to eliminate full table scans.
+  - Implemented server-side in-memory caching for `currentVersionId`, `settings`, `testStepCounts`, and `testTotalPoints` with automatic invalidation on updates.
+  - Replaced server-side N+1 query loops in `GET /api/tests` and `getActiveTestId()` with batch queries.
+  - Added bulk endpoints `GET /api/users/summaries` and `GET /api/tests/assignments/bulk` to eliminate frontend N+1 loops in `AdminPanel.tsx`.
+  - Optimized `Dashboard.tsx` version polling from 5 seconds to 30 seconds and added client-side `sessionStorage` caching.
+- **v1.0000103**: Point penalty alerts in Reports, configurable consecutive failure threshold, and maximum test rounds per month locking rule.
+
 ## Overview
 QualityCheck is a quality assurance testing application that guides users through sequential test steps with mandatory compliance. Users must authenticate, complete tests in a specific order, and document failures with comments and configuration file uploads.
 

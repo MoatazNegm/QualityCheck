@@ -1,11 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb } = require('../db/db');
+const { testsDb, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 // Get all system settings
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    const cached = cache.get('settings');
+    if (cached) {
+      return res.json(cached);
+    }
     const rows = await testsDb.prepare('SELECT key, value, description, updated_at FROM settings').all();
     const settingsMap = {};
     for (const r of rows) {
@@ -15,6 +19,7 @@ router.get('/', authenticateToken, async (req, res) => {
         updated_at: r.updated_at
       };
     }
+    cache.set('settings', settingsMap);
     res.json(settingsMap);
   } catch (error) {
     console.error('Get settings error:', error);
@@ -43,6 +48,7 @@ router.put('/', authenticateToken, requireAdmin, async (req, res) => {
       ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
     `).run(key, valStr, valStr);
 
+    cache.invalidate('settings');
     res.json({ message: 'Setting updated successfully', key, value: valStr });
   } catch (error) {
     console.error('Update setting error:', error);

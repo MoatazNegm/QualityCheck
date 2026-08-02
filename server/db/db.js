@@ -328,6 +328,20 @@ async function initDB() {
   if (statements.length > 0) {
     await clientWrapper.batch(statements, 'write');
   }
+
+  // Composite indexes to prevent full table scans (critical for Turso row-read billing)
+  const indexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_user_test_exec ON test_submissions(user_id, test_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_user_result ON test_submissions(user_id, result)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_user_test_earned ON points_log(user_id, test_id, earned_at)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_earned_version ON points_log(earned_at, version_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_user_test ON test_results(user_id, test_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_version ON test_results(version_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_steps_test ON test_steps(test_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_assignments_user ON test_assignments(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_created ON user_warnings(user_id, created_at)'
+  ];
+  await clientWrapper.batch(indexStatements, 'write');
 }
 
 // Return the current loop-round number for a user, initialising it
@@ -448,6 +462,41 @@ async function runMigrations() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Lightweight in-memory cache for rarely-changing data.
+// Avoids repeated DB reads for values that change only on explicit admin actions.
+// Each entry has an optional TTL (default: no expiry, invalidated on write).
+// ---------------------------------------------------------------------------
+const _cacheStore = {};
+const cache = {
+  get(key) {
+    const entry = _cacheStore[key];
+    if (!entry) return undefined;
+    if (entry.expiresAt && Date.now() > entry.expiresAt) {
+      delete _cacheStore[key];
+      return undefined;
+    }
+    return entry.value;
+  },
+  set(key, value, ttlMs) {
+    _cacheStore[key] = {
+      value,
+      expiresAt: ttlMs ? Date.now() + ttlMs : null
+    };
+  },
+  invalidate(key) {
+    delete _cacheStore[key];
+  },
+  invalidatePrefix(prefix) {
+    for (const key of Object.keys(_cacheStore)) {
+      if (key.startsWith(prefix)) delete _cacheStore[key];
+    }
+  },
+  clear() {
+    for (const key of Object.keys(_cacheStore)) delete _cacheStore[key];
+  }
+};
+
 // Run migrations/init immediately on load (async) and store the Promise
 dbReady = runMigrations();
 
@@ -457,5 +506,6 @@ module.exports = {
   dbReady,
   initDB,
   getRound,
-  bumpRound
+  bumpRound,
+  cache
 };

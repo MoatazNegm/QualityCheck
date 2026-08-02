@@ -1,13 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb } = require('../db/db');
+const { testsDb, cache } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 
 // Returns the currently active version (the one users should run tests for).
 // Returns { version: <row> | null }.
 router.get('/current', authenticateToken, async (req, res) => {
   try {
-    const version = await testsDb.prepare('SELECT * FROM versions WHERE is_current = 1 LIMIT 1').get();
+    let version = null;
+    const cachedId = cache.get('currentVersionId');
+    if (cachedId) {
+      version = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(cachedId);
+    } else {
+      version = await testsDb.prepare('SELECT * FROM versions WHERE is_current = 1 LIMIT 1').get();
+      if (version) {
+        cache.set('currentVersionId', version.id);
+      }
+    }
     res.json({ version: version || null });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -39,6 +48,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     ).run(String(name).trim(), note || null, hasCurrent ? 0 : 1);
 
     const version = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(result.lastInsertRowid);
+    cache.invalidate('currentVersionId');
     res.json({ version, message: hasCurrent ? 'Version created' : 'Version created and set as current' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -60,6 +70,7 @@ router.post('/:id/set-current', authenticateToken, requireAdmin, async (req, res
     ], 'write');
 
     const updated = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(id);
+    cache.invalidate('currentVersionId');
     res.json({ version: updated, message: 'Current version updated' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -83,6 +94,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     await testsDb.prepare('DELETE FROM versions WHERE id = ?').run(id);
+    cache.invalidate('currentVersionId');
     res.json({ message: 'Version deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });

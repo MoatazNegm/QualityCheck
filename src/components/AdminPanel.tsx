@@ -200,10 +200,34 @@ const AdminPanel: React.FC = () => {
 
   useEffect(() => {
     if (!tests.length) return;
-    tests.forEach(t => {
-      fetchTestSteps(t.id);
-      fetchAssignmentsForTest(t.id);
-    });
+    // Batch fetch all steps and assignments in two calls instead of 2N calls
+    const fetchAllStepsAndAssignments = async () => {
+      try {
+        const [stepsRes, assignRes] = await Promise.all([
+          fetch(`${API_BASE}/api/tests/steps?testIds=all`, { headers: authHeaders }),
+          fetch(`${API_BASE}/api/tests/assignments/bulk`, { headers: authHeaders })
+        ]);
+        if (stepsRes.ok) {
+          const stepsData = await stepsRes.json();
+          const stepsMap: Record<number, TestStepAdmin[]> = {};
+          for (const entry of stepsData) {
+            stepsMap[entry.testId] = entry.steps || [];
+          }
+          setManagedSteps(prev => ({ ...prev, ...stepsMap }));
+        }
+        if (assignRes.ok) {
+          const assignData = await assignRes.json();
+          setAssignments(assignData);
+        }
+      } catch {
+        // Fallback: fetch individually if bulk fails
+        tests.forEach(t => {
+          fetchTestSteps(t.id);
+          fetchAssignmentsForTest(t.id);
+        });
+      }
+    };
+    fetchAllStepsAndAssignments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tests]);
 
@@ -338,30 +362,14 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const fetchUserSummaries = async (userIds: number[]) => {
+  const fetchUserSummaries = async (_userIds?: number[]) => {
     setUserSummariesLoading(true);
     try {
-      const results = await Promise.all(
-        userIds.map(id =>
-          Promise.all([
-            fetch(`${API_BASE}/api/users/${id}/test-summary`, { headers: authHeaders }).then(r => r.ok ? r.json() : null),
-            fetch(`${API_BASE}/api/users/${id}/completed-rounds`, { headers: authHeaders }).then(r => r.ok ? r.json() : null)
-          ]).then(([summary, rounds]) => ({ summary, rounds }))
-        )
-      );
-      const map: Record<number, { assignedCount: number; completedCount: number; failedHardStopCount: number; completedRounds: number }> = {};
-      userIds.forEach((id, idx) => {
-        const { summary, rounds } = results[idx];
-        if (summary) {
-          map[id] = {
-            assignedCount: summary.assignedCount || 0,
-            completedCount: summary.completedCount || 0,
-            failedHardStopCount: summary.failedHardStopCount || 0,
-            completedRounds: rounds ? rounds.completedRounds || 0 : 0
-          };
-        }
-      });
-      setUserSummaries(prev => ({ ...prev, ...map }));
+      const res = await fetch(`${API_BASE}/api/users/summaries`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setUserSummaries(data);
+      }
     } catch {
       // ignore
     } finally {

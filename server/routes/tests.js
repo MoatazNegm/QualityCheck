@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { testsDb, bumpRound, getRound } = require('../db/db');
+const { testsDb, bumpRound, getRound, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -18,12 +18,20 @@ async function getAssignedTestsOrdered(userId) {
 }
 
 async function getCurrentVersionId() {
+  const cached = cache.get('currentVersionId');
+  if (cached !== undefined) return cached;
   const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
-  return row ? row.id : null;
+  const val = row ? row.id : null;
+  cache.set('currentVersionId', val);
+  return val;
 }
 
 // Get maximum allowed monthly test rounds setting (default 8)
 async function getMaxMonthlyTestRounds() {
+  const cached = cache.get('settings');
+  if (cached && cached.max_monthly_test_rounds) {
+    return parseInt(cached.max_monthly_test_rounds.value, 10) || 8;
+  }
   const row = await testsDb.prepare("SELECT value FROM settings WHERE key = 'max_monthly_test_rounds'").get();
   return row ? (parseInt(row.value, 10) || 8) : 8;
 }
@@ -41,26 +49,33 @@ async function getTestMonthlyRounds(userId, testId) {
   return distinctRow ? (distinctRow.c || 0) : 0;
 }
 
+// Batch: get monthly rounds for multiple tests at once (eliminates N+1)
+async function getBatchMonthlyRounds(userId, testIds) {
+  if (testIds.length === 0) return {};
+  const placeholders = testIds.map(() => '?').join(',');
+  const rows = await testsDb.prepare(`
+    SELECT test_id, COUNT(DISTINCT r_id) AS c FROM (
+      SELECT test_id, round_id AS r_id FROM test_submissions WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+      UNION
+      SELECT test_id, round_id AS r_id FROM test_results WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+    ) GROUP BY test_id
+  `).all(userId, ...testIds, userId, ...testIds);
+  const map = {};
+  for (const r of rows) map[r.test_id] = r.c || 0;
+  return map;
+}
+
 // Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests.
 async function getActiveTestId(userId) {
   const assigned = await getAssignedTestsOrdered(userId);
   if (assigned.length === 0) return null;
 
   const maxRounds = await getMaxMonthlyTestRounds();
+  const testIds = assigned.map(t => t.id);
+  const monthlyRoundsMap = await getBatchMonthlyRounds(userId, testIds);
   
-  // Find assigned tests that have NOT reached their monthly round limit
-  const availableAssigned = [];
-  for (const t of assigned) {
-    const rounds = await getTestMonthlyRounds(userId, t.id);
-    if (rounds < maxRounds) {
-      availableAssigned.push(t);
-    }
-  }
-
-  // If ALL assigned tests have reached their monthly limit, return null (all tests locked)
-  if (availableAssigned.length === 0) {
-    return null;
-  }
+  const availableAssigned = assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
+  if (availableAssigned.length === 0) return null;
 
   const currentVersionId = await getCurrentVersionId();
   const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
@@ -111,12 +126,63 @@ async function isTestCompleted(userId, testId, roundNo) {
   return doneCount >= stepCount;
 }
 
+// Batch: get completion counts for multiple tests at once (eliminates N+1)
+async function getBatchCompletionCounts(userId, testIds, roundNo) {
+  if (testIds.length === 0) return {};
+  const placeholders = testIds.map(() => '?').join(',');
+  const rows = await testsDb.prepare(`
+    SELECT test_id, COUNT(*) AS c FROM test_results
+    WHERE user_id = ? AND test_id IN (${placeholders}) AND round_id = ?
+    GROUP BY test_id
+  `).all(userId, ...testIds, roundNo);
+  const map = {};
+  for (const r of rows) map[r.test_id] = r.c || 0;
+  return map;
+}
+
+// Batch: get step counts per test (cached)
+async function getBatchStepCounts(testIds) {
+  const result = {};
+  const uncached = [];
+  for (const id of testIds) {
+    const cached = cache.get(`stepCount:${id}`);
+    if (cached !== undefined) {
+      result[id] = cached;
+    } else {
+      uncached.push(id);
+    }
+  }
+  if (uncached.length > 0) {
+    const placeholders = uncached.map(() => '?').join(',');
+    const rows = await testsDb.prepare(
+      `SELECT test_id, COUNT(*) AS c FROM test_steps WHERE test_id IN (${placeholders}) GROUP BY test_id`
+    ).all(...uncached);
+    for (const r of rows) {
+      result[r.test_id] = r.c;
+      cache.set(`stepCount:${r.test_id}`, r.c);
+    }
+    // Tests with no steps
+    for (const id of uncached) {
+      if (result[id] === undefined) {
+        result[id] = 0;
+        cache.set(`stepCount:${id}`, 0);
+      }
+    }
+  }
+  return result;
+}
+
 // Total points awarded for a test (sum of its steps' points)
 async function getTestTotalPoints(testId) {
+  const cacheKey = `totalPoints:${testId}`;
+  const cached = cache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const row = await testsDb.prepare(
     'SELECT COALESCE(SUM(COALESCE(points, value, 0)), 0) AS total FROM test_steps WHERE test_id = ?'
   ).get(testId);
-  return row ? row.total : 0;
+  const val = row ? row.total : 0;
+  cache.set(cacheKey, val);
+  return val;
 }
 
 // Get all tests (filtered by assignment for non-admins without developer access, with loop lock status)
@@ -140,18 +206,34 @@ router.get('/', authenticateToken, async (req, res) => {
     } else {
       const maxRounds = await getMaxMonthlyTestRounds();
       const assigned = await getAssignedTestsOrdered(req.user.userId);
-      const activeTestId = await getActiveTestId(req.user.userId);
+      const testIds = assigned.map(t => t.id);
+
+      // Batch queries instead of N+1 loops
+      const monthlyRoundsMap = await getBatchMonthlyRounds(req.user.userId, testIds);
+      const currentRound = await getRound(req.user.userId);
+      const completionMap = await getBatchCompletionCounts(req.user.userId, testIds, currentRound);
+      const stepCountsMap = await getBatchStepCounts(testIds);
+
+      // Determine active test using pre-fetched monthly rounds
+      const availableAssigned = assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
+      let activeTestId = null;
+      if (availableAssigned.length > 0) {
+        // Use getActiveTestId which now also uses batch internally
+        activeTestId = await getActiveTestId(req.user.userId);
+      }
 
       tests = await Promise.all(assigned.map(async t => {
-        const mRounds = await getTestMonthlyRounds(req.user.userId, t.id);
+        const mRounds = monthlyRoundsMap[t.id] || 0;
         const isMonthlyLocked = mRounds >= maxRounds;
         const isLocked = isMonthlyLocked || (t.id !== activeTestId);
         const isActive = !isMonthlyLocked && (t.id === activeTestId);
+        const stepCount = stepCountsMap[t.id] || 0;
+        const doneCount = completionMap[t.id] || 0;
         return {
           ...t,
           locked: isLocked,
           isActive: isActive,
-          completed: await isTestCompleted(req.user.userId, t.id, await getRound(req.user.userId)),
+          completed: stepCount > 0 && doneCount >= stepCount,
           totalPoints: await getTestTotalPoints(t.id),
           monthlyRounds: mRounds,
           maxMonthlyRounds: maxRounds,
@@ -341,6 +423,8 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
         imported.push({ id: testId, name: testName, stepsCount: stepNumber - 1 });
       }
       await tx.commit();
+      cache.invalidatePrefix('stepCount:');
+      cache.invalidatePrefix('totalPoints:');
     } catch (e) {
       await tx.rollback();
       throw e;
@@ -364,6 +448,22 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
     res.json({ message: 'Test renamed successfully' });
   } catch (error) {
     console.error('Rename test error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Bulk: get all test assignments grouped by test (admin only) — replaces N+1 frontend loop
+router.get('/assignments/bulk', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const rows = await testsDb.prepare('SELECT test_id, user_id FROM test_assignments').all();
+    const grouped = {};
+    for (const r of rows) {
+      if (!grouped[r.test_id]) grouped[r.test_id] = [];
+      grouped[r.test_id].push(r.user_id);
+    }
+    res.json(grouped);
+  } catch (error) {
+    console.error('Bulk assignments error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -431,6 +531,7 @@ router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, a
     }
     await testsDb.prepare('UPDATE test_steps SET points = ?, value = ? WHERE id = ? AND test_id = ?')
       .run(points, points, req.params.stepId, req.params.testId);
+    cache.invalidate('totalPoints:' + req.params.testId);
     res.json({ message: 'Points updated' });
   } catch (error) {
     console.error('Update points error:', error);
@@ -567,6 +668,8 @@ router.post('/:id/steps', async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(id, step_number, description, success_symptom, pointsVal, pointsVal, on_failure || 'stop');
     
+    cache.invalidate('stepCount:' + id);
+    cache.invalidate('totalPoints:' + id);
     res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom, value: pointsVal, points: pointsVal, on_failure });
   } catch (error) {
     console.error('Add step error:', error);
@@ -586,6 +689,7 @@ router.put('/:testId/steps/:stepId', async (req, res) => {
       WHERE id = ? AND test_id = ?
     `).run(step_number, description, success_symptom, pointsVal, pointsVal, on_failure, stepId, testId);
 
+    cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step updated successfully' });
   } catch (error) {
     console.error('Update step error:', error);
@@ -599,6 +703,8 @@ router.delete('/:testId/steps/:stepId', async (req, res) => {
     const { testId, stepId } = req.params;
     
     await testsDb.prepare('DELETE FROM test_steps WHERE id = ? AND test_id = ?').run(stepId, testId);
+    cache.invalidate('stepCount:' + testId);
+    cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step deleted successfully' });
   } catch (error) {
     console.error('Delete step error:', error);

@@ -25,6 +25,101 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
   }
 });
 
+// Bulk user summaries (admin/developer only) — replaces N+1 frontend loops
+router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) => {
+  try {
+    const allUsers = await usersDb.prepare(
+      'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
+    ).all();
+    const nonAdminUsers = allUsers.filter(u => !u.is_admin);
+    const userIds = nonAdminUsers.map(u => u.id);
+    if (userIds.length === 0) return res.json({});
+
+    // Batch: assigned test counts per user
+    const assignedRows = await testsDb.prepare(
+      'SELECT user_id, COUNT(*) AS c FROM test_assignments GROUP BY user_id'
+    ).all();
+    const assignedMap = Object.fromEntries(assignedRows.map(r => [r.user_id, r.c]));
+
+    // Batch: completed rounds per user
+    const roundRows = await testsDb.prepare(
+      'SELECT user_id, round_no FROM user_rounds'
+    ).all();
+    const roundsMap = Object.fromEntries(roundRows.map(r => [r.user_id, r.round_no]));
+
+    // Batch: done step counts per user+test
+    const doneRows = await testsDb.prepare(
+      'SELECT user_id, test_id, COUNT(*) AS c FROM test_results GROUP BY user_id, test_id'
+    ).all();
+    const doneMap = {};
+    for (const r of doneRows) {
+      if (!doneMap[r.user_id]) doneMap[r.user_id] = {};
+      doneMap[r.user_id][r.test_id] = r.c;
+    }
+
+    // Batch: total step counts per test
+    const stepRows = await testsDb.prepare(
+      'SELECT test_id, COUNT(*) AS c FROM test_steps GROUP BY test_id'
+    ).all();
+    const stepMap = Object.fromEntries(stepRows.map(r => [r.test_id, r.c]));
+
+    // Batch: hard-stop failure counts per user+test
+    const failRows = await testsDb.prepare(`
+      SELECT ts.user_id, ts.test_id, COUNT(*) AS c
+      FROM test_submissions ts
+      JOIN test_steps tstep ON ts.step_id = tstep.id
+      WHERE ts.result = 'fail' AND tstep.on_failure = 'stop'
+      GROUP BY ts.user_id, ts.test_id
+    `).all();
+    const failMap = {};
+    for (const r of failRows) {
+      if (!failMap[r.user_id]) failMap[r.user_id] = {};
+      failMap[r.user_id][r.test_id] = r.c;
+    }
+
+    // Batch: assignments per user
+    const assignmentRows = await testsDb.prepare(
+      'SELECT user_id, test_id FROM test_assignments'
+    ).all();
+    const userAssignments = {};
+    for (const r of assignmentRows) {
+      if (!userAssignments[r.user_id]) userAssignments[r.user_id] = [];
+      userAssignments[r.user_id].push(r.test_id);
+    }
+
+    const summaries = {};
+    for (const u of nonAdminUsers) {
+      const assignments = userAssignments[u.id] || [];
+      let completedCount = 0;
+      let failedHardStopCount = 0;
+      const userDone = doneMap[u.id] || {};
+      const userFails = failMap[u.id] || {};
+
+      for (const testId of assignments) {
+        const totalSteps = stepMap[testId] || 0;
+        const doneSteps = userDone[testId] || 0;
+        if (totalSteps > 0 && doneSteps >= totalSteps) {
+          completedCount++;
+        } else if ((userFails[testId] || 0) > 0) {
+          failedHardStopCount++;
+        }
+      }
+
+      summaries[u.id] = {
+        assignedCount: assignments.length,
+        completedCount,
+        failedHardStopCount,
+        completedRounds: roundsMap[u.id] || 0
+      };
+    }
+
+    res.json(summaries);
+  } catch (error) {
+    console.error('Bulk summaries error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get test summary for a user (admin only)
 router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res) => {
   try {
