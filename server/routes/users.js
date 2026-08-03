@@ -353,4 +353,28 @@ router.put('/:id/password', authenticateToken, requireAdmin, async (req, res) =>
   }
 });
 
+// Pay points for user (admin only)
+router.post('/:id/pay-points', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { points } = req.body;
+    
+    if (typeof points !== 'number' || points <= 0) {
+      return res.status(400).json({ error: 'Valid positive points amount is required' });
+    }
+    
+    const userId = parseInt(id, 10);
+    const adminId = req.user && req.user.userId ? parseInt(req.user.userId, 10) : null;
+    
+    await usersDb.prepare(
+      'INSERT INTO point_payments (user_id, points_paid, admin_id) VALUES (?, ?, ?)'
+    ).run(userId, points, adminId);
+    
+    res.json({ message: 'Points paid successfully' });
+  } catch (error) {
+    console.error('Pay points error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;

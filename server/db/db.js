@@ -320,6 +320,14 @@ async function initDB() {
       value TEXT NOT NULL,
       description TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS point_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      points_paid INTEGER NOT NULL,
+      admin_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `.split(';')
    .map(s => s.trim())
@@ -339,7 +347,8 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_test_results_version ON test_results(version_id)',
     'CREATE INDEX IF NOT EXISTS idx_test_steps_test ON test_steps(test_id)',
     'CREATE INDEX IF NOT EXISTS idx_test_assignments_user ON test_assignments(user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_created ON user_warnings(user_id, created_at)'
+    'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_created ON user_warnings(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_point_payments_user ON point_payments(user_id)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }

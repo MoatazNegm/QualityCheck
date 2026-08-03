@@ -437,14 +437,33 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       });
     }
 
-    const users = perUserRows.map(r => ({
-      userId: r.userId,
-      userName: userNames[r.userId] || ('user ' + r.userId),
-      pointsEarned: r.pointsEarned,
-      steps: r.steps,
-      warningsCount: (warningsByUser[r.userId] || []).length,
-      warnings: warningsByUser[r.userId] || []
-    }));
+    const paymentsRows = await testsDb.prepare(
+      `SELECT user_id, COALESCE(SUM(points_paid), 0) as pointsPaid
+       FROM point_payments
+       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter}
+       GROUP BY user_id`
+    ).all(...warnArgs);
+
+    const paymentsByUser = {};
+    for (const p of paymentsRows) {
+      paymentsByUser[p.user_id] = p.pointsPaid;
+    }
+
+    const users = perUserRows.map(r => {
+      const pointsEarned = r.pointsEarned;
+      const pointsPaid = paymentsByUser[r.userId] || 0;
+      const unpaidPoints = pointsEarned - pointsPaid;
+      return {
+        userId: r.userId,
+        userName: userNames[r.userId] || ('user ' + r.userId),
+        pointsEarned,
+        pointsPaid,
+        unpaidPoints,
+        steps: r.steps,
+        warningsCount: (warningsByUser[r.userId] || []).length,
+        warnings: warningsByUser[r.userId] || []
+      };
+    });
 
     res.json({
       startDate,
@@ -923,6 +942,39 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     });
   } catch (error) {
     console.error('User progress report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get points payments history
+router.get('/points-payments', authenticateToken, requireReportAccess, async (req, res) => {
+  try {
+    const userIdsRaw = req.query.userId;
+    let userIds = [];
+    if (req.reportScope === 'self') {
+      userIds = [req.selfUserId];
+    } else if (userIdsRaw && userIdsRaw !== 'all') {
+      userIds = String(userIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    const hasUserFilter = userIds.length > 0;
+    const userFilterSql = hasUserFilter ? ` WHERE p.user_id IN (${userIds.map(() => '?').join(',')}) ` : '';
+
+    const payments = await testsDb.prepare(
+      `SELECT p.id, p.user_id as userId, p.points_paid as pointsPaid, p.admin_id as adminId, p.created_at as createdAt, u.username as userName, a.username as adminName
+       FROM point_payments p
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN users a ON p.admin_id = a.id
+       ${userFilterSql}
+       ORDER BY p.created_at DESC`
+    ).all(...(hasUserFilter ? userIds : []));
+
+    res.json({ payments });
+  } catch (error) {
+    console.error('Points payments report error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

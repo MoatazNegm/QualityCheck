@@ -31,7 +31,7 @@ const ReportsView: React.FC = () => {
 
   const isFullAccess = !!(user?.isAdmin || user?.userGroups?.includes('admins') || user?.userGroups?.includes('developers'));
 
-  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'passed' | 'points'>('user');
+  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'passed' | 'points' | 'payments'>('user');
 
   const [users, setUsers] = useState<User[]>([]);
   const [tests, setTests] = useState<Test[]>([]);
@@ -120,6 +120,14 @@ const ReportsView: React.FC = () => {
   const [pointsReportData, setPointsReportData] = useState<any>(null);
   const [pointsReportError, setPointsReportError] = useState('');
 
+  // --- Payments Report State ---
+  const [paymentsReportUserIds, setPaymentsReportUserIds] = useState<number[]>([]);
+  const [paymentsReportUserSearch, setPaymentsReportUserSearch] = useState('');
+  const [showPaymentsUserDropdown, setShowPaymentsUserDropdown] = useState(false);
+  const [paymentsReportLoading, setPaymentsReportLoading] = useState(false);
+  const [paymentsReportData, setPaymentsReportData] = useState<any>(null);
+  const [paymentsReportError, setPaymentsReportError] = useState('');
+
   // --- User Progress Drill-Down State (Points Report) ---
   const [expandedPointsUser, setExpandedPointsUser] = useState<number | null>(null);
   const [userProgressCache, setUserProgressCache] = useState<Record<number, any>>({});
@@ -181,6 +189,7 @@ const ReportsView: React.FC = () => {
       setReportUserIds([user.id]);
       setPassedReportUserIds([user.id]);
       setPointsReportUserIds([user.id]);
+      setPaymentsReportUserIds([user.id]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isFullAccess]);
@@ -224,6 +233,7 @@ const ReportsView: React.FC = () => {
         setReportUserIds(allIds);
         setPassedReportUserIds(allIds);
         setPointsReportUserIds(allIds);
+        setPaymentsReportUserIds(allIds);
       }
     } catch {
       // ignore
@@ -416,6 +426,34 @@ const ReportsView: React.FC = () => {
     }
   };
 
+  // Payments Report
+  const fetchPaymentsReport = async () => {
+    setPaymentsReportLoading(true);
+    setPaymentsReportError('');
+    setPaymentsReportData(null);
+    try {
+      const url = new URL(`${API_BASE}/api/reports/points-payments`, window.location.origin);
+      if (paymentsReportUserIds.length > 0) {
+        url.searchParams.set('userId', paymentsReportUserIds.join(','));
+      } else {
+        url.searchParams.set('userId', 'all');
+      }
+
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) {
+        setPaymentsReportError(data.error || 'Failed to load report');
+      } else {
+        setPaymentsReportData(data);
+      }
+    } catch (err) {
+      console.error('Payments report fetch failed:', err);
+      setPaymentsReportError('Network error');
+    } finally {
+      setPaymentsReportLoading(false);
+    }
+  };
+
   // Points Report
   const fetchPointsReport = async () => {
     if (!pointsReportStartDate || !pointsReportEndDate) return;
@@ -524,6 +562,14 @@ const ReportsView: React.FC = () => {
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Points
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${reportsSubTab === 'payments' ? 'active' : ''}`}
+          onClick={() => setReportsSubTab('payments')}
+          style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
+        >
+          Points Payments History
         </button>
       </div>
 
@@ -1724,6 +1770,164 @@ const ReportsView: React.FC = () => {
                     })}
                   </tbody>
                 </table>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {reportsSubTab === 'payments' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '1.8rem' }}>💳</span>
+            <div>
+              <h3 style={{ margin: 0 }}>Points Payment Ledger</h3>
+              <p className="admin-hint" style={{ margin: '0.25rem 0 0 0' }}>
+                Track and review the full historical ledger of administrative point payouts per user.
+              </p>
+            </div>
+          </div>
+
+          <div className="report-controls" style={{ marginTop: '1.25rem' }}>
+            <div className="report-selectors">
+              {isFullAccess && (
+                <div className="searchable-select" style={{ minWidth: '280px' }}>
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-muted)' }}>FILTER BY USERS</label>
+                  <input
+                    type="text"
+                    className="user-input"
+                    placeholder="Search users..."
+                    value={showPaymentsUserDropdown ? paymentsReportUserSearch : (paymentsReportUserIds.length > 0 ? (paymentsReportUserIds.length === users.length ? 'All Users' : paymentsReportUserIds.map(id => users.find(x => x.id === id)?.username).filter(Boolean).join(', ')) : paymentsReportUserSearch)}
+                    onChange={e => setPaymentsReportUserSearch(e.target.value)}
+                    onFocus={() => { setShowPaymentsUserDropdown(true); setPaymentsReportUserSearch(''); }}
+                    onBlur={() => setTimeout(() => setShowPaymentsUserDropdown(false), 150)}
+                  />
+                  {showPaymentsUserDropdown && (
+                    <div className="searchable-dropdown">
+                      <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                        <input
+                          type="checkbox"
+                          checked={paymentsReportUserIds.length === users.length && users.length > 0}
+                          onChange={() => {
+                            if (paymentsReportUserIds.length === users.length) setPaymentsReportUserIds([]);
+                            else setPaymentsReportUserIds(users.map(u => u.id));
+                            setPaymentsReportData(null);
+                          }}
+                        />
+                        <strong>Select All Users</strong>
+                      </label>
+                      {users
+                        .filter(u => u.username.toLowerCase().includes(paymentsReportUserSearch.toLowerCase()))
+                        .map(u => (
+                          <label
+                            key={u.id}
+                            className={`searchable-option ${paymentsReportUserIds.includes(u.id) ? 'selected' : ''}`}
+                            onMouseDown={e => e.preventDefault()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={paymentsReportUserIds.includes(u.id)}
+                              onChange={() => {
+                                setPaymentsReportUserIds(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id]);
+                                setPaymentsReportData(null);
+                              }}
+                            />
+                            {u.username}
+                          </label>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={fetchPaymentsReport}
+              disabled={paymentsReportLoading || (isFullAccess && paymentsReportUserIds.length === 0)}
+              style={{ alignSelf: 'flex-end', padding: '0.6rem 1.4rem' }}
+            >
+              {paymentsReportLoading ? 'Fetching Ledger...' : '🔍 Load Payment History'}
+            </button>
+          </div>
+
+          {paymentsReportError && <p className="error-msg" style={{ marginTop: '1rem' }}>{paymentsReportError}</p>}
+
+          {paymentsReportData && (
+            <div className="report-results" style={{ marginTop: '1.5rem' }}>
+              {/* Summary KPIs */}
+              <div className="report-summary-boxes" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="summary-box" style={{ borderLeft: '4rem solid #3182ce', background: 'var(--card-bg, rgba(255,255,255,0.03))' }}>
+                  <div className="summary-label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Transactions</div>
+                  <div className="summary-value" style={{ fontSize: '1.6rem', color: '#63b3ed' }}>
+                    📑 {paymentsReportData.payments?.length || 0}
+                  </div>
+                </div>
+
+                <div className="summary-box" style={{ borderLeft: '4rem solid #38a169', background: 'var(--card-bg, rgba(255,255,255,0.03))' }}>
+                  <div className="summary-label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Paid Points</div>
+                  <div className="summary-value" style={{ fontSize: '1.6rem', color: '#68d391' }}>
+                    💎 {paymentsReportData.payments?.reduce((acc: number, p: any) => acc + (p.pointsPaid || 0), 0) || 0} pts
+                  </div>
+                </div>
+
+                <div className="summary-box" style={{ borderLeft: '4rem solid #805ad5', background: 'var(--card-bg, rgba(255,255,255,0.03))' }}>
+                  <div className="summary-label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Recipients</div>
+                  <div className="summary-value" style={{ fontSize: '1.6rem', color: '#b794f4' }}>
+                    👥 {new Set(paymentsReportData.payments?.map((p: any) => p.userId)).size || 0} users
+                  </div>
+                </div>
+              </div>
+
+              {!paymentsReportData.payments || paymentsReportData.payments.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '3rem 1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px dashed var(--border-color, #4a5568)' }}>
+                  <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.5rem' }}>💳</span>
+                  <strong style={{ fontSize: '1.1rem' }}>No payment records found</strong>
+                  <p style={{ color: 'var(--text-muted)', margin: '0.4rem 0 0 0', fontSize: '0.9rem' }}>
+                    There are no payout transactions recorded for the selected users.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.1))' }}>
+                  <table className="report-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                        <th style={{ textAlign: 'left', padding: '0.85rem 1rem' }}>Transaction Date & Time</th>
+                        <th style={{ textAlign: 'left', padding: '0.85rem 1rem' }}>Recipient User</th>
+                        <th style={{ textAlign: 'left', padding: '0.85rem 1rem' }}>Amount Paid</th>
+                        <th style={{ textAlign: 'left', padding: '0.85rem 1rem' }}>Processed By</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentsReportData.payments.map((p: any) => (
+                        <tr key={p.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <td style={{ padding: '0.85rem 1rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                            📅 {new Date(p.createdAt).toLocaleDateString()} <span style={{ opacity: 0.7, fontSize: '0.85rem', marginLeft: '0.3rem' }}>{new Date(p.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </td>
+                          <td style={{ padding: '0.85rem 1rem' }}>
+                            <span className="status-badge" style={{ background: 'rgba(99,179,237,0.15)', color: '#63b3ed', borderColor: 'rgba(99,179,237,0.3)', fontWeight: 600, padding: '0.25rem 0.6rem' }}>
+                              👤 {p.userName || `User #${p.userId}`}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.85rem 1rem' }}>
+                            <span className="status-badge status-pass" style={{ fontSize: '0.95rem', padding: '0.3rem 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <span>💵</span>
+                              <span>+{p.pointsPaid} pts</span>
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.85rem 1rem', fontSize: '0.9rem' }}>
+                            {p.adminName ? (
+                              <span style={{ color: '#e2e8f0', fontWeight: 500 }}>🛡️ {p.adminName}</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>System / Admin</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}

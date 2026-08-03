@@ -179,6 +179,13 @@ const AdminPanel: React.FC = () => {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [payPointsUser, setPayPointsUser] = useState<User | null>(null);
+  const [payPointsData, setPayPointsData] = useState<any | null>(null);
+  const [payPointsLoading, setPayPointsLoading] = useState(false);
+  const [payPointsAmount, setPayPointsAmount] = useState<string>('');
+  const [payPointsSubmitting, setPayPointsSubmitting] = useState(false);
+  const [payPointsError, setPayPointsError] = useState('');
+  const [payPointsSuccess, setPayPointsSuccess] = useState('');
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -745,6 +752,73 @@ const AdminPanel: React.FC = () => {
       setAssignments({});
     } catch {
       // ignore
+    }
+  };
+
+  const openPayPoints = async (user: User) => {
+    setPayPointsUser(user);
+    setPayPointsAmount('');
+    setPayPointsError('');
+    setPayPointsSuccess('');
+    await fetchPayPointsData(user.id);
+  };
+
+  const fetchPayPointsData = async (userId: number) => {
+    setPayPointsLoading(true);
+    setPayPointsError('');
+    setPayPointsData(null);
+    try {
+      const start = '2025-01-01';
+      const end = new Date().toISOString().slice(0, 10);
+      const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
+      url.searchParams.set('userId', userId.toString());
+      url.searchParams.set('startDate', start);
+      url.searchParams.set('endDate', end);
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) {
+        setPayPointsError(data.error || 'Failed to load points data');
+      } else {
+        setPayPointsData(data);
+        if (data.users && data.users.length > 0) {
+          setPayPointsAmount(String(data.users[0].unpaidPoints || 0));
+        }
+      }
+    } catch (err) {
+      setPayPointsError('Network error');
+    } finally {
+      setPayPointsLoading(false);
+    }
+  };
+
+  const handlePayPointsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!payPointsUser) return;
+    const points = parseFloat(payPointsAmount);
+    if (isNaN(points) || points <= 0) {
+      setPayPointsError('Please enter a valid positive amount.');
+      return;
+    }
+    setPayPointsSubmitting(true);
+    setPayPointsError('');
+    setPayPointsSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${payPointsUser.id}/pay-points`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPayPointsError(data.error || 'Failed to submit payment');
+      } else {
+        setPayPointsSuccess('Payment confirmed successfully.');
+        await fetchPayPointsData(payPointsUser.id);
+      }
+    } catch (err) {
+      setPayPointsError('Network error');
+    } finally {
+      setPayPointsSubmitting(false);
     }
   };
 
@@ -1486,6 +1560,13 @@ const AdminPanel: React.FC = () => {
                         />
                         <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
                       </label>
+                      <button
+                        className="btn-icon"
+                        title="Pay points"
+                        onClick={() => openPayPoints(u)}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                      </button>
                       <button
                         className="btn-icon"
                         title="View test history"
@@ -3111,6 +3192,58 @@ const AdminPanel: React.FC = () => {
               </form>
               {passwordError && <p className="error-msg">{passwordError}</p>}
               {passwordSuccess && <p className="success-msg">{passwordSuccess}</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payPointsUser && (
+        <div className="modal-overlay" onClick={() => setPayPointsUser(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pay Points — {payPointsUser.username}</h3>
+              <button className="modal-close" onClick={() => setPayPointsUser(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {payPointsLoading ? (
+                <p>Loading points report...</p>
+              ) : payPointsData ? (
+                <div>
+                  <div style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Total Earned Points:</span>
+                      <strong>{payPointsData.users?.[0]?.pointsEarned || 0}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Total Paid Points:</span>
+                      <strong>{payPointsData.users?.[0]?.pointsPaid || 0}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--accent-color, #4f46e5)', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
+                      <span>Unpaid Points:</span>
+                      <strong>{payPointsData.users?.[0]?.unpaidPoints || 0}</strong>
+                    </div>
+                  </div>
+                  <form onSubmit={handlePayPointsSubmit} className="create-user-form" style={{ display: 'flex', gap: '1rem' }}>
+                    <input
+                      type="number"
+                      step="1"
+                      placeholder="Amount to pay"
+                      className="user-input"
+                      style={{ flex: 1 }}
+                      value={payPointsAmount}
+                      onChange={e => { setPayPointsAmount(e.target.value); setPayPointsError(''); setPayPointsSuccess(''); }}
+                      autoFocus
+                    />
+                    <button type="submit" className="btn" disabled={payPointsSubmitting || !payPointsAmount}>
+                      {payPointsSubmitting ? 'Confirming...' : 'Confirm Payment'}
+                    </button>
+                  </form>
+                  {payPointsError && <p className="error-msg">{payPointsError}</p>}
+                  {payPointsSuccess && <p className="success-msg">{payPointsSuccess}</p>}
+                </div>
+              ) : (
+                <p className="error-msg">{payPointsError}</p>
+              )}
             </div>
           </div>
         </div>
