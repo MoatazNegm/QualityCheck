@@ -792,11 +792,12 @@ const ReportsView: React.FC = () => {
                                         </tr>
                                         {isStepOpen && step.submissions && step.submissions.length > 0 && (
                                           <tr key={`${step.stepId}-details`}>
-                                            <td colSpan={4} style={{ padding: '0', background: 'transparent' }}>
+                                            <td colSpan={5} style={{ padding: '0', background: 'transparent' }}>
                                               <div style={{ padding: '0.5rem 1rem' }}>
                                                 <table className="report-steps-table" style={{ width: '100%' }}>
                                                   <thead>
                                                     <tr>
+                                                      <th>User</th>
                                                       <th>Round</th>
                                                       <th>Comment</th>
                                                       <th>Config File</th>
@@ -806,6 +807,7 @@ const ReportsView: React.FC = () => {
                                                   <tbody>
                                                     {step.submissions.map((sub: any, idx: number) => (
                                                       <tr key={idx} className="report-step-row-failed">
+                                                        <td><strong>{sub.userName || sub.username || sub.user_name || (sub.userId ? `User ${sub.userId}` : '—')}</strong></td>
                                                         <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                                         <td className="report-step-comment">{sub.comment || '—'}</td>
                                                         <td>

@@ -179,6 +179,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       nameToTestIdsMap[t.name].push(t.id);
     }
 
+    const allUsersRows = await usersDb.prepare('SELECT id, username FROM users').all();
+    const userNamesMap = Object.fromEntries(allUsersRows.map(u => [u.id, u.username]));
+
     const testSubMapRows = await testsDb.prepare(
       `SELECT test_id, COUNT(*) as submissions
        FROM points_log pl
@@ -198,6 +201,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
          s.test_id,
+         s.user_id,
+         u.username as user_name,
          s.step_id,
          ts.step_number,
          ts.description,
@@ -207,6 +212,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
          s.executed_at
        FROM test_submissions s
        JOIN test_steps ts ON ts.id = s.step_id
+       LEFT JOIN users u ON u.id = s.user_id
        WHERE s.user_id IN (${placeholders}) AND s.result = 'fail'
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
        ORDER BY s.test_id, ts.step_number, s.executed_at DESC`
@@ -215,10 +221,15 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const failedSubmissionsByTest = {};
     for (const row of failedSubmissions) {
       if (!failedSubmissionsByTest[row.test_id]) failedSubmissionsByTest[row.test_id] = [];
+      const resolvedName = row.user_name || userNamesMap[row.user_id] || (row.user_id ? ('user ' + row.user_id) : '—');
       failedSubmissionsByTest[row.test_id].push({
         stepId: row.step_id,
         stepNumber: row.step_number,
         description: row.description,
+        userId: row.user_id,
+        userName: resolvedName,
+        username: resolvedName,
+        user_name: resolvedName,
         comment: row.comment,
         configFilePath: row.config_file_path,
         roundId: row.round_id,
@@ -304,6 +315,10 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
           stepsMap[sub.stepId].rounds.push(sub.roundId);
         }
         stepsMap[sub.stepId].submissions.push({
+          userId: sub.userId,
+          userName: sub.userName,
+          username: sub.username,
+          user_name: sub.user_name,
           roundId: sub.roundId,
           comment: sub.comment,
           configFilePath: sub.configFilePath,
