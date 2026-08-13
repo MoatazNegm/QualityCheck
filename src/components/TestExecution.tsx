@@ -39,6 +39,7 @@ const TestExecution: React.FC = () => {
 
   const [monthEarned, setMonthEarned] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<UserWarning[]>([]);
+  const [isWarningsExpanded, setIsWarningsExpanded] = useState(false);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -260,15 +261,41 @@ const TestExecution: React.FC = () => {
     <div className='test-execution'>
       {warnings.length > 0 && (
         <div className='user-warnings-area'>
-          {warnings.map(w => (
-            <div key={w.id} className='warning-banner'>
-              <span className='warning-icon'>⚠️</span>
-              <div className='warning-content'>
-                <strong>Points Not Counted Notice</strong>
-                <p>{w.message}</p>
+          <div
+            className='warning-banner warning-banner-collapsible'
+            onClick={() => setIsWarningsExpanded(!isWarningsExpanded)}
+            style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                <span className='warning-icon'>⚠️</span>
+                <div className='warning-content'>
+                  <strong style={{ margin: 0, fontSize: '0.98rem' }}>Points Not Counted ({warnings.length})</strong>
+                  <p style={{ margin: 0, fontSize: '0.84rem', opacity: 0.85 }}>
+                    {isWarningsExpanded ? 'Click to collapse penalty details ▲' : 'Click to view non-counted step penalties ▼'}
+                  </p>
+                </div>
               </div>
+              <span className='btn btn-sm' style={{ fontSize: '0.8rem', padding: '0.2rem 0.6rem', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'inherit' }}>
+                {isWarningsExpanded ? 'Close ▲' : 'View Penalties ▼'}
+              </span>
             </div>
-          ))}
+
+            {isWarningsExpanded && (
+              <div style={{ marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', flexDirection: 'column', gap: '0.6rem', width: '100%' }} onClick={e => e.stopPropagation()}>
+                {warnings.map(w => (
+                  <div key={w.id} style={{ background: 'rgba(0, 0, 0, 0.25)', border: '1px solid rgba(239, 68, 68, 0.25)', padding: '0.65rem 0.85rem', borderRadius: '6px', fontSize: '0.88rem' }}>
+                    <p style={{ margin: '0 0 0.25rem 0', color: '#fef2f2', lineHeight: 1.4 }}>{w.message}</p>
+                    {w.created_at && (
+                      <span style={{ fontSize: '0.78rem', color: 'rgba(254, 242, 242, 0.65)' }}>
+                        Logged in Round {w.created_round} on {new Date(w.created_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

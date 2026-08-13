@@ -1,7 +1,8 @@
 # QualityCheck App Development Documentation
 
 ## Version History
-- **v1.0000108**: Styled and redesigned the Points Payments History report UI with metric summary cards, user badges, formatted timestamps, admin processor tracking, and responsive theme-matching tables.
+- **v1.0000112**: Grouped multiple non-counted point penalty alerts into a single, clickable, collapsible "Points Not Counted" card across the Dashboard, Test Execution screen, and Points Reports.
+- **v1.0000111**: Formatted and styled the Points Payments History report UI with summary cards, badges, and responsive tables.
 - **v1.0000107**: Fixed a UI issue where the "Points Payments History" tab button was omitted from the Reports View navigation bar.
 - **v1.0000106**: Fixed internal server error (500) during Points Payout caused by strict parameter typing in the Turso `@libsql/hrana-client` library (cast `req.params.id` and `req.user.id` to integers).
 - **v1.0000105**: Implemented Admin Paid Points feature. Added `point_payments` ledger table to record administrative point payouts per user. Integrated unpaid points tracking into `GET /api/reports/points`. Added a Pay Points modal to the Admin Panel's Users tab for paying out accumulated earned points. Added a new "Points Payments History" tab to the Reports View to query and display the historical ledger of points paid by administrators to users.

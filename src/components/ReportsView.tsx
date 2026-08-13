@@ -119,6 +119,10 @@ const ReportsView: React.FC = () => {
   const [pointsReportLoading, setPointsReportLoading] = useState(false);
   const [pointsReportData, setPointsReportData] = useState<any>(null);
   const [pointsReportError, setPointsReportError] = useState('');
+  const [expandedWarningUsers, setExpandedWarningUsers] = useState<Record<number, boolean>>({});
+  const toggleUserWarningsExpand = (userId: number) => {
+    setExpandedWarningUsers(prev => ({ ...prev, [userId]: !prev[userId] }));
+  };
 
   // --- Payments Report State ---
   const [paymentsReportUserIds, setPaymentsReportUserIds] = useState<number[]>([]);
@@ -1657,36 +1661,59 @@ const ReportsView: React.FC = () => {
                                   padding: '1rem 1.25rem'
                                 }}>
                                   {/* Point Penalty Warnings Section */}
-                                  {progress.warnings && progress.warnings.length > 0 && (
-                                    <div style={{
-                                      background: 'rgba(235, 130, 60, 0.08)',
-                                      borderLeft: '4px solid #ed8936',
-                                      borderRadius: '6px',
-                                      padding: '0.75rem 1rem',
-                                      marginBottom: '1rem',
-                                      fontSize: '0.88rem'
-                                    }}>
-                                      <strong style={{ color: '#ed8936', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-                                        <span>⚠️</span> Consecutive Failure Point Penalty Alerts ({progress.warnings.length})
-                                      </strong>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                        {progress.warnings.map((w: any) => (
-                                          <div key={w.id} style={{
-                                            background: 'rgba(0,0,0,0.18)',
-                                            border: '1px solid rgba(235, 130, 60, 0.25)',
-                                            padding: '0.5rem 0.75rem',
-                                            borderRadius: '4px',
-                                            color: 'var(--text-color, #e2e8f0)'
-                                          }}>
-                                            <p style={{ margin: '0 0 0.25rem 0', lineHeight: 1.4 }}>{w.message}</p>
-                                            <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                              Logged in Round {w.created_round} on {new Date(w.created_at).toLocaleString()}
-                                            </span>
+                                  {progress.warnings && progress.warnings.length > 0 && (() => {
+                                    const isWarningsOpen = !!expandedWarningUsers[u.userId];
+                                    return (
+                                      <div
+                                        style={{
+                                          background: 'rgba(235, 130, 60, 0.1)',
+                                          border: '1px solid rgba(235, 130, 60, 0.35)',
+                                          borderLeft: '4px solid #ed8936',
+                                          borderRadius: '6px',
+                                          padding: '0.75rem 1rem',
+                                          marginBottom: '1rem',
+                                          fontSize: '0.88rem',
+                                          cursor: 'pointer',
+                                          transition: 'background 0.15s ease'
+                                        }}
+                                        onClick={() => toggleUserWarningsExpand(u.userId)}
+                                      >
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+                                            <div>
+                                              <strong style={{ color: '#ed8936', fontSize: '0.92rem' }}>Points Not Counted ({progress.warnings.length})</strong>
+                                              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                                {isWarningsOpen ? 'Click to collapse penalty step details ▲' : 'Click to view non-counted step penalties ▼'}
+                                              </p>
+                                            </div>
                                           </div>
-                                        ))}
+                                          <span style={{ color: '#ed8936', fontSize: '0.8rem', fontWeight: 600, background: 'rgba(235, 130, 60, 0.18)', padding: '0.2rem 0.55rem', borderRadius: '4px' }}>
+                                            {isWarningsOpen ? 'Close ▲' : 'View Penalties ▼'}
+                                          </span>
+                                        </div>
+
+                                        {isWarningsOpen && (
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(235, 130, 60, 0.25)' }} onClick={e => e.stopPropagation()}>
+                                            {progress.warnings.map((w: any) => (
+                                              <div key={w.id} style={{
+                                                background: 'rgba(0, 0, 0, 0.25)',
+                                                border: '1px solid rgba(235, 130, 60, 0.25)',
+                                                padding: '0.55rem 0.8rem',
+                                                borderRadius: '5px',
+                                                color: 'var(--text-color, #e2e8f0)'
+                                              }}>
+                                                <p style={{ margin: '0 0 0.25rem 0', lineHeight: 1.4, fontSize: '0.88rem' }}>{w.message}</p>
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                                  Logged in Round {w.created_round} on {new Date(w.created_at).toLocaleString()}
+                                                </span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
-                                    </div>
-                                  )}
+                                    );
+                                  })()}
 
                                   {/* Active Test Banner */}
                                   {progress.activeTestId && (
