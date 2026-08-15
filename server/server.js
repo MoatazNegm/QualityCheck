@@ -14,8 +14,8 @@ const PORT = process.env.PORT || 4006;
 app.use(cors({ origin: true, credentials: true }));
 
 // Body Middleware
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // Serve static files. On Vercel uploads are written to /tmp (see utils/dataDir),
 // so the static route must read from the same place or freshly uploaded files

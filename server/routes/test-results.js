@@ -51,12 +51,27 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
   fileFilter: (req, file, cb) => {
     // Accept any file type for configuration files
     cb(null, true);
   }
 });
+
+const uploadConfigFile = (req, res, next) => {
+  upload.single('configFile')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ error: 'Uploaded configuration file exceeds the 100MB size limit.' });
+        }
+        return res.status(400).json({ error: `File upload error: ${err.message}` });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    next();
+  });
+};
 
 // Get next unattempted step for a user and test
 router.get('/user/:userId/test/:testId/next', async (req, res) => {
@@ -116,7 +131,7 @@ router.get('/user/:userId/test/:testId', async (req, res) => {
 });
 
 // Submit test result (userId from auth token)
-router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFile'), async (req, res) => {
+router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
     const userId = req.user.userId; // always from JWT — never trust client-supplied userId

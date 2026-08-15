@@ -202,7 +202,13 @@ const TestExecution: React.FC = () => {
         if (allDone) {
           await markComplete(testId!);
         }
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(errorData.error || 'Failed to submit step result. Please check the file size or parameters and try again.');
       }
+    } catch (err) {
+      console.error('Error submitting step:', err);
+      alert('Network or server error submitting step result. Please try again.');
     } finally {
       setSubmitting(false);
     }
