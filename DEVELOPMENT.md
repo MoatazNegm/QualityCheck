@@ -1,6 +1,7 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000113**: Fixed step failure test advancement. Server now auto-ends test and advances user loop state on hard-stop failure; frontend handles default hard stop ('stop') and detects hard-stopped test attempts upon load to redirect to dashboard immediately.
 - **v1.0000112**: Grouped multiple non-counted point penalty alerts into a single, clickable, collapsible "Points Not Counted" card across the Dashboard, Test Execution screen, and Points Reports.
 - **v1.0000111**: Formatted and styled the Points Payments History report UI with summary cards, badges, and responsive tables.
 - **v1.0000107**: Fixed a UI issue where the "Points Payments History" tab button was omitted from the Reports View navigation bar.

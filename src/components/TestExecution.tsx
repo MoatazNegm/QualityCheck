@@ -94,15 +94,28 @@ const TestExecution: React.FC = () => {
       }
 
       const doneIds = new Set<number>();
+      let hasHardStopFailure = false;
       if (resultsRes.ok) {
         const results = await resultsRes.json();
         results.forEach((r: any) => {
           if (r.round_id === currentRound) {
             doneIds.add(r.step_id);
+            if (r.result === 'fail') {
+              const matchedStep = allSteps.find(s => s.id === r.step_id);
+              if (!matchedStep || !matchedStep.on_failure || matchedStep.on_failure === 'stop') {
+                hasHardStopFailure = true;
+              }
+            }
           }
         });
       }
       setDoneStepIds(doneIds);
+
+      if (hasHardStopFailure) {
+        await endTest(testId!);
+        navigate('/dashboard');
+        return;
+      }
 
       const firstUnattempted = allSteps.findIndex(s => !doneIds.has(s.id));
       if (firstUnattempted === -1) {
@@ -174,13 +187,10 @@ const TestExecution: React.FC = () => {
         await fetchWarnings();
         await refreshUser();
 
-        if (data.autoEnded) {
-          navigate('/dashboard');
-          return;
-        }
-
-        if (result === 'fail' && step.on_failure === 'stop') {
-          await endTest(testId!);
+        if (data.autoEnded || (result === 'fail' && (!step.on_failure || step.on_failure === 'stop'))) {
+          if (!data.autoEnded) {
+            await endTest(testId!);
+          }
           navigate('/dashboard');
           return;
         }

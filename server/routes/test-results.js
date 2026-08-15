@@ -192,7 +192,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
     // across loop iterations (and for both pass and fail results). The loop's
     // current progress is tracked separately via the upserted test_results row.
     const stepRow = await testsDb.prepare(
-      'SELECT COALESCE(points, value, 0) AS pts, step_number, description FROM test_steps WHERE id = ?'
+      'SELECT COALESCE(points, value, 0) AS pts, step_number, description, on_failure FROM test_steps WHERE id = ?'
     ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
 
@@ -240,11 +240,17 @@ router.post('/:testId/steps/:stepId', authenticateToken, upload.single('configFi
       'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(userId, testId, stepId, pointsAwarded, currentVersionId, roundNo, nowIso);
 
-    // If the current version differs from the version this test was started under,
-    // auto-end the test and advance to the next one (new round for that test).
+    // Auto-end the test and advance the loop if:
+    // 1. A hard-stop failure is submitted (on_failure === 'stop' or default 'stop')
+    // 2. The current version differs from the version under which this test was started.
     let autoEnded = false;
+    const stepOnFailure = stepRow ? (stepRow.on_failure || 'stop') : 'stop';
+    const isHardStopFail = (result === 'fail' && stepOnFailure === 'stop');
+
     const loopState = await testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
-    if (loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId) {
+    const versionMismatch = loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId;
+
+    if (isHardStopFail || versionMismatch) {
       const assigned = await getAssignedTestsOrdered(userId);
       if (assigned.length > 0) {
         const idx = assigned.findIndex(t => t.id === parseInt(testId, 10));
