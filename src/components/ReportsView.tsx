@@ -287,6 +287,8 @@ const ReportsView: React.FC = () => {
     }
     setPointsReportData(null);
     setPointsReportError('');
+    setUserProgressCache({});
+    setExpandedPointsUser(null);
   };
 
   // User Report
@@ -464,6 +466,8 @@ const ReportsView: React.FC = () => {
     setPointsReportLoading(true);
     setPointsReportError('');
     setPointsReportData(null);
+    setUserProgressCache({});
+    setExpandedPointsUser(null);
     try {
       const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
       const targetUserIds = isFullAccess ? pointsReportUserIds : (user?.id ? [user.id] : []);
@@ -511,6 +515,7 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('startDate', pointsReportStartDate);
       url.searchParams.set('endDate', pointsReportEndDate);
       if (pointsReportVersionIds.length > 0) url.searchParams.set('versionIds', pointsReportVersionIds.join(','));
+      if (pointsReportTestIds.length > 0) url.searchParams.set('testId', pointsReportTestIds.join(','));
       const res = await fetch(url.toString(), { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
@@ -1413,6 +1418,8 @@ const ReportsView: React.FC = () => {
                             if (pointsReportUserIds.length === users.length) setPointsReportUserIds([]);
                             else setPointsReportUserIds(users.map(u => u.id));
                             setPointsReportData(null);
+                            setUserProgressCache({});
+                            setExpandedPointsUser(null);
                           }}
                         />
                         <strong>Select All Users</strong>
@@ -1431,6 +1438,8 @@ const ReportsView: React.FC = () => {
                               onChange={() => {
                                 setPointsReportUserIds(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id]);
                                 setPointsReportData(null);
+                                setUserProgressCache({});
+                                setExpandedPointsUser(null);
                               }}
                             />
                             {u.username}
@@ -1461,6 +1470,8 @@ const ReportsView: React.FC = () => {
                         onChange={() => {
                           setPointsReportTestIds([]);
                           setPointsReportData(null);
+                          setUserProgressCache({});
+                          setExpandedPointsUser(null);
                         }}
                       />
                       <strong>All Tests</strong>
@@ -1479,6 +1490,8 @@ const ReportsView: React.FC = () => {
                             onChange={() => {
                               setPointsReportTestIds(prev => prev.includes(t.id) ? prev.filter(id => id !== t.id) : [...prev, t.id]);
                               setPointsReportData(null);
+                              setUserProgressCache({});
+                              setExpandedPointsUser(null);
                             }}
                           />
                           {t.name}
@@ -1509,6 +1522,8 @@ const ReportsView: React.FC = () => {
                           if (pointsReportVersionIds.length === versions.length) setPointsReportVersionIds([]);
                           else setPointsReportVersionIds(versions.map(v => v.id));
                           setPointsReportData(null);
+                          setUserProgressCache({});
+                          setExpandedPointsUser(null);
                         }}
                       />
                       <strong>Select All</strong>
@@ -1527,6 +1542,8 @@ const ReportsView: React.FC = () => {
                             onChange={() => {
                               setPointsReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
                               setPointsReportData(null);
+                              setUserProgressCache({});
+                              setExpandedPointsUser(null);
                             }}
                           />
                           {v.name} {v.is_current ? '(current)' : ''}
@@ -1554,14 +1571,14 @@ const ReportsView: React.FC = () => {
                 type="date"
                 className="user-input"
                 value={pointsReportStartDate}
-                onChange={e => { setPointsReportStartDate(e.target.value); setPointsReportPreset('custom'); setPointsReportData(null); setPointsReportError(''); }}
+                onChange={e => { setPointsReportStartDate(e.target.value); setPointsReportPreset('custom'); setPointsReportData(null); setPointsReportError(''); setUserProgressCache({}); setExpandedPointsUser(null); }}
               />
               <span className="report-date-sep">to</span>
               <input
                 type="date"
                 className="user-input"
                 value={pointsReportEndDate}
-                onChange={e => { setPointsReportEndDate(e.target.value); setPointsReportPreset('custom'); setPointsReportData(null); setPointsReportError(''); }}
+                onChange={e => { setPointsReportEndDate(e.target.value); setPointsReportPreset('custom'); setPointsReportData(null); setPointsReportError(''); setUserProgressCache({}); setExpandedPointsUser(null); }}
               />
             </div>
 

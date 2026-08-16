@@ -245,9 +245,9 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
         warningCreated = `The points for Step ${curStepNum} (${curStepDesc}) in test '${curTestName}' are not counted due to the user seems he depended on the preceding Step ${prevStepNum} (${prevStepDesc}) in test '${prevTestName}'.`;
 
         await testsDb.prepare(`
-          INSERT INTO user_warnings (user_id, message, created_round, created_at)
-          VALUES (?, ?, ?, ?)
-        `).run(userId, warningCreated, roundNo, nowIso);
+          INSERT INTO user_warnings (user_id, message, created_round, version_id, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(userId, warningCreated, roundNo, currentVersionId, nowIso);
       }
     }
 

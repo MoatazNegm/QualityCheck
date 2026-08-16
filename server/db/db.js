@@ -312,6 +312,7 @@ async function initDB() {
       user_id INTEGER NOT NULL,
       message TEXT NOT NULL,
       created_round INTEGER NOT NULL,
+      version_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -410,6 +411,14 @@ async function runMigrations() {
       await clientWrapper.execute({ sql: 'ALTER TABLE points_log ADD COLUMN round_id INTEGER' });
       console.log('Migration: added round_id column to points_log');
     }
+    const uwCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_warnings)' })).rows;
+    if (!uwCols.some(c => c.name === 'version_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_warnings ADD COLUMN version_id INTEGER' });
+      console.log('Migration: added version_id column to user_warnings');
+    }
+
+    // Now safely create indexes on columns that may have just been migrated
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_version ON user_warnings(user_id, version_id, created_at)' });
 
     const cols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(test_steps)' })).rows;
     if (!cols.some(c => c.name === 'points')) {
