@@ -36,30 +36,43 @@ async function getMaxMonthlyTestRounds() {
   return row ? (parseInt(row.value, 10) || 8) : 8;
 }
 
-// Count distinct rounds for a specific test and user in the current calendar month
+// Count distinct rounds for a specific test and user in the current calendar month where at least half the steps were completed
 async function getTestMonthlyRounds(userId, testId) {
   const distinctRow = await testsDb.prepare(`
-    SELECT COUNT(DISTINCT r_id) AS c FROM (
-      SELECT round_id AS r_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
-      UNION
-      SELECT round_id AS r_id FROM test_results WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+    SELECT COUNT(*) AS c FROM (
+      SELECT r_id FROM (
+        SELECT round_id AS r_id, step_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+        UNION
+        SELECT round_id AS r_id, step_id FROM test_results WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+      )
+      GROUP BY r_id
+      HAVING (SELECT COUNT(*) FROM test_steps WHERE test_id = ?) > 0
+         AND COUNT(DISTINCT step_id) * 2 >= (SELECT COUNT(*) FROM test_steps WHERE test_id = ?)
     )
-  `).get(userId, testId, userId, testId);
+  `).get(userId, testId, userId, testId, testId, testId);
 
   return distinctRow ? (distinctRow.c || 0) : 0;
 }
 
 // Batch: get monthly rounds for multiple tests at once (eliminates N+1)
+// Only rounds where the user made at least half the steps are counted towards the limit.
 async function getBatchMonthlyRounds(userId, testIds) {
   if (testIds.length === 0) return {};
   const placeholders = testIds.map(() => '?').join(',');
   const rows = await testsDb.prepare(`
-    SELECT test_id, COUNT(DISTINCT r_id) AS c FROM (
-      SELECT test_id, round_id AS r_id FROM test_submissions WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
-      UNION
-      SELECT test_id, round_id AS r_id FROM test_results WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+    SELECT test_id, COUNT(*) AS c FROM (
+      SELECT u.test_id, u.r_id FROM (
+        SELECT test_id, round_id AS r_id, step_id FROM test_submissions WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+        UNION
+        SELECT test_id, round_id AS r_id, step_id FROM test_results WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
+      ) u
+      JOIN (
+        SELECT test_id, COUNT(*) AS total_steps FROM test_steps WHERE test_id IN (${placeholders}) GROUP BY test_id
+      ) s ON s.test_id = u.test_id
+      GROUP BY u.test_id, u.r_id
+      HAVING s.total_steps > 0 AND COUNT(DISTINCT u.step_id) * 2 >= s.total_steps
     ) GROUP BY test_id
-  `).all(userId, ...testIds, userId, ...testIds);
+  `).all(userId, ...testIds, userId, ...testIds, ...testIds);
   const map = {};
   for (const r of rows) map[r.test_id] = r.c || 0;
   return map;

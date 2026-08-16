@@ -73,19 +73,19 @@ const Dashboard: React.FC = () => {
           const vid = data.version ? data.version.id : null;
           if (vid !== currentVersionId) {
             setCurrentVersionId(vid);
-            const testsRes = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
-            if (testsRes.ok) {
-              const testsData = await testsRes.json();
-              setTests(testsData);
-              sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(testsData));
-              sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
-            }
           }
         }
+        const testsRes = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
+        if (testsRes.ok && mounted) {
+          const testsData = await testsRes.json();
+          setTests(testsData);
+          sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(testsData));
+          sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
+        }
       } catch (err) {
-        console.error('Failed to poll current version:', err);
+        console.error('Failed to poll current version and tests:', err);
       }
-    }, 30000); // Poll every 30s instead of 5s to reduce Turso row reads
+    }, 15000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, currentVersionId]);
