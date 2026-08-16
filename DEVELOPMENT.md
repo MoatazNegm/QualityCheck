@@ -1,6 +1,7 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000117**: Fixed a bug where tests that were already completed or hard-failed in the current round were not properly skipped by the active test loop. This auto-corrects the user's active test pointer and prevents an infinite loop that locked users out of running remaining tests when the monthly limit was increased.
 - **v1.0000116**: Minimum half-step qualification rule for monthly test rounds. Rounds where the user did not complete at least half the test's total steps are excluded from monthly round limits. Enabled immediate seamless continuation for users after an administrator increases the monthly test rounds limit.
 - **v1.0000115**: Strict version filtering across all reports, metrics, totals, warnings, and drill-down tables. Fixed user report fully-passed criteria, user progress drilldown scoping, and frontend cache invalidation on version/filter change.
 - **v1.0000114**: Increased multer configuration file upload size limit to 100MB and added graceful upload error middleware to prevent unhandled 500 errors on oversized file submissions. Added client-side error alerts in TestExecution.

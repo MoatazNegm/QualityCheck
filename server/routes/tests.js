@@ -78,16 +78,41 @@ async function getBatchMonthlyRounds(userId, testIds) {
   return map;
 }
 
-// Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests.
+// Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests, 
+// and automatically skipping tests that were already completed or hard-failed in the current round.
 async function getActiveTestId(userId) {
   const assigned = await getAssignedTestsOrdered(userId);
   if (assigned.length === 0) return null;
 
   const maxRounds = await getMaxMonthlyTestRounds();
   const testIds = assigned.map(t => t.id);
-  const monthlyRoundsMap = await getBatchMonthlyRounds(userId, testIds);
   
-  const availableAssigned = assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
+  const monthlyRoundsMap = await getBatchMonthlyRounds(userId, testIds);
+  const currentRound = await getRound(userId);
+  const completionMap = await getBatchCompletionCounts(userId, testIds, currentRound);
+  const stepCountsMap = await getBatchStepCounts(testIds);
+
+  const failRows = await testsDb.prepare(`
+    SELECT DISTINCT ts.test_id 
+    FROM test_results tr
+    JOIN test_steps ts ON tr.step_id = ts.id
+    WHERE tr.user_id = ? AND tr.round_id = ? AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
+  `).all(userId, currentRound);
+  
+  const hardStopMap = {};
+  for (const r of failRows) hardStopMap[r.test_id] = true;
+  
+  const availableAssigned = assigned.filter(t => {
+    // 1. Skip if they reached the monthly limit
+    if ((monthlyRoundsMap[t.id] || 0) >= maxRounds) return false;
+    // 2. Skip if they hard-failed this test in the current round
+    if (hardStopMap[t.id]) return false;
+    // 3. Skip if they fully completed this test in the current round
+    const isCompleted = stepCountsMap[t.id] > 0 && (completionMap[t.id] || 0) >= stepCountsMap[t.id];
+    if (isCompleted) return false;
+    return true;
+  });
+  
   if (availableAssigned.length === 0) return null;
 
   const currentVersionId = await getCurrentVersionId();
