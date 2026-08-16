@@ -113,7 +113,25 @@ async function getActiveTestId(userId) {
     return true;
   });
   
-  if (availableAssigned.length === 0) return null;
+  if (availableAssigned.length === 0) {
+    // Check if they are completely locked out due to monthly limits
+    const allTestsMonthlyLocked = assigned.every(t => (monthlyRoundsMap[t.id] || 0) >= maxRounds);
+    if (allTestsMonthlyLocked) {
+      return null; // Truly locked out for the month
+    }
+
+    // Otherwise, they finished or failed ALL tests in the CURRENT round, but the round was never bumped!
+    // (e.g. they closed the browser on the last test before it could auto-advance).
+    // We auto-bump the round for them and restart the loop!
+    await bumpRound(userId);
+    
+    const currentVersionId = await getCurrentVersionId();
+    const firstCandidate = assigned[0];
+    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
+      .run(userId, firstCandidate.id, currentVersionId);
+    
+    return firstCandidate.id;
+  }
 
   const currentVersionId = await getCurrentVersionId();
   const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
