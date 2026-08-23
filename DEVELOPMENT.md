@@ -1,6 +1,7 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000119**: Added "Failed Steps" report (`GET /api/reports/failed-report`) in Reports View, aggregating failed test steps ordered by fail count, filtered by users, tests, versions, and date range, with expandable failure details (user, round, comment, config file download, timestamp). Updated all report date presets to default to the current month instead of the last month. Styled the Failed Steps report with the User Reports theme (controls, summary cards, and clickable rows).
 - **v1.0000118**: Added auto-bump logic to the active test pointer. If a user finishes or fails all assigned tests in the current round (e.g. they close the browser on the last test before the frontend can auto-advance), the backend now automatically increments the round and restarts their loop to prevent them from getting permanently stuck.
 - **v1.0000117**: Fixed a bug where tests that were already completed or hard-failed in the current round were not properly skipped by the active test loop. This auto-corrects the user's active test pointer and prevents an infinite loop that locked users out of running remaining tests when the monthly limit was increased.
 - **v1.0000116**: Minimum half-step qualification rule for monthly test rounds. Rounds where the user did not complete at least half the test's total steps are excluded from monthly round limits. Enabled immediate seamless continuation for users after an administrator increases the monthly test rounds limit.
@@ -138,6 +139,7 @@ Each step carries a **points** value (`value` / `points` column in `test_steps`,
 - The version at the time of **reporting cross-test consecutive failure point penalty alerts in the Points Report** (`GET /api/reports/points` and `GET /api/reports/user-progress/:userId`), displaying summary alert counts, per-user warning badges (`⚠️ Alert`), and expandable penalty drill-down details for admins/developers, was **`1.0000103`**.
 - The version at the time of **adding User Name column to failed step submission details in User Reports** (added `userId` and `userName` fields to backend failed step submissions in `GET /api/reports/user-report` and updated the UI details table with a dedicated **User** column to clearly attribute each failed step attempt, comment, and attachment to its submitting user) was **`1.0000109`**.
 - The version at the time of **fixing User column username resolution in User Reports** (added `LEFT JOIN users` in SQL query and global `allUsers` map lookup fallback in `server/routes/reports.js` and added robust property fallbacks `sub.userName || sub.username || sub.user_name || User ID` in React components so the submitting user's name is guaranteed to populate in the details table) was **`1.0000110`**.
+- The version at the time of **adding the Failed Steps report** (`GET /api/reports/failed-report`) in Reports View, switching the default date preset across all reports to the current month, and matching the User Reports design theme was **`1.0000119`**.
 
 
 The **Reports** tab in the admin panel provides per-user (or multi-user aggregated) reports
