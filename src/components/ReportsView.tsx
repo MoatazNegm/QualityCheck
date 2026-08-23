@@ -247,7 +247,13 @@ const ReportsView: React.FC = () => {
   const fetchTests = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
-      if (res.ok) setTests(await res.json());
+      if (res.ok) {
+        const data: Test[] = await res.json();
+        setTests(data);
+        const allTestIds = data.map(t => t.id);
+        setPassedReportTestIds(allTestIds);
+        setFailedReportTestIds(allTestIds);
+      }
     } catch {
       // ignore
     }
@@ -263,6 +269,7 @@ const ReportsView: React.FC = () => {
         const allIds = testers.map(u => u.id);
         setReportUserIds(allIds);
         setPassedReportUserIds(allIds);
+        setFailedReportUserIds(allIds);
         setPointsReportUserIds(allIds);
         setPaymentsReportUserIds(allIds);
       }
@@ -303,6 +310,18 @@ const ReportsView: React.FC = () => {
     }
     setPassedReportData(null);
     setPassedReportError('');
+  };
+
+  const handleFailedPresetChange = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
+    setFailedReportPreset(preset);
+    if (preset !== 'custom') {
+      const dates = getDefaultReportDates(preset);
+      setFailedReportStartDate(dates.start);
+      setFailedReportEndDate(dates.end);
+    }
+    setFailedReportData(null);
+    setFailedReportError('');
+    setExpandedFailedStep(null);
   };
 
   const handlePointsPresetChange = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
@@ -1461,7 +1480,9 @@ const ReportsView: React.FC = () => {
         <>
           <h3>Failed Steps Report</h3>
           <p className="admin-hint">
-            View all failed steps, ordered by most failed, filtered by users, tests, versions, and date range.
+            {isFullAccess
+              ? 'View all failed steps, ordered by fail count, filtered by users, tests, versions, and date range.'
+              : 'View all failed steps from your submissions, filtered by tests, versions, and date range.'}
           </p>
 
           <div className="report-controls">
@@ -1473,7 +1494,7 @@ const ReportsView: React.FC = () => {
                     type="text"
                     className="user-input"
                     placeholder="Search users..."
-                    value={showFailedUserDropdown ? failedReportUserSearch : (failedReportUserIds.length > 0 ? (failedReportUserIds.length === users.length ? 'All Users' : failedReportUserIds.map(id => users.find(x => x.id === id)?.username).filter(Boolean).join(', ')) : 'All Users')}
+                    value={showFailedUserDropdown ? failedReportUserSearch : (failedReportUserIds.length > 0 ? (failedReportUserIds.length === users.length ? 'All Users' : failedReportUserIds.map(id => users.find(x => x.id === id)?.username).filter(Boolean).join(', ')) : failedReportUserSearch)}
                     onChange={e => setFailedReportUserSearch(e.target.value)}
                     onFocus={() => { setShowFailedUserDropdown(true); setFailedReportUserSearch(''); }}
                     onBlur={() => setTimeout(() => setShowFailedUserDropdown(false), 150)}
@@ -1522,7 +1543,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder="Search tests..."
-                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (failedReportTestIds.length === tests.length ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (failedReportTestIds.length === tests.length ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : failedReportTestSearch)}
                   onChange={e => setFailedReportTestSearch(e.target.value)}
                   onFocus={() => { setShowFailedTestDropdown(true); setFailedReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowFailedTestDropdown(false), 150)}
@@ -1569,14 +1590,26 @@ const ReportsView: React.FC = () => {
                 <input
                   type="text"
                   className="user-input"
-                  placeholder="Search versions..."
-                  value={showFailedVersionDropdown ? failedReportVersionSearch : (failedReportVersionIds.length > 0 ? failedReportVersionIds.map(id => versions.find(x => x.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                  placeholder={failedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                  value={showFailedVersionDropdown ? failedReportVersionSearch : (failedReportVersionIds.length > 0 ? failedReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
                   onChange={e => setFailedReportVersionSearch(e.target.value)}
-                  onFocus={() => { setShowFailedVersionDropdown(true); setFailedReportVersionSearch(''); }}
+                  onFocus={() => setShowFailedVersionDropdown(true)}
                   onBlur={() => setTimeout(() => setShowFailedVersionDropdown(false), 150)}
                 />
                 {showFailedVersionDropdown && (
                   <div className="searchable-dropdown">
+                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+                      <input
+                        type="checkbox"
+                        checked={failedReportVersionIds.length === versions.length && versions.length > 0}
+                        onChange={() => {
+                          if (failedReportVersionIds.length === versions.length) setFailedReportVersionIds([]);
+                          else setFailedReportVersionIds(versions.map(v => v.id));
+                          setFailedReportData(null);
+                        }}
+                      />
+                      <strong>Select All</strong>
+                    </label>
                     {versions
                       .filter(v => v.name.toLowerCase().includes(failedReportVersionSearch.toLowerCase()))
                       .map(v => (
@@ -1593,7 +1626,7 @@ const ReportsView: React.FC = () => {
                               setFailedReportData(null);
                             }}
                           />
-                          {v.name}
+                          {v.name} {v.is_current ? '(current)' : ''}
                         </label>
                       ))}
                   </div>
@@ -1601,118 +1634,143 @@ const ReportsView: React.FC = () => {
               </div>
             </div>
 
-            <div className="report-dates">
-              <label>Preset:</label>
-              <select
-                value={failedReportPreset}
-                onChange={e => {
-                  const preset = e.target.value as any;
-                  setFailedReportPreset(preset);
-                  if (preset !== 'custom') {
-                    const dates = getDefaultReportDates(preset);
-                    setFailedReportStartDate(dates.start);
-                    setFailedReportEndDate(dates.end);
-                  }
-                  setFailedReportData(null);
-                  setFailedReportError('');
-                }}
-              >
-                {(['current_month', 'last_month', 'current_year', 'last_year', 'custom'] as const).map(p => (
-                  <option key={p} value={p}>{p.replace('_', ' ')}</option>
-                ))}
-              </select>
+            <div className="report-presets">
+              {(['current_month', 'last_month', 'current_year', 'last_year', 'custom'] as const).map(p => (
+                <button
+                  key={p}
+                  className={`btn-secondary report-preset-btn ${failedReportPreset === p ? 'active' : ''}`}
+                  onClick={() => handleFailedPresetChange(p)}
+                >
+                  {p.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                </button>
+              ))}
+            </div>
 
-              <label>From:</label>
-              <input type="date" value={failedReportStartDate}
-                onChange={e => { setFailedReportStartDate(e.target.value); setFailedReportPreset('custom'); setFailedReportData(null); setFailedReportError(''); }}
+            <div className="report-dates">
+              <input
+                type="date"
+                className="user-input"
+                value={failedReportStartDate}
+                onChange={e => { setFailedReportStartDate(e.target.value); setFailedReportPreset('custom'); setFailedReportData(null); }}
               />
-              <label>To:</label>
-              <input type="date" value={failedReportEndDate}
-                onChange={e => { setFailedReportEndDate(e.target.value); setFailedReportPreset('custom'); setFailedReportData(null); setFailedReportError(''); }}
+              <span className="report-date-sep">to</span>
+              <input
+                type="date"
+                className="user-input"
+                value={failedReportEndDate}
+                onChange={e => { setFailedReportEndDate(e.target.value); setFailedReportPreset('custom'); setFailedReportData(null); }}
               />
             </div>
 
-            <button className="btn" onClick={fetchFailedReport} disabled={failedReportLoading || (isFullAccess && failedReportUserIds.length === 0) || !failedReportStartDate || !failedReportEndDate}>
-              {failedReportLoading ? 'Generating...' : 'Generate Failed Steps Report'}
+            <button
+              className="btn"
+              onClick={fetchFailedReport}
+              disabled={failedReportLoading || (isFullAccess && failedReportUserIds.length === 0) || !failedReportStartDate || !failedReportEndDate}
+            >
+              {failedReportLoading ? 'Generating...' : 'Generate Report'}
             </button>
           </div>
 
-          {failedReportError && <p className="error">{failedReportError}</p>}
+          {failedReportError && <p className="error-msg">{failedReportError}</p>}
 
-          {failedReportData && failedReportData.steps && (
+          {failedReportData && (
             <div className="report-results">
-              <h4>Failed Steps List ({failedReportStartDate} to {failedReportEndDate})</h4>
-              {failedReportData.steps.length === 0 ? (
-                <p>No failed steps found in this period.</p>
+              <h4>
+                Failed Steps ({failedReportData.startDate} — {failedReportData.endDate})
+              </h4>
+
+              <div className="report-summary">
+                <div className="report-summary-card">
+                  <span className="report-summary-value">
+                    {failedReportData.steps ? failedReportData.steps.reduce((sum: number, s: any) => sum + s.failCount, 0) : 0}
+                  </span>
+                  <span className="report-summary-label">Total Failures</span>
+                </div>
+                <div className="report-summary-card">
+                  <span className="report-summary-value">{failedReportData.steps ? failedReportData.steps.length : 0}</span>
+                  <span className="report-summary-label">Failed Steps</span>
+                </div>
+              </div>
+
+              {(!failedReportData.steps || failedReportData.steps.length === 0) ? (
+                <p className="admin-hint">No failed steps in this period.</p>
               ) : (
-                <div className="table-responsive">
-                  <table className="report-table">
+                <div className="report-test-row">
+                  <table className="report-steps-table">
                     <thead>
                       <tr>
                         <th>Test</th>
-                        <th>Step #</th>
+                        <th>Step</th>
                         <th>Description</th>
-                        <th>Fail Count</th>
-                        <th>Actions</th>
+                        <th>Fails</th>
+                        <th style={{ width: '40px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {failedReportData.steps.map((step: any) => (
-                        <React.Fragment key={step.stepId}>
-                          <tr>
-                            <td>{step.testName}</td>
-                            <td>{step.stepNumber}</td>
-                            <td>{step.description}</td>
-                            <td><strong>{step.failCount}</strong></td>
-                            <td>
-                              <button 
-                                className="btn-small" 
-                                onClick={() => setExpandedFailedStep(expandedFailedStep === step.stepId ? null : step.stepId)}
-                              >
-                                {expandedFailedStep === step.stepId ? 'Hide Failures' : 'View Failures'}
-                              </button>
-                            </td>
-                          </tr>
-                          {expandedFailedStep === step.stepId && (
-                            <tr>
-                              <td colSpan={5} style={{ backgroundColor: '#f9f9f9', padding: '10px 20px' }}>
-                                <h5>Failures Details</h5>
-                                <table className="report-table" style={{ marginTop: '10px' }}>
-                                  <thead>
-                                    <tr>
-                                      <th>Time</th>
-                                      <th>User</th>
-                                      <th>Comment</th>
-                                      <th>Download</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {step.failures.map((f: any, idx: number) => (
-                                      <tr key={idx}>
-                                        <td>{new Date(f.executedAt).toLocaleString()}</td>
-                                        <td>{f.userName}</td>
-                                        <td>{f.comment || '-'}</td>
-                                        <td>
-                                          {f.configFilePath ? (
-                                            <a
-                                              className="report-file-link"
-                                              href={`${API_BASE}${f.configFilePath}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                            >
-                                              Download
-                                            </a>
-                                          ) : '-'}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                      {failedReportData.steps.map((step: any) => {
+                        const isExpanded = expandedFailedStep === step.stepId;
+                        return (
+                          <React.Fragment key={step.stepId}>
+                            <tr
+                              className="report-step-row-failed"
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => setExpandedFailedStep(isExpanded ? null : step.stepId)}
+                            >
+                              <td><strong>{step.testName}</strong></td>
+                              <td className="step-num-cell">{step.stepNumber}</td>
+                              <td>{step.description}</td>
+                              <td>
+                                <span className="status-badge status-fail">{step.failCount}</span>
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
                               </td>
                             </tr>
-                          )}
-                        </React.Fragment>
-                      ))}
+                            {isExpanded && step.failures && step.failures.length > 0 && (
+                              <tr key={`${step.stepId}-details`}>
+                                <td colSpan={5} style={{ padding: '0', background: 'transparent' }}>
+                                  <div style={{ padding: '0.5rem 1rem' }}>
+                                    <table className="report-steps-table" style={{ width: '100%' }}>
+                                      <thead>
+                                        <tr>
+                                          <th>User</th>
+                                          <th>Round</th>
+                                          <th>Comment</th>
+                                          <th>Config File</th>
+                                          <th>Time</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {step.failures.map((f: any, idx: number) => (
+                                          <tr key={idx} className="report-step-row-failed">
+                                            <td><strong>{f.userName || '—'}</strong></td>
+                                            <td>{f.roundId != null ? `R${f.roundId}` : '—'}</td>
+                                            <td className="report-step-comment">{f.comment || '—'}</td>
+                                            <td>
+                                              {f.configFilePath ? (
+                                                <a
+                                                  className="report-file-link"
+                                                  href={`${API_BASE}${f.configFilePath}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  download
+                                                >
+                                                  Download
+                                                </a>
+                                              ) : '—'}
+                                            </td>
+                                            <td>{f.executedAt ? new Date(f.executedAt).toLocaleString() : '—'}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
