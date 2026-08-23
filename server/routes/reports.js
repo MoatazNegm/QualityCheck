@@ -1002,4 +1002,114 @@ router.get('/points-payments', authenticateToken, requireReportAccess, async (re
   }
 });
 
+// Get failed steps report
+router.get('/failed-report', authenticateToken, requireReportAccess, async (req, res) => {
+  try {
+    const userIdsRaw = req.query.userId;
+    const testIdsRaw = req.query.testId;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    const versionIdsRaw = req.query.versionIds;
+    const versionIds = versionIdsRaw
+      ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+      : [];
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = startDate + ' 00:00:00';
+    const end = endDate + ' 23:59:59';
+
+    let userIds = [];
+    if (req.reportScope === 'self') {
+      userIds = [req.selfUserId];
+    } else if (userIdsRaw && userIdsRaw !== 'all') {
+      userIds = String(userIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    let testIds = [];
+    if (testIdsRaw && testIdsRaw !== 'all') {
+      testIds = String(testIdsRaw)
+        .split(',')
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    const userFilter = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
+    const testFilter = testIds.length > 0 ? ' AND s.test_id IN (' + testIds.map(() => '?').join(',') + ') ' : ' ';
+    const versionFilter = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
+
+    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
+    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+
+    const testsRows = await testsDb.prepare('SELECT id, name FROM tests').all();
+    const testNames = Object.fromEntries(testsRows.map(t => [t.id, t.name]));
+
+    const failedSubmissions = await testsDb.prepare(
+      `SELECT 
+         s.test_id,
+         s.user_id,
+         s.step_id,
+         ts.step_number,
+         ts.description,
+         s.comment,
+         s.config_file_path,
+         s.round_id,
+         s.executed_at
+       FROM test_submissions s
+       JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.result = 'fail'
+         AND s.executed_at >= ? AND s.executed_at <= ? 
+         ${versionFilter} ${testFilter} ${userFilter}
+       ORDER BY s.executed_at DESC`
+    ).all(
+      start, 
+      end, 
+      ...versionIds, 
+      ...testIds, 
+      ...userIds
+    );
+
+    const stepsMap = {};
+    for (const row of failedSubmissions) {
+      if (!stepsMap[row.step_id]) {
+        stepsMap[row.step_id] = {
+          stepId: row.step_id,
+          testId: row.test_id,
+          testName: testNames[row.test_id] || ('Test ' + row.test_id),
+          stepNumber: row.step_number,
+          description: row.description,
+          failCount: 0,
+          failures: []
+        };
+      }
+      stepsMap[row.step_id].failCount++;
+      stepsMap[row.step_id].failures.push({
+        userId: row.user_id,
+        userName: userNames[row.user_id] || ('User ' + row.user_id),
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executedAt: row.executed_at
+      });
+    }
+
+    const steps = Object.values(stepsMap).sort((a, b) => b.failCount - a.failCount);
+
+    res.json({
+      startDate,
+      endDate,
+      versionIds: versionIds.length > 0 ? versionIds : null,
+      steps
+    });
+  } catch (error) {
+    console.error('Failed report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
