@@ -108,7 +108,7 @@ const AdminPanel: React.FC = () => {
   const [versionMessage, setVersionMessage] = useState('');
   const [versionError, setVersionError] = useState('');
   const [reportUserIds, setReportUserIds] = useState<number[]>([]);
-  const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
   const [reportVersionIds, setReportVersionIds] = useState<number[]>([]);
@@ -122,7 +122,7 @@ const AdminPanel: React.FC = () => {
   const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
   const [expandedReportSteps, setExpandedReportSteps] = useState<Set<string>>(new Set());
   const [testReportTestIds, setTestReportTestIds] = useState<number[]>([]);
-  const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
   const [testReportStartDate, setTestReportStartDate] = useState('');
   const [testReportEndDate, setTestReportEndDate] = useState('');
   const [testReportVersionIds, setTestReportVersionIds] = useState<number[]>([]);
@@ -151,7 +151,7 @@ const AdminPanel: React.FC = () => {
   const [showStepDropdown, setShowStepDropdown] = useState(false);
   const testReportInitialMount = useRef(true);
   const [passedReportTestIds, setPassedReportTestIds] = useState<number[]>([]);
-  const [passedReportPreset, setPassedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('last_month');
+  const [passedReportPreset, setPassedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
   const [passedReportStartDate, setPassedReportStartDate] = useState('');
   const [passedReportEndDate, setPassedReportEndDate] = useState('');
   const [passedReportVersionIds, setPassedReportVersionIds] = useState<number[]>([]);
@@ -194,14 +194,15 @@ const AdminPanel: React.FC = () => {
     fetchUsers();
     fetchVersions();
     fetchSettings();
-    const dates = getDefaultReportDates('last_month');
+    const dates = getDefaultReportDates('current_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
     setTestReportStartDate(dates.start);
     setTestReportEndDate(dates.end);
-    const pointsDates = getDefaultReportDates('current_month');
-    setPointsStartDate(pointsDates.start);
-    setPointsEndDate(pointsDates.end);
+    setPassedReportStartDate(dates.start);
+    setPassedReportEndDate(dates.end);
+    setPointsStartDate(dates.start);
+    setPointsEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -386,38 +387,42 @@ const AdminPanel: React.FC = () => {
 
   const getDefaultReportDates = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
     const now = new Date();
-    const start = new Date();
-    const end = new Date();
+    let start: Date;
+    let end: Date;
 
     switch (preset) {
       case 'current_month':
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         break;
       case 'last_month':
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
-        start.setMonth(start.getMonth() - 1);
-        end.setDate(0);
-        end.setHours(23, 59, 59, 999);
+        start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        end = new Date(now.getFullYear(), now.getMonth(), 0);
         break;
       case 'current_year':
-        start.setMonth(0, 1);
-        start.setHours(0, 0, 0, 0);
+        start = new Date(now.getFullYear(), 0, 1);
+        end = new Date(now.getFullYear(), 11, 31);
         break;
       case 'last_year':
-        start.setFullYear(now.getFullYear() - 1, 0, 1);
-        start.setHours(0, 0, 0, 0);
-        end.setFullYear(now.getFullYear() - 1, 11, 31);
-        end.setHours(23, 59, 59, 999);
+        start = new Date(now.getFullYear() - 1, 0, 1);
+        end = new Date(now.getFullYear() - 1, 11, 31);
         break;
       default:
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         break;
     }
 
+    const formatLocalDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
     return {
-      start: start.toISOString().slice(0, 10),
-      end: end.toISOString().slice(0, 10)
+      start: formatLocalDate(start),
+      end: formatLocalDate(end)
     };
   };
 

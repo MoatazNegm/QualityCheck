@@ -60,7 +60,7 @@ router.get('/monthly/:userId', async (req, res) => {
       JOIN tests t ON tr.test_id = t.id
       JOIN test_steps ts ON tr.step_id = ts.id
       WHERE tr.user_id = ?
-        AND tr.executed_at >= datetime('now', 'start of month')
+        AND strftime('%Y-%m', tr.executed_at) = strftime('%Y-%m', 'now')
       GROUP BY tr.test_id
     `).all(userId);
     
@@ -73,39 +73,41 @@ router.get('/monthly/:userId', async (req, res) => {
 
 function getDateRange(preset) {
   const now = new Date();
-  const start = new Date();
-  const end = new Date();
+  let start, end;
 
   switch (preset) {
     case 'current_month':
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
       break;
-    case 'last_month': {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      start.setMonth(start.getMonth() - 1);
-      end.setDate(0);
-      end.setHours(23, 59, 59, 999);
+    case 'last_month':
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
       break;
-    }
     case 'current_year':
-      start.setMonth(0, 1);
-      start.setHours(0, 0, 0, 0);
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getFullYear(), 11, 31);
       break;
     case 'last_year':
-      start.setFullYear(now.getFullYear() - 1, 0, 1);
-      start.setHours(0, 0, 0, 0);
-      end.setFullYear(now.getFullYear() - 1, 11, 31);
-      end.setHours(23, 59, 59, 999);
+      start = new Date(now.getFullYear() - 1, 0, 1);
+      end = new Date(now.getFullYear() - 1, 11, 31);
       break;
     default:
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
       break;
   }
 
+  const formatLocalDate = (d) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10)
+    start: formatLocalDate(start),
+    end: formatLocalDate(end)
   };
 }
 
@@ -147,8 +149,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       return res.status(404).json({ error: 'No valid users found' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     const versionFilter = versionIds.length > 0 ? ' AND pl.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
     const versionFilterSub = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
@@ -374,8 +376,8 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     let userIds = [];
     if (req.reportScope === 'self') {
@@ -512,8 +514,8 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     let testIds = [];
     let tests;
@@ -644,8 +646,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     let userIds = [];
     if (req.reportScope === 'self') {
@@ -796,8 +798,8 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     // Fetch user info
     const userRow = await usersDb.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
@@ -1018,8 +1020,8 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = startDate + ' 00:00:00';
-    const end = endDate + ' 23:59:59';
+    const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
+    const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
     let userIds = [];
     if (req.reportScope === 'self') {
