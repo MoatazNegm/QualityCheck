@@ -5,6 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
+const driveService = require('../googleDrive/driveService');
 
 async function getAssignedTestsOrdered(userId) {
   return await testsDb.prepare(`
@@ -141,9 +142,42 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       return res.status(400).json({ error: 'Result must be pass or fail' });
     }
 
+    const nowIso = new Date().toISOString();
     let configFilePath = null;
     if (req.file) {
       configFilePath = `/uploads/${req.file.filename}`;
+      let dropboxFileId = null;
+      try {
+        const isDropboxActive = await require('../dropbox/dropboxService').isDropboxConfigured();
+        if (isDropboxActive) {
+          try {
+            const fileBuffer = require('fs').readFileSync(req.file.path);
+            dropboxFileId = await require('../dropbox/dropboxService').uploadFileToDropbox(
+              fileBuffer,
+              req.file.filename,
+              req.file.mimetype || 'application/octet-stream'
+            );
+            console.log(`[Upload] Uploaded ${req.file.filename} to Dropbox (ID: ${dropboxFileId})`);
+          } catch (dropboxErr) {
+            console.error('[Upload] Dropbox upload failed, falling back to local/DB storage:', dropboxErr);
+          }
+        }
+
+        const origName = req.file.originalname || req.file.filename;
+        const mimeType = req.file.mimetype || 'application/octet-stream';
+        let base64Data = null;
+        if (!dropboxFileId) {
+          const fileBuffer = require('fs').readFileSync(req.file.path);
+          base64Data = fileBuffer.toString('base64');
+        }
+
+        await testsDb.prepare(`
+          INSERT OR REPLACE INTO uploaded_files (filename, original_name, mime_type, file_size, dropbox_file_id, file_data, uploaded_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(req.file.filename, origName, mimeType, req.file.size, dropboxFileId, base64Data, nowIso);
+      } catch (uploadSaveErr) {
+        console.error('Failed to save upload record:', uploadSaveErr);
+      }
     }
 
     // The version the user is currently running. Every submission is tagged with
@@ -153,7 +187,6 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
 
     // The unique loop-round this submission belongs to (per user cycle).
     const roundNo = await getRound(userId);
-    const nowIso = new Date().toISOString();
 
     // Query preceding failed step submission before inserting the new submission
     const prevFailed = await testsDb.prepare(`
@@ -177,10 +210,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, nowIso);
 
     // Upsert: keep exactly ONE result row per (user, test, step) so the loop/next-step
-    // logic and the per-step current view work. Capture the previously saved file so
-    // we can delete it from disk once the new upload replaces it — this guarantees a
-    // later-round re-failure points at a brand-new, distinct file and we never confuse
-    // it with an older submission. The full history lives in test_submissions.
+    // logic and the per-step current view work. The full history lives in test_submissions.
     const prevResult = await testsDb.prepare(
       'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
     ).get(userId, testId, stepId);
@@ -193,15 +223,6 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo, nowIso);
-
-    // Remove the now-orphaned previous upload for this step (it can no longer be
-    // referenced, so leaving it would only create stale/confusing duplicates).
-    if (prevResult && prevResult.config_file_path && prevResult.config_file_path !== configFilePath) {
-      const oldAbs = path.join(uploadDir, path.basename(prevResult.config_file_path));
-      if (fs.existsSync(oldAbs)) {
-        try { fs.unlinkSync(oldAbs); } catch (e) { console.error('Failed to delete old upload', oldAbs, e); }
-      }
-    }
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -324,14 +345,6 @@ router.delete('/:testId/steps/:stepId', authenticateToken, async (req, res) => {
     await testsDb.prepare(
       'DELETE FROM points_log WHERE user_id = ? AND test_id = ? AND step_id = ? AND round_id = ?'
     ).run(userId, testId, stepId, roundNo);
-
-    // Clean up uploaded file from disk if it exists
-    if (prevResult && prevResult.config_file_path) {
-      const oldAbs = path.join(uploadDir, path.basename(prevResult.config_file_path));
-      if (fs.existsSync(oldAbs)) {
-        try { fs.unlinkSync(oldAbs); } catch (e) { console.error('Failed to delete upload file on revert:', oldAbs, e); }
-      }
-    }
 
     res.json({ message: 'Step result and points reverted successfully' });
   } catch (error) {

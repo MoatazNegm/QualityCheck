@@ -82,6 +82,14 @@ const AdminPanel: React.FC = () => {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSuccess, setSettingsSuccess] = useState('');
   const [settingsError, setSettingsError] = useState('');
+  // Dropbox Storage Settings State
+  const [dropboxEnabled, setDropboxEnabled] = useState<boolean>(false);
+  const [dropboxAppKey, setDropboxAppKey] = useState<string>('');
+  const [dropboxAppSecret, setDropboxAppSecret] = useState<string>('');
+  const [dropboxFolderPath, setDropboxFolderPath] = useState<string>('/QualityCheck_Uploads');
+  const [dropboxIsConfigured, setDropboxIsConfigured] = useState<boolean>(false);
+  const [dropboxTesting, setDropboxTesting] = useState<boolean>(false);
+  const [dropboxTestResult, setDropboxTestResult] = useState<{ success: boolean; message: string; accountName?: string } | null>(null);
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [historyResults, setHistoryResults] = useState<TestResult[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1280,11 +1288,95 @@ const AdminPanel: React.FC = () => {
         if (maxRoundsSetting && maxRoundsSetting.value) {
           setMaxMonthlyRounds(maxRoundsSetting.value);
         }
+
+        // Dropbox Settings
+        const dbEnabled = data['dropbox_enabled'];
+        if (dbEnabled) {
+          setDropboxEnabled(dbEnabled.value === 'true');
+        }
+        const dbAppKey = data['dropbox_app_key'];
+        if (dbAppKey && dbAppKey.value) {
+          setDropboxAppKey(dbAppKey.value);
+        }
+        const dbAppSecret = data['dropbox_app_secret'];
+        if (dbAppSecret) {
+          setDropboxIsConfigured(Boolean(dbAppSecret.isConfigured));
+          setDropboxAppSecret(dbAppSecret.isConfigured ? '●●●●●●●●' : '');
+        }
+        const dbFolder = data['dropbox_folder_path'];
+        if (dbFolder && dbFolder.value) {
+          setDropboxFolderPath(dbFolder.value);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch settings:', err);
     } finally {
       setSettingsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const code = searchParams.get('code');
+    if (code) {
+      const handleAuth = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/settings/dropbox-auth`, {
+            method: 'POST',
+            headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code, redirectUri: window.location.origin + '/admin' })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setSettingsSuccess('Dropbox authorized successfully!');
+            fetchSettings();
+          } else {
+            setSettingsError(data.error || 'Failed to authorize Dropbox');
+          }
+        } catch (err) {
+          setSettingsError('Network error authorizing Dropbox');
+        } finally {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      };
+      handleAuth();
+    }
+  }, [token]);
+
+  const handleTestDropbox = async () => {
+    setDropboxTesting(true);
+    setDropboxTestResult(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/settings/test-dropbox`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: dropboxFolderPath.trim(),
+          appKey: dropboxAppKey.trim(),
+          appSecret: dropboxAppSecret.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDropboxTestResult({
+          success: true,
+          message: data.message || `Successfully connected to Dropbox folder!`,
+          accountName: data.accountName
+        });
+      } else {
+        setDropboxTestResult({
+          success: false,
+          message: data.error || 'Failed to connect to Dropbox'
+        });
+      }
+    } catch (err: any) {
+      setDropboxTestResult({
+        success: false,
+        message: err.message || 'Network error while testing Dropbox connection'
+      });
+    } finally {
+      setDropboxTesting(false);
     }
   };
 
@@ -1311,7 +1403,7 @@ const AdminPanel: React.FC = () => {
     const sec = Math.round(min * 60);
 
     try {
-      // Update consecutive failure threshold setting
+      // 1. Update consecutive failure threshold setting
       const res1 = await fetch(`${API_BASE}/api/settings`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
@@ -1321,7 +1413,7 @@ const AdminPanel: React.FC = () => {
         })
       });
 
-      // Update max monthly test rounds setting
+      // 2. Update max monthly test rounds setting
       const res2 = await fetch(`${API_BASE}/api/settings`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
@@ -1331,10 +1423,63 @@ const AdminPanel: React.FC = () => {
         })
       });
 
-      if (!res1.ok || !res2.ok) {
+      // 3. Update Dropbox enabled flag
+      const res3 = await fetch(`${API_BASE}/api/settings`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'dropbox_enabled',
+          value: dropboxEnabled ? 'true' : 'false'
+        })
+      });
+
+      // 4. Update Dropbox folder path
+      const res4 = await fetch(`${API_BASE}/api/settings`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'dropbox_folder_path',
+          value: dropboxFolderPath.trim()
+        })
+      });
+
+      // 5. Update Dropbox App Key
+      let res5Ok = true;
+      if (dropboxAppKey.trim()) {
+        const res5 = await fetch(`${API_BASE}/api/settings`, {
+          method: 'PUT',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: 'dropbox_app_key',
+            value: dropboxAppKey.trim()
+          })
+        });
+        if (!res5.ok) res5Ok = false;
+      }
+
+      // 6. Update Dropbox App Secret
+      let res6Ok = true;
+      if (dropboxAppSecret.trim() && dropboxAppSecret !== '●●●●●●●●') {
+        const res6 = await fetch(`${API_BASE}/api/settings`, {
+          method: 'PUT',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: 'dropbox_app_secret',
+            value: dropboxAppSecret.trim()
+          })
+        });
+        if (res6.ok) {
+          setDropboxIsConfigured(true);
+          setDropboxAppSecret('●●●●●●●●');
+        } else {
+          res6Ok = false;
+        }
+      }
+
+      if (!res1.ok || !res2.ok || !res3.ok || !res4.ok || !res5Ok || !res6Ok) {
         setSettingsError('Failed to save one or more settings');
       } else {
-        setSettingsSuccess(`Settings successfully updated! Consecutive failure window: ${min} minute(s), Max monthly rounds: ${rounds} rounds/month.`);
+        setSettingsSuccess(`Settings successfully updated! Failure window: ${min}m, Max rounds: ${rounds}/mo, Dropbox Storage: ${dropboxEnabled ? 'Enabled' : 'Disabled'}.`);
       }
     } catch (err) {
       console.error('Save settings error:', err);
@@ -2068,7 +2213,7 @@ const AdminPanel: React.FC = () => {
                                                                    rel="noopener noreferrer"
                                                                    download
                                                                  >
-                                                                   Download
+                                                                   📥 Download
                                                                  </a>
                                                                ) : (
                                                                  '—'
@@ -2450,7 +2595,7 @@ const AdminPanel: React.FC = () => {
                                                   rel="noopener noreferrer"
                                                   download
                                                 >
-                                                  Download
+                                                  📥 Download
                                                 </a>
                                               ) : (
                                                 '—'
@@ -2815,7 +2960,7 @@ const AdminPanel: React.FC = () => {
                                                   rel="noopener noreferrer"
                                                   download
                                                 >
-                                                  Download
+                                                  📥 Download
                                                 </a>
                                               ) : (
                                                 '—'
@@ -3419,6 +3564,244 @@ const AdminPanel: React.FC = () => {
                     </div>
                   </div>
 
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
+                  {/* Dropbox Storage Configuration */}
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>📦</span> Dropbox Attachment Storage
+                      </h4>
+                      <span
+                        style={{
+                          background: dropboxEnabled ? 'rgba(72, 187, 120, 0.15)' : 'rgba(160, 174, 192, 0.15)',
+                          color: dropboxEnabled ? '#48bb78' : 'var(--text-muted, #a0aec0)',
+                          border: `1px solid ${dropboxEnabled ? 'rgba(72, 187, 120, 0.3)' : 'rgba(160, 174, 192, 0.3)'}`,
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '12px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        {dropboxEnabled ? '● Enabled' : '○ Disabled'}
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        background: 'rgba(66, 153, 225, 0.08)',
+                        borderLeft: '4px solid #4299e1',
+                        borderRadius: '6px',
+                        padding: '1rem 1.1rem',
+                        marginBottom: '1.25rem',
+                        fontSize: '0.92rem',
+                        lineHeight: '1.5'
+                      }}
+                    >
+                      <strong style={{ color: '#4299e1', display: 'block', marginBottom: '0.4rem' }}>
+                        💡 Direct Dropbox Storage Architecture
+                      </strong>
+                      <p style={{ margin: 0 }}>
+                        When enabled, all user uploaded attachments (ZIP files, PDFs, etc.) are automatically stored directly in your Dropbox account under the designated folder path. The database will only store file metadata, saving database bandwidth and cost.
+                      </p>
+                    </div>
+
+                    <div style={{ marginBottom: '1.25rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={dropboxEnabled}
+                          onChange={e => setDropboxEnabled(e.target.checked)}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
+                        <span>Enable Dropbox Storage for Uploaded Files</span>
+                      </label>
+                    </div>
+
+                    {dropboxEnabled && (
+                      <div
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid var(--border-color, #2d3748)',
+                          borderRadius: '8px',
+                          padding: '1.25rem',
+                          marginTop: '1rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '1.25rem'
+                        }}
+                      >
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox Target Folder Path <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder="/QualityCheck_Uploads"
+                            value={dropboxFolderPath}
+                            onChange={e => setDropboxFolderPath(e.target.value)}
+                            required={dropboxEnabled}
+                          />
+                          <small style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                            Target folder in Dropbox (must start with a slash <code>/</code>). Files will be saved inside this directory.
+                          </small>
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox App Key (Client ID) <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder="Enter Dropbox App Key"
+                            value={dropboxAppKey}
+                            onChange={e => setDropboxAppKey(e.target.value)}
+                            required={dropboxEnabled}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox App Secret (Client Secret) <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="password"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder={dropboxIsConfigured ? 'App Secret configured (●●●●●●●●). Enter new to replace.' : 'Enter Dropbox App Secret'}
+                            value={dropboxAppSecret}
+                            onChange={e => setDropboxAppSecret(e.target.value)}
+                            required={dropboxEnabled && !dropboxIsConfigured}
+                          />
+                        </div>
+
+                        <div style={{
+                          background: 'rgba(0, 97, 254, 0.08)',
+                          border: '1px solid rgba(0, 97, 254, 0.3)',
+                          borderRadius: '6px',
+                          padding: '0.9rem 1rem',
+                          fontSize: '0.88rem'
+                        }}>
+                          <div style={{ fontWeight: 600, color: '#60a5fa', marginBottom: '0.4rem' }}>
+                            📋 Required Dropbox App Console Configuration:
+                          </div>
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            1. In <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent, #63b3ed)', textDecoration: 'underline' }}>Dropbox App Console</a>, create an app with <strong>Scoped access</strong> and <strong>Full Dropbox</strong> access.
+                          </div>
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            2. In the <strong>Permissions</strong> tab, check: <code>files.content.write</code> and <code>files.content.read</code>.
+                          </div>
+                          <div style={{ marginBottom: '0.25rem' }}>
+                            3. In the <strong>Settings</strong> tab under <strong>OAuth 2 → Redirect URIs</strong>, add this exact URL:
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
+                            <code style={{ background: 'rgba(0,0,0,0.3)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.85rem', color: '#90cdf4', flex: 1, wordBreak: 'break-all' }}>
+                              {window.location.origin}/admin
+                            </code>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                              onClick={() => {
+                                navigator.clipboard.writeText(`${window.location.origin}/admin`);
+                                alert(`Copied to clipboard: ${window.location.origin}/admin`);
+                              }}
+                            >
+                              📋 Copy URI
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ background: '#0061FE', borderColor: '#0061FE' }}
+                            onClick={async () => {
+                              if (!dropboxAppKey.trim()) {
+                                alert('Please enter your Dropbox App Key first.');
+                                return;
+                              }
+                              if (!dropboxIsConfigured && (!dropboxAppSecret.trim() || dropboxAppSecret === '●●●●●●●●')) {
+                                alert('Please enter your Dropbox App Secret first.');
+                                return;
+                              }
+
+                              // Auto-save settings before redirecting so key and secret are stored
+                              try {
+                                await fetch(`${API_BASE}/api/settings`, {
+                                  method: 'PUT',
+                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ key: 'dropbox_enabled', value: 'true' })
+                                });
+                                await fetch(`${API_BASE}/api/settings`, {
+                                  method: 'PUT',
+                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ key: 'dropbox_folder_path', value: dropboxFolderPath.trim() || '/QualityCheck_Uploads' })
+                                });
+                                await fetch(`${API_BASE}/api/settings`, {
+                                  method: 'PUT',
+                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ key: 'dropbox_app_key', value: dropboxAppKey.trim() })
+                                });
+                                if (dropboxAppSecret.trim() && dropboxAppSecret !== '●●●●●●●●') {
+                                  await fetch(`${API_BASE}/api/settings`, {
+                                    method: 'PUT',
+                                    headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ key: 'dropbox_app_secret', value: dropboxAppSecret.trim() })
+                                  });
+                                }
+                              } catch (e) {
+                                console.warn('Could not pre-save settings before redirect', e);
+                              }
+
+                              const redirectUri = encodeURIComponent(`${window.location.origin}/admin`);
+                              window.location.href = `https://www.dropbox.com/oauth2/authorize?client_id=${encodeURIComponent(dropboxAppKey.trim())}&response_type=code&token_access_type=offline&redirect_uri=${redirectUri}`;
+                            }}
+                          >
+                            🔗 Connect & Authorize with Dropbox
+                          </button>
+
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={handleTestDropbox}
+                            disabled={dropboxTesting || !dropboxFolderPath.trim()}
+                          >
+                            {dropboxTesting ? '🔄 Testing...' : '🔌 Test Connection'}
+                          </button>
+                        </div>
+
+                        {dropboxTestResult && (
+                          <div
+                            style={{
+                              padding: '0.75rem 1rem',
+                              borderRadius: '6px',
+                              fontSize: '0.9rem',
+                              background: dropboxTestResult.success ? 'rgba(72, 187, 120, 0.12)' : 'rgba(229, 62, 62, 0.12)',
+                              border: `1px solid ${dropboxTestResult.success ? '#48bb78' : '#e53e3e'}`,
+                              color: dropboxTestResult.success ? '#48bb78' : '#feb2b2'
+                            }}
+                          >
+                            {dropboxTestResult.success ? '✅ ' : '❌ '}
+                            {dropboxTestResult.message}
+                            {dropboxTestResult.accountName && (
+                              <div style={{ marginTop: '0.25rem', fontSize: '0.85rem' }}>
+                                Account: <strong>{dropboxTestResult.accountName}</strong>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
                   {settingsError && <p className="error-msg" style={{ marginBottom: '1rem' }}>{settingsError}</p>}
                   {settingsSuccess && (
                     <p className="success-msg" style={{ color: '#48bb78', marginBottom: '1rem', fontWeight: 500 }}>
@@ -3429,7 +3812,7 @@ const AdminPanel: React.FC = () => {
                   <button type="submit" className="btn" disabled={settingsSaving}>
                     {settingsSaving ? 'Saving...' : 'Save Settings'}
                   </button>
-                </form>
+                  </form>
               </div>
             </div>
           )}

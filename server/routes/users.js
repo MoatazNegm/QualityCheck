@@ -270,7 +270,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
     ], 'write');
 
-    // Remove the user's uploaded files from disk.
+    // Remove the user's uploaded files from disk and database.
     let deletedFiles = 0;
     for (const fileName of filesToDelete) {
       const absPath = path.join(uploadDir, fileName);
@@ -279,8 +279,13 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
           fs.unlinkSync(absPath);
           deletedFiles++;
         } catch (e) {
-          console.error('Failed to delete upload file', fileName, e);
+          console.error('Failed to delete upload file from disk', fileName, e);
         }
+      }
+      try {
+        await testsDb.prepare('DELETE FROM uploaded_files WHERE filename = ?').run(fileName);
+      } catch (e) {
+        console.error('Failed to delete upload file from DB', fileName, e);
       }
     }
 

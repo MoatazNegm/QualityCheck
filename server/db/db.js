@@ -1,5 +1,31 @@
 const path = require('path');
+const fs = require('fs');
 const { dataDir } = require('../utils/dataDir');
+
+function getMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    '.zip': 'application/zip',
+    '.rar': 'application/vnd.rar',
+    '.7z': 'application/x-7z-compressed',
+    '.tar': 'application/x-tar',
+    '.gz': 'application/gzip',
+    '.pdf': 'application/pdf',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc': 'application/msword',
+    '.txt': 'text/plain',
+    '.csv': 'text/csv',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.bin': 'application/octet-stream'
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
 
 // Initialize database modes.
 // If process.env.TURSO_DATABASE_URL is set, connect to the remote Turso DB.
@@ -329,6 +355,16 @@ async function initDB() {
       admin_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS uploaded_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      filename TEXT UNIQUE NOT NULL,
+      original_name TEXT,
+      mime_type TEXT,
+      file_size INTEGER,
+      drive_file_id TEXT,
+      file_data TEXT,
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `.split(';')
    .map(s => s.trim())
@@ -349,7 +385,8 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_test_steps_test ON test_steps(test_id)',
     'CREATE INDEX IF NOT EXISTS idx_test_assignments_user ON test_assignments(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_created ON user_warnings(user_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_point_payments_user ON point_payments(user_id)'
+    'CREATE INDEX IF NOT EXISTS idx_point_payments_user ON point_payments(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_uploaded_files_filename ON uploaded_files(filename)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }
@@ -472,6 +509,91 @@ async function runMigrations() {
         sql: "INSERT INTO settings (key, value, description) VALUES ('max_monthly_test_rounds', '8', 'Maximum test rounds per month allowed per test per user (default 8 rounds)')"
       });
       console.log('Seeded default max_monthly_test_rounds setting (8 rounds)');
+    }
+
+    // Ensure uploaded_files table and indexes exist
+    await clientWrapper.execute({
+      sql: `CREATE TABLE IF NOT EXISTS uploaded_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT UNIQUE NOT NULL,
+        original_name TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        drive_file_id TEXT,
+        file_data TEXT,
+        uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+    });
+    await clientWrapper.execute({
+      sql: 'CREATE INDEX IF NOT EXISTS idx_uploaded_files_filename ON uploaded_files(filename)'
+    });
+
+    const ufCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(uploaded_files)' })).rows;
+    if (!ufCols.some(c => c.name === 'dropbox_file_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE uploaded_files ADD COLUMN dropbox_file_id TEXT' });
+      console.log('[Database] Added dropbox_file_id column to uploaded_files');
+    }
+
+    await clientWrapper.execute({
+      sql: 'CREATE INDEX IF NOT EXISTS idx_uploaded_files_dropbox_id ON uploaded_files(dropbox_file_id)'
+    });
+
+    const defaultSettings = [
+      { key: 'dropbox_enabled', value: 'false' },
+      { key: 'dropbox_app_key', value: '' },
+      { key: 'dropbox_app_secret', value: '' },
+      { key: 'dropbox_refresh_token', value: '' },
+      { key: 'dropbox_folder_path', value: '/QualityCheck_Uploads' }
+    ];
+
+    for (const setting of defaultSettings) {
+      const existing = await clientWrapper.execute({
+        sql: 'SELECT 1 FROM settings WHERE key = ? LIMIT 1',
+        args: [setting.key]
+      });
+      if (existing.rows.length === 0) {
+        await clientWrapper.execute({
+          sql: 'INSERT INTO settings (key, value) VALUES (?, ?)',
+          args: [setting.key, setting.value]
+        });
+        console.log(`[Database] Seeded default ${setting.key} setting (${setting.value})`);
+      }
+    }
+
+    // Backfill any existing files from uploads directory into uploaded_files table
+    const uploadDir = path.join(dataDir, 'uploads');
+    if (fs.existsSync(uploadDir)) {
+      try {
+        const diskFiles = fs.readdirSync(uploadDir);
+        for (const fileName of diskFiles) {
+          if (fileName.startsWith('configFile-') || fileName.endsWith('.zip') || fileName.endsWith('.pdf') || fileName.endsWith('.xlsx') || fileName.endsWith('.csv') || fileName.endsWith('.docx') || fileName.endsWith('.jpg') || fileName.endsWith('.png')) {
+            try {
+              const exists = await clientWrapper.execute({
+                sql: 'SELECT 1 FROM uploaded_files WHERE filename = ? LIMIT 1',
+                args: [fileName]
+              });
+              if (exists.rows.length === 0) {
+                const absPath = path.join(uploadDir, fileName);
+                const stat = fs.statSync(absPath);
+                if (stat.isFile()) {
+                  const buf = fs.readFileSync(absPath);
+                  const b64 = buf.toString('base64');
+                  await clientWrapper.execute({
+                    sql: `INSERT OR IGNORE INTO uploaded_files (filename, original_name, mime_type, file_size, file_data, uploaded_at)
+                          VALUES (?, ?, ?, ?, ?, ?)`,
+                    args: [fileName, fileName, getMimeType(fileName), buf.length, b64, stat.mtime.toISOString()]
+                  });
+                  console.log(`[Database] Backfilled upload file into uploaded_files table: ${fileName}`);
+                }
+              }
+            } catch (fileErr) {
+              console.warn(`[Database] Failed to backfill file ${fileName}:`, fileErr.message);
+            }
+          }
+        }
+      } catch (dirErr) {
+        console.warn('[Database] Failed to read uploads directory for backfill:', dirErr.message);
+      }
     }
 
     console.log('[Database] Schema initialization and migrations completed successfully.');

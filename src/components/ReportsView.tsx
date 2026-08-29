@@ -923,7 +923,7 @@ const ReportsView: React.FC = () => {
                                                               rel="noopener noreferrer"
                                                               download
                                                             >
-                                                              Download
+                                                              📥 Download
                                                             </a>
                                                           ) : '—'}
                                                         </td>
@@ -1196,7 +1196,7 @@ const ReportsView: React.FC = () => {
                                             rel="noopener noreferrer"
                                             download
                                           >
-                                            Download
+                                            📥 Download
                                           </a>
                                         ) : '—'}
                                       </td>
@@ -1455,7 +1455,7 @@ const ReportsView: React.FC = () => {
                                             rel="noopener noreferrer"
                                             download
                                           >
-                                            Download
+                                            📥 Download
                                           </a>
                                         ) : '—'}
                                       </td>
@@ -1759,7 +1759,7 @@ const ReportsView: React.FC = () => {
                                                   rel="noopener noreferrer"
                                                   download
                                                 >
-                                                  Download
+                                                  📥 Download
                                                 </a>
                                               ) : '—'}
                                             </td>

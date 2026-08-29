@@ -53,9 +53,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+      } else {
+        localStorage.removeItem('token');
+        setToken(null);
+        setUser(null);
       }
     } catch (error) {
       console.error('Token validation failed:', error);
+      localStorage.removeItem('token');
+      setToken(null);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }
@@ -70,6 +77,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+      } else {
+        localStorage.removeItem('token');
+        setToken(null);
+        setUser(null);
       }
     } catch (error) {
       console.error('Failed to refresh user:', error);
@@ -80,11 +91,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username: username.trim(), password })
     });
 
     if (!response.ok) {
-      throw new Error('Login failed');
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || 'Invalid username or password');
     }
 
     const data = await response.json();

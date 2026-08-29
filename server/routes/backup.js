@@ -36,6 +36,15 @@ async function collectReferencedFiles() {
     if (fs.existsSync(absPath)) {
       const data = fs.readFileSync(absPath);
       files.push({ path: config_file_path, data: data.toString('base64') });
+    } else {
+      try {
+        const dbRow = await testsDb.prepare('SELECT file_data FROM uploaded_files WHERE filename = ?').get(fileName);
+        if (dbRow && dbRow.file_data) {
+          files.push({ path: config_file_path, data: dbRow.file_data });
+        }
+      } catch (err) {
+        console.warn('Failed to query DB for backup file:', fileName, err);
+      }
     }
   }
   return files;
@@ -272,7 +281,16 @@ async function applyBackup(backup, res) {
         fs.writeFileSync(absPath, Buffer.from(f.data, 'base64'));
         restoredFiles.push(fileName);
       } catch (e) {
-        console.error('Failed to restore upload file', fileName, e);
+        console.error('Failed to restore upload file to disk', fileName, e);
+      }
+      try {
+        const buf = Buffer.from(f.data, 'base64');
+        await testsDb.prepare(`
+          INSERT OR REPLACE INTO uploaded_files (filename, original_name, mime_type, file_size, file_data, uploaded_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(fileName, fileName, 'application/octet-stream', buf.length, f.data, new Date().toISOString());
+      } catch (e) {
+        console.error('Failed to restore upload file to DB', fileName, e);
       }
     }
 
