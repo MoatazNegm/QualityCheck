@@ -1,6 +1,6 @@
 {
   "name": "qualitycheck-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "dependencies": {
     "@libsql/client": "^0.17.4",
@@ -17,6 +17,7 @@
     "better-sqlite3": "^12.11.1",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",
+    "dropbox": "^10.46.0",
     "express": "^5.2.1",
     "googleapis": "^133.0.0",
     "jsonwebtoken": "^9.0.3",
