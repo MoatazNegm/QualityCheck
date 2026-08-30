@@ -8,7 +8,6 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') }); // Explicitly load 
 
 const { dataDir } = require('./utils/dataDir');
 const { testsDb } = require('./db/db');
-const driveService = require('./googleDrive/driveService');
 
 const app = express();
 const PORT = process.env.PORT || 4006;

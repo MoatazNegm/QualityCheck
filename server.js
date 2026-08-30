@@ -21,7 +21,6 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 const { dataDir } = require('./server/utils/dataDir');
 const { testsDb } = require('./server/db/db');
-const driveService = require('./server/googleDrive/driveService');
 
 function getMimeType(filename) {
   const ext = path.extname(filename).toLowerCase();
