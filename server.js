@@ -105,14 +105,6 @@ app.get('/uploads/:filename', async (req, res) => {
         const dropboxStream = await dropboxService.downloadFileStreamFromDropbox(dbRow.dropbox_file_id);
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Disposition', `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(originalName)}`);
-        
-        // Cache to local disk asynchronously for fast subsequent reads
-        try {
-          if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-          const writeCache = fs.createWriteStream(absPath);
-          dropboxStream.pipe(writeCache);
-        } catch (_) { /* ignore cache write error */ }
-
         return dropboxStream.pipe(res);
       } catch (dropboxErr) {
         console.error('[Dropbox] Failed to stream file from Dropbox:', dropboxErr);
