@@ -1341,6 +1341,7 @@ const AdminPanel: React.FC = () => {
       };
       handleAuth();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const handleTestDropbox = async () => {
