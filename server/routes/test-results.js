@@ -174,6 +174,15 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
           INSERT OR REPLACE INTO uploaded_files (filename, original_name, mime_type, file_size, dropbox_file_id, file_data, uploaded_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(req.file.filename, origName, mimeType, req.file.size, dropboxFileId, base64Data, nowIso);
+
+        // If stored in Dropbox, delete the temporary file from disk immediately
+        if (dropboxFileId && fs.existsSync(req.file.path)) {
+          try {
+            fs.unlinkSync(req.file.path);
+          } catch (unlinkErr) {
+            console.warn('[Upload] Failed to clean up temp local file:', unlinkErr.message);
+          }
+        }
       } catch (uploadSaveErr) {
         console.error('Failed to save upload record:', uploadSaveErr);
       }
