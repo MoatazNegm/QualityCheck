@@ -1,6 +1,8 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000131**: Added Last-Step Completion Recognition in Reports:
+  - **Period-Boundary Pass Resolution**: Updated `GET /api/reports/passed-report` and `GET /api/reports/user-report` to count a test as completely passed in the reporting period when the user passed the final step of the test within that period and all prior test steps were completed, even if earlier steps were executed outside the date window.
 - **v1.0000130**: Enhanced Passed Steps Completely Passed Calculation:
   - **Comprehensive Multi-Level Pass Resolution**: Updated `GET /api/reports/passed-report` to compute completely passed counts via both per-round distinct passed step evaluation and per-user distinct step completion (`Math.max(roundPasses, userPasses)`), guaranteeing that any test where all steps have been passed is accurately reported as completely passed regardless of round boundaries or attempt history.
 - **v1.0000129**: Fixed Completely Passed counter logic and version filtering in Passed Steps report:

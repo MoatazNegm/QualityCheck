@@ -267,6 +267,36 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       }
     }
 
+    // Also check users who completed the last step of the test within the reporting period
+    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps ORDER BY test_id, step_number').all();
+    const lastStepByTest = {};
+    for (const step of allStepsRows) {
+      lastStepByTest[step.test_id] = step.id;
+    }
+
+    const lastStepSubmissions = await testsDb.prepare(
+      `SELECT s.test_id, s.user_id, s.step_id, s.executed_at
+       FROM test_submissions s
+       WHERE s.user_id IN (${placeholders}) AND s.result = 'pass'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}`
+    ).all(...userIds, start, end, ...versionIds);
+
+    for (const sub of lastStepSubmissions) {
+      if (lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]) {
+        const needed = stepCountsMap[sub.test_id] || 0;
+        const distinctPassed = await testsDb.prepare(
+          `SELECT COUNT(DISTINCT step_id) as count
+           FROM test_submissions
+           WHERE test_id = ? AND user_id = ? AND result = 'pass' AND executed_at <= ?`
+        ).get(sub.test_id, sub.user_id, sub.executed_at);
+
+        if (needed > 0 && (distinctPassed?.count || 0) >= needed) {
+          if (!usersFullyPassedByTest[sub.test_id]) usersFullyPassedByTest[sub.test_id] = new Set();
+          usersFullyPassedByTest[sub.test_id].add(sub.user_id);
+        }
+      }
+    }
+
     const tests = uniqueTests.map(uniqueTest => {
       const testIds = nameToTestIdsMap[uniqueTest.name] || [uniqueTest.id];
       
@@ -690,9 +720,14 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     const stepFilterSub = stepId ? ' AND s.step_id = ? ' : ' ';
     const userFilterSub = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
-    // Step counts per test to evaluate complete pass criteria
-    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps GROUP BY test_id').all();
-    const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
+    // Step counts and last step ID per test to evaluate complete pass criteria
+    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps ORDER BY test_id, step_number').all();
+    const stepCountsMap = {};
+    const lastStepByTest = {};
+    for (const step of allStepsRows) {
+      stepCountsMap[step.test_id] = (stepCountsMap[step.test_id] || 0) + 1;
+      lastStepByTest[step.test_id] = step.id;
+    }
 
     const testStatsRows = await testsDb.prepare(
       `SELECT s.test_id, COUNT(DISTINCT s.user_id || '-' || s.round_id) as rounds,
@@ -704,7 +739,31 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
-    // Distinct passed steps per (user, round) for each test to determine completely passed test executions
+    // 1. Count completions where the user finished (passed) the last step of the test within the reporting period
+    const lastStepSubmissions = await testsDb.prepare(
+      `SELECT s.test_id, s.user_id, s.step_id, s.round_id, s.executed_at
+       FROM test_submissions s
+       WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}`
+    ).all(...testIds, start, end, ...versionIds, ...(userIds.length > 0 ? userIds : []));
+
+    const lastStepCompletionsByTest = {};
+    for (const sub of lastStepSubmissions) {
+      if (lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]) {
+        const needed = stepCountsMap[sub.test_id] || 0;
+        const distinctPassed = await testsDb.prepare(
+          `SELECT COUNT(DISTINCT step_id) as count
+           FROM test_submissions
+           WHERE test_id = ? AND user_id = ? AND result = 'pass' AND executed_at <= ?`
+        ).get(sub.test_id, sub.user_id, sub.executed_at);
+
+        if (needed > 0 && (distinctPassed?.count || 0) >= needed) {
+          lastStepCompletionsByTest[sub.test_id] = (lastStepCompletionsByTest[sub.test_id] || 0) + 1;
+        }
+      }
+    }
+
+    // 2. Distinct passed steps per (user, round) for each test within reporting period
     const roundPassedRows = await testsDb.prepare(
       `SELECT s.test_id, s.user_id, s.round_id, COUNT(DISTINCT s.step_id) as passed_steps
        FROM test_submissions s
@@ -721,7 +780,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       }
     }
 
-    // Distinct passed steps per user for each test (as fallback in case steps were submitted across rounds)
+    // 3. Distinct passed steps per user for each test within reporting period
     const userPassedRows = await testsDb.prepare(
       `SELECT s.test_id, s.user_id, COUNT(DISTINCT s.step_id) as passed_steps
        FROM test_submissions s
@@ -802,9 +861,10 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
 
     const testsReport = tests.map(test => {
       const stats = testStats[test.id] || { passes: 0, fails: 0, rounds: 0 };
+      const lastStepPasses = lastStepCompletionsByTest[test.id] || 0;
       const roundPasses = completelyPassedRoundsByTest[test.id] || 0;
       const userPasses = userPassedCountByTest[test.id] || 0;
-      const completelyPassed = Math.max(roundPasses, userPasses);
+      const completelyPassed = Math.max(lastStepPasses, roundPasses, userPasses);
       const testSubs = submissionsByTest[test.id] || [];
       const passedUsersMap = passedUsersByTest[test.id] || {};
       const passedUsers = Object.values(passedUsersMap);
