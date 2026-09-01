@@ -98,6 +98,7 @@ const ReportsView: React.FC = () => {
   const [passedReportLoading, setPassedReportLoading] = useState(false);
   const [passedReportData, setPassedReportData] = useState<any>(null);
   const [passedReportError, setPassedReportError] = useState('');
+  const [expandedPassedTests, setExpandedPassedTests] = useState<Set<number>>(new Set());
 
   // --- Failed Steps Report State ---
   const [failedReportUserIds, setFailedReportUserIds] = useState<number[]>([]);
@@ -385,6 +386,15 @@ const ReportsView: React.FC = () => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  };
+
+  const togglePassedTestExpand = (testId: number) => {
+    setExpandedPassedTests(prev => {
+      const next = new Set(prev);
+      if (next.has(testId)) next.delete(testId);
+      else next.add(testId);
       return next;
     });
   };
@@ -1414,34 +1424,87 @@ const ReportsView: React.FC = () => {
           {passedReportData && (
             <div className="report-results">
               <h4>Passed Steps ({passedReportData.startDate} — {passedReportData.endDate})</h4>
-              {passedReportData.tests.length === 0 ? (
-                <p className="admin-hint">No passed step submissions with comments or files found.</p>
+
+              <div className="report-summary">
+                <div className="report-summary-card">
+                  <span className="report-summary-value">
+                    {passedReportData.totalCompletelyPassedRounds ?? (
+                      (passedReportData.tests || []).reduce((sum: number, t: any) => sum + (t.completelyPassedRounds || 0), 0)
+                    )}
+                  </span>
+                  <span className="report-summary-label">Completely Passed Rounds</span>
+                </div>
+                <div className="report-summary-card">
+                  <span className="report-summary-value">
+                    {passedReportData.totalRounds ?? (
+                      (passedReportData.tests || []).reduce((sum: number, t: any) => sum + (t.rounds || 0), 0)
+                    )}
+                  </span>
+                  <span className="report-summary-label">Total Execution Rounds</span>
+                </div>
+                <div className="report-summary-card">
+                  <span className="report-summary-value">
+                    {passedReportData.totalPassedWithDetails ?? (
+                      (passedReportData.tests || []).reduce((sum: number, t: any) => sum + ((t.submissions || []).length), 0)
+                    )}
+                  </span>
+                  <span className="report-summary-label">Steps with Comments / Files</span>
+                </div>
+              </div>
+
+              {(!passedReportData.tests || passedReportData.tests.length === 0) ? (
+                <p className="admin-hint">No test activity found in this period.</p>
               ) : (
                 <div className="report-tests-list">
-                  {passedReportData.tests.map((test: any) => (
-                    <div key={test.testId} className="report-test-row">
-                      <div className="report-test-header">
-                        <span className="report-test-name">{test.testName}</span>
-                      </div>
-                      {test.passedUsers && test.passedUsers.length > 0 && (
-                        <div className="report-test-body">
-                          {test.passedUsers.map((pu: any) => (
-                            <div key={pu.userId} style={{ marginBottom: '1rem' }}>
-                              {isFullAccess && <h5>{pu.userName}</h5>}
+                  {passedReportData.tests.map((test: any) => {
+                    const isOpen = expandedPassedTests.has(test.testId);
+                    const submissions = test.submissions || [];
+                    return (
+                      <div key={test.testId} className="report-test-row">
+                        <div className="report-test-header" onClick={() => togglePassedTestExpand(test.testId)}>
+                          <span className="report-test-name">{test.testName}</span>
+                          <span className="report-test-stats">
+                            <span className="report-stat">{test.rounds} rounds</span>
+                            <span className="report-stat report-stat-pass">
+                              {test.completelyPassedRounds || 0} completely passed
+                            </span>
+                            <span className="report-stat report-stat-pass">{test.passes} passed</span>
+                            {test.fails > 0 && (
+                              <span className="report-stat report-stat-fail">{test.fails} failed</span>
+                            )}
+                          </span>
+                          {test.completelyPassedRounds > 0 && test.completelyPassedRounds === test.rounds && (
+                            <span className="status-badge status-pass">FULLY PASSED</span>
+                          )}
+                          <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
+                        </div>
+                        {isOpen && (
+                          <div className="report-test-body">
+                            {submissions.length === 0 ? (
+                              <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>
+                                No passed steps with comments or attachments in this period.
+                              </p>
+                            ) : (
                               <table className="report-steps-table">
                                 <thead>
                                   <tr>
+                                    <th>User</th>
                                     <th>Step</th>
                                     <th>Description</th>
                                     <th>Round</th>
                                     <th>Comment</th>
                                     <th>Config File</th>
-                                    <th>Executed At</th>
+                                    <th>Date & Time</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {pu.submissions.map((sub: any, idx: number) => (
-                                    <tr key={idx}>
+                                  {submissions.map((sub: any, idx: number) => (
+                                    <tr key={idx} className="report-step-row-passed">
+                                      <td>
+                                        <strong>
+                                          {sub.userName || sub.username || sub.user_name || (sub.userId ? `User ${sub.userId}` : '—')}
+                                        </strong>
+                                      </td>
                                       <td className="step-num-cell">{sub.stepNumber}</td>
                                       <td>{sub.description}</td>
                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
@@ -1464,12 +1527,12 @@ const ReportsView: React.FC = () => {
                                   ))}
                                 </tbody>
                               </table>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

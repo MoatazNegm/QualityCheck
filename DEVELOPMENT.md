@@ -1,6 +1,9 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000128**: Enhanced the Passed Steps Report:
+  - **Completely Passed Rounds Tracking**: Updated `GET /api/reports/passed-report` to compute completely passed rounds per test (`completelyPassedRounds`, where every step passed in that round and zero failures occurred), total execution rounds, total passes, total fails, and summary metrics (`totalCompletelyPassedRounds`, `totalRounds`, `totalPassedWithDetails`).
+  - **User Reports Theme & Collapsible Cards**: Redesigned the Passed Steps UI in `ReportsView.tsx` to match the User Reports theme with summary statistic cards, clickable test cards displaying round statistics and `FULLY PASSED` badges, and an expandable details table listing each passed step submission with comments, attachment download links, submitting user name, round ID, and timestamp.
 - **v1.0000127**: Fixed test step points and total points retrieval in Admin Panel Manage Tests:
   - **Complete Step Attributes in Bulk Endpoint**: Updated `GET /api/tests/steps` to select and return all step attributes (`id`, `test_id`, `step_number`, `description`, `success_symptom`, `points`, `value`, `on_failure`) with `COALESCE` fallbacks instead of projecting only basic metadata, so batch step fetching correctly delivers point values for all tests.
   - **Full Step Projections on Individual Endpoint**: Standardized `GET /api/tests/:id` to ensure `points`, `value`, `success_symptom`, and `on_failure` are consistently normalized.

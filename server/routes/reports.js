@@ -688,6 +688,10 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     const stepFilterSub = stepId ? ' AND s.step_id = ? ' : ' ';
     const userFilterSub = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
+    // Step counts per test to evaluate complete pass criteria
+    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps GROUP BY test_id').all();
+    const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
+
     const testStatsRows = await testsDb.prepare(
       `SELECT s.test_id, COUNT(DISTINCT s.user_id || '-' || s.round_id) as rounds,
               SUM(CASE WHEN s.result = 'pass' THEN 1 ELSE 0 END) as passes,
@@ -698,6 +702,27 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
+    // Round-level stats to determine completely passed rounds (all steps passed, 0 failures in that round)
+    const roundStatsRows = await testsDb.prepare(
+      `SELECT 
+         s.test_id,
+         s.user_id,
+         s.round_id,
+         COUNT(DISTINCT CASE WHEN s.result = 'pass' THEN s.step_id END) as passed_steps,
+         SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fail_count
+       FROM test_submissions s
+       WHERE s.test_id IN (${testPlaceholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}
+       GROUP BY s.test_id, s.user_id, s.round_id`
+    ).all(...testIds, start, end, ...versionIds, ...(userIds.length > 0 ? userIds : []));
+
+    const completelyPassedRoundsByTest = {};
+    for (const r of roundStatsRows) {
+      const needed = stepCountsMap[r.test_id] || 0;
+      if (needed > 0 && r.passed_steps >= needed && (r.fail_count || 0) === 0) {
+        completelyPassedRoundsByTest[r.test_id] = (completelyPassedRoundsByTest[r.test_id] || 0) + 1;
+      }
+    }
+
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
@@ -705,6 +730,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       `SELECT 
          s.test_id,
          s.user_id,
+         u.username as user_name,
          s.step_id,
          ts.step_number,
          ts.description,
@@ -714,56 +740,88 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
          s.executed_at
        FROM test_submissions s
        JOIN test_steps ts ON ts.id = s.step_id
+       LEFT JOIN users u ON u.id = s.user_id
        WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
          AND ((s.comment IS NOT NULL AND s.comment != '') OR (s.config_file_path IS NOT NULL AND s.config_file_path != ''))
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${stepFilterSub} ${userFilterSub}
-       ORDER BY s.test_id, s.user_id, ts.step_number, s.executed_at DESC`
+       ORDER BY s.test_id, s.executed_at DESC, ts.step_number`
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
 
+    const submissionsByTest = {};
     const passedUsersByTest = {};
     for (const row of passedSubmissions) {
+      const resolvedName = row.user_name || userNames[row.user_id] || ('User ' + row.user_id);
+      const subItem = {
+        stepId: row.step_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        userId: row.user_id,
+        userName: resolvedName,
+        username: resolvedName,
+        user_name: resolvedName,
+        comment: row.comment,
+        configFilePath: row.config_file_path,
+        roundId: row.round_id,
+        executed_at: row.executed_at
+      };
+
+      if (!submissionsByTest[row.test_id]) submissionsByTest[row.test_id] = [];
+      submissionsByTest[row.test_id].push(subItem);
+
       if (!passedUsersByTest[row.test_id]) {
         passedUsersByTest[row.test_id] = {};
       }
       if (!passedUsersByTest[row.test_id][row.user_id]) {
         passedUsersByTest[row.test_id][row.user_id] = {
           userId: row.user_id,
-          userName: userNames[row.user_id] || ('user ' + row.user_id),
+          userName: resolvedName,
           submissions: []
         };
       }
-      passedUsersByTest[row.test_id][row.user_id].submissions.push({
-        stepId: row.step_id,
-        stepNumber: row.step_number,
-        description: row.description,
-        comment: row.comment,
-        configFilePath: row.config_file_path,
-        roundId: row.round_id,
-        executed_at: row.executed_at
-      });
+      passedUsersByTest[row.test_id][row.user_id].submissions.push(subItem);
     }
+
+    let totalCompletelyPassedRounds = 0;
+    let totalRounds = 0;
+    let totalPassedWithDetails = 0;
 
     const testsReport = tests.map(test => {
       const stats = testStats[test.id] || { passes: 0, fails: 0, rounds: 0 };
+      const completelyPassed = completelyPassedRoundsByTest[test.id] || 0;
+      const testSubs = submissionsByTest[test.id] || [];
       const passedUsersMap = passedUsersByTest[test.id] || {};
       const passedUsers = Object.values(passedUsersMap);
+
+      totalCompletelyPassedRounds += completelyPassed;
+      totalRounds += (stats.rounds || 0);
+      totalPassedWithDetails += testSubs.length;
 
       return {
         testId: test.id,
         testName: test.name,
         rounds: stats.rounds || 0,
+        completelyPassedRounds: completelyPassed,
+        fullyPassedRounds: completelyPassed,
+        fullyPassed: (stats.rounds > 0 && completelyPassed === stats.rounds),
         passes: stats.passes || 0,
         fails: stats.fails || 0,
+        submissions: testSubs,
         passedUsers
       };
     });
+
+    const isSpecificTestFilter = testIdsRaw && testIdsRaw !== 'all';
+    const filteredTestsReport = testsReport.filter(t => isSpecificTestFilter || t.rounds > 0 || t.submissions.length > 0);
 
     res.json({
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
       stepId: stepId || null,
-      tests: testsReport
+      totalCompletelyPassedRounds,
+      totalRounds,
+      totalPassedWithDetails,
+      tests: filteredTestsReport
     });
   } catch (error) {
     console.error('Passed report error:', error);
