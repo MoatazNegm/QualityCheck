@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000127**: Fixed test step points and total points retrieval in Admin Panel Manage Tests:
+  - **Complete Step Attributes in Bulk Endpoint**: Updated `GET /api/tests/steps` to select and return all step attributes (`id`, `test_id`, `step_number`, `description`, `success_symptom`, `points`, `value`, `on_failure`) with `COALESCE` fallbacks instead of projecting only basic metadata, so batch step fetching correctly delivers point values for all tests.
+  - **Full Step Projections on Individual Endpoint**: Standardized `GET /api/tests/:id` to ensure `points`, `value`, `success_symptom`, and `on_failure` are consistently normalized.
+  - **Manage Tests UI & Total Points Aggregation**: Updated `ManageTestRow` in `AdminPanel.tsx` to compute total points from step point values with fallback to `test.totalPoints`, ensure step draft inputs accurately populate point numbers and failure policies, and set the default failure policy for new steps to `'stop'`.
 - **v1.0000122**: Implemented Direct Google Drive Attachment Storage:
   - **Google Drive Storage Provider**: Built `server/googleDrive/driveService.js` using Google Drive API v3 and Google Service Account authentication to stream and store test failure attachments (ZIP files, screenshots, logs) directly in a designated Google Drive directory.
   - **Zero Database Storage Costs**: Uploaded attachments store only their Google Drive File ID (`drive_file_id`) and metadata in the database without storing heavy binary Base64 payloads (`file_data = null`), keeping the database size tiny and eliminating Turso/cloud database storage and row-read costs.

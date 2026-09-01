@@ -6,6 +6,7 @@ interface Test {
   id: number;
   name: string;
   description: string;
+  totalPoints?: number;
 }
 
 interface User {
@@ -1065,7 +1066,7 @@ const AdminPanel: React.FC = () => {
   };
 
   const saveStep = async (testId: number, step: TestStepAdmin) => {
-    const pointsVal = Number(step.value) || 0;
+    const pointsVal = Number(step.points !== undefined && step.points !== null ? step.points : step.value) || 0;
     await fetch(`${API_BASE}/api/tests/${testId}/steps/${step.id}`, {
       method: 'PUT',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
@@ -1074,6 +1075,7 @@ const AdminPanel: React.FC = () => {
         description: step.description,
         success_symptom: step.success_symptom || '',
         value: pointsVal,
+        points: pointsVal,
         on_failure: step.on_failure
       })
     });
@@ -1110,6 +1112,7 @@ const AdminPanel: React.FC = () => {
         description: payload.description.trim(),
         success_symptom: '',
         value: payload.points,
+        points: payload.points,
         on_failure: payload.on_failure
       })
     });
@@ -3894,7 +3897,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
   // Add-step form state
   const [newDesc, setNewDesc] = useState('');
   const [newPoints, setNewPoints] = useState('0');
-  const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('continue');
+  const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('stop');
   const [insertAfter, setInsertAfter] = useState<string>('end');
   const [adding, setAdding] = useState(false);
 
@@ -3906,8 +3909,8 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
   const getDraft = (step: TestStepAdmin) =>
     drafts[step.id] || {
       description: step.description,
-      points: String(step.points ?? step.value ?? 0),
-      on_failure: step.on_failure
+      points: String(step.points !== undefined && step.points !== null ? step.points : (step.value ?? 0)),
+      on_failure: step.on_failure || 'stop'
     };
 
   const setDraft = (step: TestStepAdmin, patch: Partial<{ description: string; points: string; on_failure: string }>) =>
@@ -3915,10 +3918,12 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
 
   const handleSave = (step: TestStepAdmin) => {
     const d = getDraft(step);
+    const pts = Number(d.points) || 0;
     onSaveStep({
       ...step,
       description: d.description,
-      value: Number(d.points) || 0,
+      value: pts,
+      points: pts,
       on_failure: d.on_failure
     });
   };
@@ -3936,7 +3941,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
       });
       setNewDesc('');
       setNewPoints('0');
-      setNewOnFailure('continue');
+      setNewOnFailure('stop');
       setInsertAfter('end');
     } finally {
       setAdding(false);
@@ -3984,7 +3989,9 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
         <span className="test-name">{test.name}</span>
         <span className="assignment-summary">
           {steps !== undefined ? `${steps.length} step(s)` : ''}
-          {steps !== undefined && steps.length > 0 ? ` • ${steps.reduce((sum, s) => sum + (s.points ?? s.value ?? 0), 0)} pts` : ''}
+          {steps !== undefined && steps.length > 0
+            ? ` • ${steps.reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0)} pts`
+            : (test.totalPoints !== undefined && test.totalPoints > 0 ? ` • ${test.totalPoints} pts` : '')}
         </span>
         <button
           className="btn-icon"

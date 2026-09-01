@@ -635,7 +635,13 @@ router.get('/steps', authenticateToken, async (req, res) => {
 
     const testPlaceholders = testIds.map(() => '?').join(',');
     const steps = await testsDb.prepare(
-      `SELECT test_id, id, step_number, description FROM test_steps WHERE test_id IN (${testPlaceholders}) ORDER BY test_id, step_number`
+      `SELECT test_id, id, step_number, description, success_symptom,
+              COALESCE(points, value, 0) AS points,
+              COALESCE(value, points, 0) AS value,
+              COALESCE(on_failure, 'stop') AS on_failure
+       FROM test_steps
+       WHERE test_id IN (${testPlaceholders})
+       ORDER BY test_id, step_number`
     ).all(...testIds);
 
     const stepsByTest = {};
@@ -643,8 +649,13 @@ router.get('/steps', authenticateToken, async (req, res) => {
       if (!stepsByTest[step.test_id]) stepsByTest[step.test_id] = [];
       stepsByTest[step.test_id].push({
         id: step.id,
+        test_id: step.test_id,
         step_number: step.step_number,
-        description: step.description
+        description: step.description,
+        success_symptom: step.success_symptom || '',
+        points: Number(step.points) || 0,
+        value: Number(step.value) || 0,
+        on_failure: step.on_failure || 'stop'
       });
     }
 
@@ -673,10 +684,21 @@ router.get('/:id', async (req, res) => {
     }
     
     const steps = await testsDb.prepare(
-      'SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number'
+      `SELECT id, test_id, step_number, description, success_symptom,
+              COALESCE(points, value, 0) AS points,
+              COALESCE(value, points, 0) AS value,
+              COALESCE(on_failure, 'stop') AS on_failure
+       FROM test_steps
+       WHERE test_id = ?
+       ORDER BY step_number`
     ).all(req.params.id);
     
-    test.steps = steps;
+    test.steps = steps.map(s => ({
+      ...s,
+      points: Number(s.points) || 0,
+      value: Number(s.value) || 0,
+      on_failure: s.on_failure || 'stop'
+    }));
     res.json(test);
   } catch (error) {
     console.error('Get test error:', error);
@@ -716,17 +738,17 @@ router.post('/', async (req, res) => {
 router.post('/:id/steps', async (req, res) => {
   try {
     const { id } = req.params;
-    const { step_number, description, success_symptom, value, on_failure } = req.body;
+    const { step_number, description, success_symptom, value, points, on_failure } = req.body;
     
-    const pointsVal = value || 0;
+    const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
     const result = await testsDb.prepare(`
       INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, success_symptom, pointsVal, pointsVal, on_failure || 'stop');
+    `).run(id, step_number, description, success_symptom || '', pointsVal, pointsVal, on_failure || 'stop');
     
     cache.invalidate('stepCount:' + id);
     cache.invalidate('totalPoints:' + id);
-    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom, value: pointsVal, points: pointsVal, on_failure });
+    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: success_symptom || '', value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop' });
   } catch (error) {
     console.error('Add step error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -737,13 +759,13 @@ router.post('/:id/steps', async (req, res) => {
 router.put('/:testId/steps/:stepId', async (req, res) => {
   try {
     const { testId, stepId } = req.params;
-    const { step_number, description, success_symptom, value, on_failure } = req.body;
-    const pointsVal = value || 0;
+    const { step_number, description, success_symptom, value, points, on_failure } = req.body;
+    const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
 
     await testsDb.prepare(`
       UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
       WHERE id = ? AND test_id = ?
-    `).run(step_number, description, success_symptom, pointsVal, pointsVal, on_failure, stepId, testId);
+    `).run(step_number, description, success_symptom || '', pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
 
     cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step updated successfully' });
