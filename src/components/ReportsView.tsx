@@ -1473,8 +1473,8 @@ const ReportsView: React.FC = () => {
                               <span className="report-stat report-stat-fail">{test.fails} failed</span>
                             )}
                           </span>
-                          {test.completelyPassedRounds > 0 && test.completelyPassedRounds === test.rounds && (
-                            <span className="status-badge status-pass">FULLY PASSED</span>
+                          {test.completelyPassedRounds > 0 && (
+                            <span className="status-badge status-pass">COMPLETELY PASSED</span>
                           )}
                           <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
                         </div>

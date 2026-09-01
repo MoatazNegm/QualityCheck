@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000129**: Fixed Completely Passed counter logic and version filtering in Passed Steps report:
+  - **Accurate Complete Pass Evaluation**: Refined `completelyPassedRounds` calculation in `GET /api/reports/passed-report` to count every execution cycle where a user successfully passes all steps of that specific test with zero failures, without requiring the user to have finished their entire multi-test loop round.
+  - **Version NULL Matching**: Updated version filtering in `GET /api/reports/passed-report` to include `OR s.version_id IS NULL` so submissions recorded prior to version tagging are accurately captured in report queries.
+  - **UI Badge Alignment**: Updated test card header in `ReportsView.tsx` to render the `COMPLETELY PASSED` status badge whenever `completelyPassedRounds > 0`.
 - **v1.0000128**: Enhanced the Passed Steps Report:
   - **Completely Passed Rounds Tracking**: Updated `GET /api/reports/passed-report` to compute completely passed rounds per test (`completelyPassedRounds`, where every step passed in that round and zero failures occurred), total execution rounds, total passes, total fails, and summary metrics (`totalCompletelyPassedRounds`, `totalRounds`, `totalPassedWithDetails`).
   - **User Reports Theme & Collapsible Cards**: Redesigned the Passed Steps UI in `ReportsView.tsx` to match the User Reports theme with summary statistic cards, clickable test cards displaying round statistics and `FULLY PASSED` badges, and an expandable details table listing each passed step submission with comments, attachment download links, submitting user name, round ID, and timestamp.

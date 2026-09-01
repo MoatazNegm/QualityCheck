@@ -684,7 +684,9 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     }
 
     const testPlaceholders = testIds.map(() => '?').join(',');
-    const versionFilterSub = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
+    const versionFilterSub = versionIds.length > 0 
+      ? ' AND (s.version_id IN (' + versionIds.map(() => '?').join(',') + ') OR s.version_id IS NULL) ' 
+      : ' ';
     const stepFilterSub = stepId ? ' AND s.step_id = ? ' : ' ';
     const userFilterSub = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
@@ -702,7 +704,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
-    // Round-level stats to determine completely passed rounds (all steps passed, 0 failures in that round)
+    // Round-level stats to determine completely passed test executions (all steps passed, 0 failures on that test in that round)
     const roundStatsRows = await testsDb.prepare(
       `SELECT 
          s.test_id,
@@ -717,7 +719,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
 
     const completelyPassedRoundsByTest = {};
     for (const r of roundStatsRows) {
-      const needed = stepCountsMap[r.test_id] || 0;
+      const needed = stepCountsMap[r.test_id] || r.passed_steps || 0;
       if (needed > 0 && r.passed_steps >= needed && (r.fail_count || 0) === 0) {
         completelyPassedRoundsByTest[r.test_id] = (completelyPassedRoundsByTest[r.test_id] || 0) + 1;
       }
@@ -802,7 +804,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
         rounds: stats.rounds || 0,
         completelyPassedRounds: completelyPassed,
         fullyPassedRounds: completelyPassed,
-        fullyPassed: (stats.rounds > 0 && completelyPassed === stats.rounds),
+        fullyPassed: completelyPassed > 0,
         passes: stats.passes || 0,
         fails: stats.fails || 0,
         submissions: testSubs,
