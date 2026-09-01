@@ -704,24 +704,37 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...(userIds.length > 0 ? userIds : []));
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
-    // Round-level stats to determine completely passed test executions (all steps passed, 0 failures on that test in that round)
-    const roundStatsRows = await testsDb.prepare(
-      `SELECT 
-         s.test_id,
-         s.user_id,
-         s.round_id,
-         COUNT(DISTINCT CASE WHEN s.result = 'pass' THEN s.step_id END) as passed_steps,
-         SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fail_count
+    // Distinct passed steps per (user, round) for each test to determine completely passed test executions
+    const roundPassedRows = await testsDb.prepare(
+      `SELECT s.test_id, s.user_id, s.round_id, COUNT(DISTINCT s.step_id) as passed_steps
        FROM test_submissions s
-       WHERE s.test_id IN (${testPlaceholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}
+       WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}
        GROUP BY s.test_id, s.user_id, s.round_id`
     ).all(...testIds, start, end, ...versionIds, ...(userIds.length > 0 ? userIds : []));
 
     const completelyPassedRoundsByTest = {};
-    for (const r of roundStatsRows) {
+    for (const r of roundPassedRows) {
       const needed = stepCountsMap[r.test_id] || r.passed_steps || 0;
-      if (needed > 0 && r.passed_steps >= needed && (r.fail_count || 0) === 0) {
+      if (needed > 0 && r.passed_steps >= needed) {
         completelyPassedRoundsByTest[r.test_id] = (completelyPassedRoundsByTest[r.test_id] || 0) + 1;
+      }
+    }
+
+    // Distinct passed steps per user for each test (as fallback in case steps were submitted across rounds)
+    const userPassedRows = await testsDb.prepare(
+      `SELECT s.test_id, s.user_id, COUNT(DISTINCT s.step_id) as passed_steps
+       FROM test_submissions s
+       WHERE s.test_id IN (${testPlaceholders}) AND s.result = 'pass'
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}
+       GROUP BY s.test_id, s.user_id`
+    ).all(...testIds, start, end, ...versionIds, ...(userIds.length > 0 ? userIds : []));
+
+    const userPassedCountByTest = {};
+    for (const u of userPassedRows) {
+      const needed = stepCountsMap[u.test_id] || u.passed_steps || 0;
+      if (needed > 0 && u.passed_steps >= needed) {
+        userPassedCountByTest[u.test_id] = (userPassedCountByTest[u.test_id] || 0) + 1;
       }
     }
 
@@ -789,7 +802,9 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
 
     const testsReport = tests.map(test => {
       const stats = testStats[test.id] || { passes: 0, fails: 0, rounds: 0 };
-      const completelyPassed = completelyPassedRoundsByTest[test.id] || 0;
+      const roundPasses = completelyPassedRoundsByTest[test.id] || 0;
+      const userPasses = userPassedCountByTest[test.id] || 0;
+      const completelyPassed = Math.max(roundPasses, userPasses);
       const testSubs = submissionsByTest[test.id] || [];
       const passedUsersMap = passedUsersByTest[test.id] || {};
       const passedUsers = Object.values(passedUsersMap);

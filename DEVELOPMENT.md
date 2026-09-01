@@ -1,6 +1,8 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000130**: Enhanced Passed Steps Completely Passed Calculation:
+  - **Comprehensive Multi-Level Pass Resolution**: Updated `GET /api/reports/passed-report` to compute completely passed counts via both per-round distinct passed step evaluation and per-user distinct step completion (`Math.max(roundPasses, userPasses)`), guaranteeing that any test where all steps have been passed is accurately reported as completely passed regardless of round boundaries or attempt history.
 - **v1.0000129**: Fixed Completely Passed counter logic and version filtering in Passed Steps report:
   - **Accurate Complete Pass Evaluation**: Refined `completelyPassedRounds` calculation in `GET /api/reports/passed-report` to count every execution cycle where a user successfully passes all steps of that specific test with zero failures, without requiring the user to have finished their entire multi-test loop round.
   - **Version NULL Matching**: Updated version filtering in `GET /api/reports/passed-report` to include `OR s.version_id IS NULL` so submissions recorded prior to version tagging are accurately captured in report queries.
