@@ -4135,16 +4135,17 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                         {isSection && <span className="section-badge-inline" title="Section Header (-1 points)">[SECTION]</span>}
                       </td>
                       <td className="step-desc-cell">
-                        <input
-                          type="text"
+                        <textarea
+                          rows={2}
                           className="step-desc-input"
                           value={d.description}
                           onChange={e => setDraft(step, { description: e.target.value })}
+                          placeholder="Step description"
                         />
                       </td>
                       <td className="step-symptom-cell">
-                        <input
-                          type="text"
+                        <textarea
+                          rows={2}
                           className="step-symptom-input"
                           value={d.success_symptom}
                           onChange={e => setDraft(step, { success_symptom: e.target.value })}
@@ -4245,17 +4246,17 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                 ))}
               </select>
             </div>
-            <input
-              type="text"
+            <textarea
+              rows={2}
               placeholder="Step description"
-              className="user-input"
+              className="user-input add-step-desc-input"
               value={newDesc}
               onChange={e => setNewDesc(e.target.value)}
             />
-            <input
-              type="text"
+            <textarea
+              rows={2}
               placeholder="Success symptom (e.g. expected behavior, defaults to N/A)"
-              className="user-input"
+              className="user-input add-step-symptom-input"
               value={newSuccessSymptom}
               onChange={e => setNewSuccessSymptom(e.target.value)}
             />

@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000135**: Widened Admin Panel Layout and Added Multi-Line Text Wrapping for Step Descriptions & Success Symptoms:
+  - **Widened Admin Right Panel Layout**: Expanded `.admin-panel` from a rigid `max-width: 900px` to `width: calc(100% - 2.5rem); max-width: 1750px; margin: 1.75rem auto; padding: 0 1.25rem;`, eliminating the large empty gutters on both sides and allowing tables, step managers, and reports to span the full available display area.
+  - **Dynamic Step Description & Success Symptom Sizing**: Removed the restrictive `max-width: 320px` constraint on `.step-desc-cell` and `.step-symptom-cell`. Allocated 42% table width to Description and 32% to Success Symptom, giving them spacious room across wide displays while keeping compact control columns fixed.
+  - **Multi-Line Wrapping & Overflow Prevention**: Replaced single-line `<input type="text">` elements for Step Description and Success Symptom in `ManageTestRow` with 2-row `<textarea>` elements equipped with `white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; resize: vertical;`. Steps can cleanly consume two or more lines on screen without horizontal scrolling, clipping, or overflow.
+  - **Add Step Form Textarea Integration**: Upgraded description and success symptom inputs in the "Add Step" form to multi-line textareas (`.add-step-desc-input`, `.add-step-symptom-input`) with automatic text wrapping and flexible widths.
 - **v1.0000134**: Added Step Reference Attachments Across Admin Panel, Test Execution, Reports & Unified Storage:
   - **Database Schema & Migrations**: Added `attachment_path TEXT DEFAULT NULL` and `attachment_name TEXT DEFAULT NULL` to `test_steps` table in `server/db/db.js`, with startup migrations ensuring columns exist in both local SQLite and remote Turso instances.
   - **Unified Storage Pipeline (`server/utils/fileStorage.js`)**: Created a centralized file storage helper `saveUploadedFile` that mirrors the application's existing multi-tier storage strategy: stores files to local disk (`/uploads`), automatically uploads to Dropbox if configured in settings (`uploadFileToDropbox`), and records file metadata + Base64 payload in `uploaded_files` for container survival and instant retrieval via `GET /uploads/:filename`.

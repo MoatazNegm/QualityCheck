@@ -747,18 +747,31 @@ body {
 }
 
 .step-num-cell {
-  width: 40px;
+  width: 55px;
+  min-width: 50px;
   color: var(--text-muted) !important;
   font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
-.step-desc-cell,
+.step-desc-cell {
+  min-width: 280px;
+  width: 42%;
+  vertical-align: middle;
+}
+
 .step-symptom-cell {
-  max-width: 320px;
+  min-width: 240px;
+  width: 32%;
+  vertical-align: middle;
 }
 
 .step-points-cell {
-  width: 100px;
+  width: 90px;
+  min-width: 85px;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .points-input {
@@ -766,7 +779,7 @@ body {
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 0.3rem 0.5rem;
+  padding: 0.35rem 0.5rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.9rem;
@@ -783,13 +796,21 @@ body {
 .step-desc-input,
 .step-symptom-input {
   width: 100%;
+  box-sizing: border-box;
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.65rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  resize: vertical;
+  min-height: 52px;
+  display: block;
   transition: var(--transition-all);
 }
 
@@ -811,13 +832,19 @@ body {
 }
 
 .step-failure-cell {
-  width: 130px;
+  width: 125px;
+  min-width: 120px;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .step-actions-cell {
+  width: 145px;
+  min-width: 140px;
   display: flex;
   gap: 0.4rem;
   white-space: nowrap;
+  vertical-align: middle;
 }
 
 .step-actions-cell .btn-secondary,
@@ -853,6 +880,26 @@ body {
 
 .step-points-add {
   width: 90px;
+}
+
+.add-step-desc-input {
+  flex: 3;
+  min-width: 280px;
+  min-height: 52px;
+  resize: vertical;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.add-step-symptom-input {
+  flex: 2;
+  min-width: 240px;
+  min-height: 52px;
+  resize: vertical;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .step-nav {
@@ -1209,9 +1256,11 @@ body {
 
 /* Admin Panel */
 .admin-panel {
-  max-width: 900px;
-  margin: 3rem auto;
-  padding: 0 2rem;
+  width: calc(100% - 2.5rem);
+  max-width: 1750px;
+  margin: 1.75rem auto;
+  padding: 0 1.25rem;
+  box-sizing: border-box;
   animation: fadeIn 0.4s ease-out;
 }
 
