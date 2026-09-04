@@ -169,9 +169,9 @@ async function applyBackup(backup, res) {
     // Insert Steps
     for (const step of backup.test_steps || []) {
       batch.push({
-        sql: `INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, points, on_failure)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.points ?? step.value ?? 0, step.on_failure]
+        sql: `INSERT INTO test_steps (id, test_id, step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [step.id, step.test_id, step.step_number, step.description, step.success_symptom, step.value, step.points ?? step.value ?? 0, step.on_failure, step.attachment_path || null, step.attachment_name || null]
       });
     }
 

@@ -1,11 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const path = require('path');
 const XLSX = require('xlsx');
 const { testsDb, bumpRound, getRound, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { saveUploadedFile } = require('../utils/fileStorage');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+
+const uploadStepAttachment = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Uploaded file exceeds the 100MB size limit.' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    next();
+  });
+};
 
 // Ordered list of tests assigned to a user (loop order = test id ascending)
 async function getAssignedTestsOrdered(userId) {
@@ -659,7 +676,8 @@ router.get('/steps', authenticateToken, async (req, res) => {
       `SELECT test_id, id, step_number, description, success_symptom,
               COALESCE(points, value, 0) AS points,
               COALESCE(value, points, 0) AS value,
-              COALESCE(on_failure, 'stop') AS on_failure
+              COALESCE(on_failure, 'stop') AS on_failure,
+              attachment_path, attachment_name
        FROM test_steps
        WHERE test_id IN (${testPlaceholders})
        ORDER BY test_id, step_number`
@@ -674,9 +692,11 @@ router.get('/steps', authenticateToken, async (req, res) => {
         step_number: step.step_number,
         description: step.description,
         success_symptom: (step.success_symptom && step.success_symptom.trim()) ? step.success_symptom.trim() : 'N/A',
-        points: Number(step.points) || 0,
-        value: Number(step.value) || 0,
-        on_failure: step.on_failure || 'stop'
+        points: isNaN(Number(step.points)) ? 0 : Number(step.points),
+        value: isNaN(Number(step.value)) ? 0 : Number(step.value),
+        on_failure: step.on_failure || 'stop',
+        attachment_path: step.attachment_path || null,
+        attachment_name: step.attachment_name || null
       });
     }
 
@@ -708,7 +728,8 @@ router.get('/:id', async (req, res) => {
       `SELECT id, test_id, step_number, description, success_symptom,
               COALESCE(points, value, 0) AS points,
               COALESCE(value, points, 0) AS value,
-              COALESCE(on_failure, 'stop') AS on_failure
+              COALESCE(on_failure, 'stop') AS on_failure,
+              attachment_path, attachment_name
        FROM test_steps
        WHERE test_id = ?
        ORDER BY step_number`
@@ -717,9 +738,11 @@ router.get('/:id', async (req, res) => {
     test.steps = steps.map(s => ({
       ...s,
       success_symptom: (s.success_symptom && s.success_symptom.trim()) ? s.success_symptom.trim() : 'N/A',
-      points: Number(s.points) || 0,
-      value: Number(s.value) || 0,
-      on_failure: s.on_failure || 'stop'
+      points: isNaN(Number(s.points)) ? 0 : Number(s.points),
+      value: isNaN(Number(s.value)) ? 0 : Number(s.value),
+      on_failure: s.on_failure || 'stop',
+      attachment_path: s.attachment_path || null,
+      attachment_name: s.attachment_name || null
     }));
     res.json(test);
   } catch (error) {
@@ -760,18 +783,18 @@ router.post('/', async (req, res) => {
 router.post('/:id/steps', async (req, res) => {
   try {
     const { id } = req.params;
-    const { step_number, description, success_symptom, value, points, on_failure } = req.body;
+    const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
     
     const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
     const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
     const result = await testsDb.prepare(`
-      INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop');
+      INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null);
     
     cache.invalidate('stepCount:' + id);
     cache.invalidate('totalPoints:' + id);
-    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop' });
+    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop', attachment_path: attachment_path || null, attachment_name: attachment_name || null });
   } catch (error) {
     console.error('Add step error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -782,14 +805,21 @@ router.post('/:id/steps', async (req, res) => {
 router.put('/:testId/steps/:stepId', async (req, res) => {
   try {
     const { testId, stepId } = req.params;
-    const { step_number, description, success_symptom, value, points, on_failure } = req.body;
+    const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
     const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
     const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
 
-    await testsDb.prepare(`
-      UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
-      WHERE id = ? AND test_id = ?
-    `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
+    if (attachment_path !== undefined || attachment_name !== undefined) {
+      await testsDb.prepare(`
+        UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?, attachment_path = ?, attachment_name = ?
+        WHERE id = ? AND test_id = ?
+      `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null, stepId, testId);
+    } else {
+      await testsDb.prepare(`
+        UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
+        WHERE id = ? AND test_id = ?
+      `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
+    }
 
     cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step updated successfully' });
@@ -811,6 +841,65 @@ router.delete('/:testId/steps/:stepId', async (req, res) => {
   } catch (error) {
     console.error('Delete step error:', error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Upload reference attachment for a step (admin only)
+router.post('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin, uploadStepAttachment, async (req, res) => {
+  try {
+    const { testId, stepId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const step = await testsDb.prepare('SELECT id FROM test_steps WHERE id = ? AND test_id = ?').get(stepId, testId);
+    if (!step) {
+      return res.status(404).json({ error: 'Step not found' });
+    }
+
+    const ext = path.extname(req.file.originalname);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const filename = `stepRef-t${testId}-s${stepId}-${uniqueSuffix}${ext}`;
+
+    const saved = await saveUploadedFile({
+      fileBuffer: req.file.buffer,
+      filename,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size
+    });
+
+    await testsDb.prepare(`
+      UPDATE test_steps SET attachment_path = ?, attachment_name = ? WHERE id = ? AND test_id = ?
+    `).run(saved.filePath, saved.originalName, stepId, testId);
+
+    res.json({
+      attachment_path: saved.filePath,
+      attachment_name: saved.originalName
+    });
+  } catch (error) {
+    console.error('Upload step attachment error:', error);
+    res.status(500).json({ error: 'Failed to upload step attachment' });
+  }
+});
+
+// Delete reference attachment from a step (admin only)
+router.delete('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { testId, stepId } = req.params;
+    const step = await testsDb.prepare('SELECT id FROM test_steps WHERE id = ? AND test_id = ?').get(stepId, testId);
+    if (!step) {
+      return res.status(404).json({ error: 'Step not found' });
+    }
+
+    await testsDb.prepare(`
+      UPDATE test_steps SET attachment_path = NULL, attachment_name = NULL WHERE id = ? AND test_id = ?
+    `).run(stepId, testId);
+
+    res.json({ message: 'Attachment removed successfully' });
+  } catch (error) {
+    console.error('Delete step attachment error:', error);
+    res.status(500).json({ error: 'Failed to remove step attachment' });
   }
 });
 

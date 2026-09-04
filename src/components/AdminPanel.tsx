@@ -41,6 +41,8 @@ interface TestStepAdmin {
   value: number;
   points: number;
   on_failure: string;
+  attachment_path?: string | null;
+  attachment_name?: string | null;
 }
 
 interface Version {
@@ -1078,7 +1080,9 @@ const AdminPanel: React.FC = () => {
         success_symptom: symptomVal,
         value: pointsVal,
         points: pointsVal,
-        on_failure: step.on_failure
+        on_failure: step.on_failure,
+        attachment_path: step.attachment_path || null,
+        attachment_name: step.attachment_name || null
       })
     });
     setManagedSteps(prev => ({
@@ -1089,9 +1093,65 @@ const AdminPanel: React.FC = () => {
         success_symptom: symptomVal,
         value: pointsVal,
         points: pointsVal,
-        on_failure: step.on_failure
+        on_failure: step.on_failure,
+        attachment_path: step.attachment_path || null,
+        attachment_name: step.attachment_name || null
       } : s)
     }));
+  };
+
+  const uploadStepAttachment = async (testId: number, stepId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/${testId}/steps/${stepId}/attachment`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setManagedSteps(prev => ({
+          ...prev,
+          [testId]: (prev[testId] || []).map(s => s.id === stepId ? {
+            ...s,
+            attachment_path: data.attachment_path,
+            attachment_name: data.attachment_name
+          } : s)
+        }));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Failed to upload step attachment');
+      }
+    } catch (e) {
+      console.error('Failed to upload step attachment:', e);
+      alert('Network error uploading step attachment');
+    }
+  };
+
+  const removeStepAttachment = async (testId: number, stepId: number) => {
+    if (!window.confirm('Remove reference attachment from this step?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/${testId}/steps/${stepId}/attachment`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        setManagedSteps(prev => ({
+          ...prev,
+          [testId]: (prev[testId] || []).map(s => s.id === stepId ? {
+            ...s,
+            attachment_path: null,
+            attachment_name: null
+          } : s)
+        }));
+      } else {
+        alert('Failed to remove step attachment');
+      }
+    } catch (e) {
+      console.error('Failed to remove step attachment:', e);
+      alert('Network error removing step attachment');
+    }
   };
 
   const deleteStep = async (testId: number, stepId: number) => {
@@ -1102,13 +1162,13 @@ const AdminPanel: React.FC = () => {
 
   const addStep = async (
     testId: number,
-    payload: { afterStepNumber: number | null; description: string; success_symptom?: string; points: number; on_failure: string }
+    payload: { afterStepNumber: number | null; description: string; success_symptom?: string; points: number; on_failure: string; attachmentFile?: File | null }
   ) => {
     const steps = managedSteps[testId] || [];
     const maxStep = steps.length ? Math.max(...steps.map(s => s.step_number)) : 0;
     const stepNumber = payload.afterStepNumber === null ? maxStep + 1 : payload.afterStepNumber + 0.5;
     const symptomVal = (payload.success_symptom && payload.success_symptom.trim()) ? payload.success_symptom.trim() : 'N/A';
-    await fetch(`${API_BASE}/api/tests/${testId}/steps`, {
+    const res = await fetch(`${API_BASE}/api/tests/${testId}/steps`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1120,6 +1180,12 @@ const AdminPanel: React.FC = () => {
         on_failure: payload.on_failure
       })
     });
+    if (res.ok && payload.attachmentFile) {
+      const newStep = await res.json().catch(() => null);
+      if (newStep && newStep.id) {
+        await uploadStepAttachment(testId, newStep.id, payload.attachmentFile);
+      }
+    }
     await normalizeSteps(testId);
   };
 
@@ -1785,6 +1851,8 @@ const AdminPanel: React.FC = () => {
                   onSaveStep={(step) => saveStep(test.id, step)}
                   onDeleteStep={(stepId) => deleteStep(test.id, stepId)}
                   onAddStep={(payload) => addStep(test.id, payload)}
+                  onUploadAttachment={(stepId, file) => uploadStepAttachment(test.id, stepId, file)}
+                  onRemoveAttachment={(stepId) => removeStepAttachment(test.id, stepId)}
                   onDelete={() => handleDeleteTest(test.id, test.name)}
                 />
               ))}
@@ -3890,13 +3958,16 @@ interface ManageTestRowProps {
   onExpand: () => void;
   onSaveStep: (step: TestStepAdmin) => void;
   onDeleteStep: (stepId: number) => void;
-  onAddStep: (payload: { afterStepNumber: number | null; description: string; success_symptom: string; points: number; on_failure: string }) => void;
+  onAddStep: (payload: { afterStepNumber: number | null; description: string; success_symptom: string; points: number; on_failure: string; attachmentFile?: File | null }) => void;
+  onUploadAttachment: (stepId: number, file: File) => Promise<void>;
+  onRemoveAttachment: (stepId: number) => Promise<void>;
   onDelete: () => void;
 }
 
-const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, authHeaders, onExpand, onSaveStep, onDeleteStep, onAddStep, onDelete }) => {
+const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, authHeaders, onExpand, onSaveStep, onDeleteStep, onAddStep, onUploadAttachment, onRemoveAttachment, onDelete }) => {
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { description: string; success_symptom: string; points: string; on_failure: string }>>({});
+  const [uploadingStepId, setUploadingStepId] = useState<number | null>(null);
 
   // Add-step form state
   const [newDesc, setNewDesc] = useState('');
@@ -3904,11 +3975,21 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
   const [newPoints, setNewPoints] = useState('0');
   const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('stop');
   const [insertAfter, setInsertAfter] = useState<string>('end');
+  const [newAttachmentFile, setNewAttachmentFile] = useState<File | null>(null);
   const [adding, setAdding] = useState(false);
 
   const handleToggle = () => {
     if (!open) onExpand();
     setOpen(o => !o);
+  };
+
+  const handleStepAttachmentChange = async (stepId: number, file: File) => {
+    setUploadingStepId(stepId);
+    try {
+      await onUploadAttachment(stepId, file);
+    } finally {
+      setUploadingStepId(null);
+    }
   };
 
   const getDraft = (step: TestStepAdmin) =>
@@ -3948,13 +4029,15 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
         description: newDesc,
         success_symptom: newSuccessSymptom.trim() || 'N/A',
         points: pts,
-        on_failure: newOnFailure
+        on_failure: newOnFailure,
+        attachmentFile: newAttachmentFile
       });
       setNewDesc('');
       setNewSuccessSymptom('N/A');
       setNewPoints('0');
       setNewOnFailure('stop');
       setInsertAfter('end');
+      setNewAttachmentFile(null);
     } finally {
       setAdding(false);
     }
@@ -4035,6 +4118,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                   <th>#</th>
                   <th>Description</th>
                   <th>Success Symptom</th>
+                  <th>Attachment</th>
                   <th>Points</th>
                   <th>If Fails</th>
                   <th>Actions</th>
@@ -4066,6 +4150,57 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                           onChange={e => setDraft(step, { success_symptom: e.target.value })}
                           placeholder={isSection ? 'N/A (Section Header)' : 'Success Symptom'}
                         />
+                      </td>
+                      <td className="step-attachment-cell">
+                        {step.attachment_path ? (
+                          <div className="attachment-control-group">
+                            <a
+                              href={`${API_BASE}${step.attachment_path}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="attachment-pill"
+                              title={`Download ${step.attachment_name || 'attachment'}`}
+                              download={step.attachment_name || true}
+                            >
+                              📎 {step.attachment_name || 'File'}
+                            </a>
+                            <label className="btn-icon-replace" title="Replace reference file">
+                              🔄
+                              <input
+                                type="file"
+                                style={{ display: 'none' }}
+                                disabled={uploadingStepId === step.id}
+                                onChange={e => {
+                                  const f = e.target.files?.[0];
+                                  if (f) handleStepAttachmentChange(step.id, f);
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="btn-icon-remove"
+                              title="Remove reference file"
+                              onClick={() => onRemoveAttachment(step.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="btn-upload-attachment" title="Upload reference file for this step">
+                            {uploadingStepId === step.id ? '⏳ Uploading...' : '📎 Upload'}
+                            <input
+                              type="file"
+                              style={{ display: 'none' }}
+                              disabled={uploadingStepId === step.id}
+                              onChange={e => {
+                                const f = e.target.files?.[0];
+                                if (f) handleStepAttachmentChange(step.id, f);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                        )}
                       </td>
                       <td className="step-points-cell">
                         <input
@@ -4124,6 +4259,14 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
               value={newSuccessSymptom}
               onChange={e => setNewSuccessSymptom(e.target.value)}
             />
+            <div className="add-step-attachment-row">
+              <label style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Reference Attachment (optional):</label>
+              <input
+                type="file"
+                className="user-input file-input-add-step"
+                onChange={e => setNewAttachmentFile(e.target.files?.[0] || null)}
+              />
+            </div>
             <input
               type="number"
               min={-1}

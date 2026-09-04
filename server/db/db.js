@@ -274,6 +274,8 @@ async function initDB() {
       success_symptom TEXT DEFAULT 'N/A',
       value REAL DEFAULT 0,
       on_failure TEXT CHECK (on_failure IN ('continue', 'stop')) DEFAULT 'stop',
+      attachment_path TEXT DEFAULT NULL,
+      attachment_name TEXT DEFAULT NULL,
       FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS test_results (
@@ -465,6 +467,14 @@ async function runMigrations() {
     if (!cols.some(c => c.name === 'success_symptom')) {
       await clientWrapper.execute({ sql: "ALTER TABLE test_steps ADD COLUMN success_symptom TEXT DEFAULT 'N/A'" });
       console.log('Migration: added success_symptom column to test_steps');
+    }
+    if (!cols.some(c => c.name === 'attachment_path')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE test_steps ADD COLUMN attachment_path TEXT DEFAULT NULL' });
+      console.log('Migration: added attachment_path column to test_steps');
+    }
+    if (!cols.some(c => c.name === 'attachment_name')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE test_steps ADD COLUMN attachment_name TEXT DEFAULT NULL' });
+      console.log('Migration: added attachment_name column to test_steps');
     }
     await clientWrapper.execute({
       sql: "UPDATE test_steps SET success_symptom = 'N/A' WHERE success_symptom IS NULL OR TRIM(success_symptom) = ''"

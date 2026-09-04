@@ -905,6 +905,20 @@ const ReportsView: React.FC = () => {
                                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                                               <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {step.successSymptom || step.success_symptom || 'N/A'}
                                             </div>
+                                            {(step.attachment_path || step.attachmentPath) && (
+                                              <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                                <a
+                                                  href={`${API_BASE}${step.attachment_path || step.attachmentPath}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="report-file-link"
+                                                  download={step.attachment_name || step.attachmentName || true}
+                                                  onClick={e => e.stopPropagation()}
+                                                >
+                                                  📎 Reference File: {step.attachment_name || step.attachmentName || 'Download'}
+                                                </a>
+                                              </div>
+                                            )}
                                           </td>
                                           <td><span className="status-badge status-fail">{step.fails}</span></td>
                                           <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
@@ -1805,6 +1819,20 @@ const ReportsView: React.FC = () => {
                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                                   <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {step.successSymptom || step.success_symptom || 'N/A'}
                                 </div>
+                                {(step.attachment_path || step.attachmentPath) && (
+                                  <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                    <a
+                                      href={`${API_BASE}${step.attachment_path || step.attachmentPath}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="report-file-link"
+                                      download={step.attachment_name || step.attachmentName || true}
+                                      onClick={e => e.stopPropagation()}
+                                    >
+                                      📎 Reference File: {step.attachment_name || step.attachmentName || 'Download'}
+                                    </a>
+                                  </div>
+                                )}
                               </td>
                               <td>
                                 <span className="status-badge status-fail">{step.failCount}</span>

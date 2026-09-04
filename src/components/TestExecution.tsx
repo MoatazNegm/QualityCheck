@@ -11,6 +11,8 @@ interface TestStep {
   value: number;
   on_failure: string;
   points: number;
+  attachment_path?: string | null;
+  attachment_name?: string | null;
 }
 
 interface UserWarning {
@@ -384,6 +386,20 @@ const TestExecution: React.FC = () => {
         <p className='step-symptom'>
           <strong>Success Symptom:</strong> {currentStep.success_symptom || 'N/A'}
         </p>
+        {currentStep.attachment_path && (
+          <div className='step-reference-attachment'>
+            <span className='attachment-label'>Reference File:</span>
+            <a
+              href={`${API_BASE}${currentStep.attachment_path}`}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='btn-step-download'
+              download={currentStep.attachment_name || true}
+            >
+              📥 Download {currentStep.attachment_name || 'Attachment'}
+            </a>
+          </div>
+        )}
         <p className='step-points'>
           <span className='points-badge'>{currentStep.points ?? 10} pts</span>
         </p>
