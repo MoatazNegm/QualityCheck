@@ -271,7 +271,7 @@ async function initDB() {
       test_id INTEGER,
       step_number INTEGER NOT NULL,
       description TEXT NOT NULL,
-      success_symptom TEXT,
+      success_symptom TEXT DEFAULT 'N/A',
       value REAL DEFAULT 0,
       on_failure TEXT CHECK (on_failure IN ('continue', 'stop')) DEFAULT 'stop',
       FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
@@ -462,6 +462,13 @@ async function runMigrations() {
       await clientWrapper.execute({ sql: 'ALTER TABLE test_steps ADD COLUMN points INTEGER DEFAULT 10' });
       console.log('Migration: added points column to test_steps');
     }
+    if (!cols.some(c => c.name === 'success_symptom')) {
+      await clientWrapper.execute({ sql: "ALTER TABLE test_steps ADD COLUMN success_symptom TEXT DEFAULT 'N/A'" });
+      console.log('Migration: added success_symptom column to test_steps');
+    }
+    await clientWrapper.execute({
+      sql: "UPDATE test_steps SET success_symptom = 'N/A' WHERE success_symptom IS NULL OR TRIM(success_symptom) = ''"
+    });
     const userCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(users)' })).rows;
     if (!userCols.some(c => c.name === 'is_suspended')) {
       await clientWrapper.execute({ sql: 'ALTER TABLE users ADD COLUMN is_suspended INTEGER DEFAULT 0' });

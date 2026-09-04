@@ -752,8 +752,9 @@ body {
   font-weight: 600;
 }
 
-.step-desc-cell {
-  max-width: 500px;
+.step-desc-cell,
+.step-symptom-cell {
+  max-width: 320px;
 }
 
 .step-points-cell {
@@ -779,7 +780,8 @@ body {
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
 }
 
-.step-desc-input {
+.step-desc-input,
+.step-symptom-input {
   width: 100%;
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
@@ -791,7 +793,8 @@ body {
   transition: var(--transition-all);
 }
 
-.step-desc-input:focus {
+.step-desc-input:focus,
+.step-symptom-input:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);

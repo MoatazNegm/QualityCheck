@@ -1,6 +1,12 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000132**: Added Full Success Symptom Support Across Test Execution, Admin Management, Excel Upload & Database:
+  - **Database Migration & Automatic Backfill**: Updated `test_steps` table definition with `success_symptom TEXT DEFAULT 'N/A'` and added an automatic migration in `server/db/db.js` that verifies the column and backfills any `NULL` or blank values in existing test steps to `'N/A'`.
+  - **Admin Panel Step Management & Inline Editing**: Added a dedicated **Success Symptom** column and text input to the test steps table in the Admin Panel's Manage Tests tab (`ManageTestRow`). Admins can view, edit, and click **Save** per step to update the success symptom in the database. Added a Success Symptom input (defaulting to `'N/A'`) to the "Add Step" form and included the column in the steps CSV export.
+  - **User Test Execution Screen**: Updated `TestExecution.tsx` to always display the step's expected outcome (`Success Symptom: ...`), defaulting to `'N/A'`, ensuring users clearly see what they should expect when executing each step.
+  - **Excel Test Import Parsing**: Enhanced `POST /api/tests/import` to detect columns for Step Description (`step description`, `description`, `test case`, `step`), Success Symptom (`success symptom`, `expected success`, `symptom`, `success`), and Points (`points`, `point`, `value`, `score`), defaulting empty or omitted success symptoms to `'N/A'`.
+  - **Reports Integration**: Updated `server/routes/reports.js` and `ReportsView.tsx` to include and display `Success Symptom` across User Reports, Test Reports, Passed Steps Reports, and Failed Steps Reports.
 - **v1.0000131**: Added Last-Step Completion Recognition in Reports:
   - **Period-Boundary Pass Resolution**: Updated `GET /api/reports/passed-report` and `GET /api/reports/user-report` to count a test as completely passed in the reporting period when the user passed the final step of the test within that period and all prior test steps were completed, even if earlier steps were executed outside the date window.
 - **v1.0000130**: Enhanced Passed Steps Completely Passed Calculation:

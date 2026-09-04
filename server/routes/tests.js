@@ -450,9 +450,20 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
         if (rows.length === 0) continue;
 
         const sampleKeys = Object.keys(rows[0]);
-        const testCaseKey = sampleKeys.find(k => k.toLowerCase().includes('test case')) || sampleKeys[0];
-        const successKey = sampleKeys.find(k => k.toLowerCase().includes('expected success'));
-        const pointsKey = sampleKeys.find(k => k.toLowerCase().includes('points'));
+        const testCaseKey = sampleKeys.find(k => {
+          const lk = k.toLowerCase().trim();
+          return lk.includes('step description') || lk.includes('description') || lk.includes('test case') || lk === 'step';
+        }) || sampleKeys[0];
+
+        const successKey = sampleKeys.find(k => {
+          const lk = k.toLowerCase().trim();
+          return lk.includes('success symptom') || lk.includes('expected success') || lk.includes('symptom') || lk.includes('success');
+        });
+
+        const pointsKey = sampleKeys.find(k => {
+          const lk = k.toLowerCase().trim();
+          return lk.includes('point') || lk.includes('value') || lk.includes('score');
+        });
 
         const testName = workbook.SheetNames.length === 1 ? baseName : `${baseName} - ${sheetName}`;
 
@@ -466,7 +477,8 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
         for (const row of rows) {
           const description = String(row[testCaseKey] || '').trim();
           if (!description) continue;
-          const successSymptom = successKey ? String(row[successKey] || '').trim() : '';
+          const rawSuccess = successKey ? String(row[successKey] || '').trim() : '';
+          const successSymptom = rawSuccess || 'N/A';
           const points = pointsKey ? (parseInt(String(row[pointsKey] || ''), 10) || 10) : 10;
           await tx.execute({
             sql: `INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points)
@@ -652,7 +664,7 @@ router.get('/steps', authenticateToken, async (req, res) => {
         test_id: step.test_id,
         step_number: step.step_number,
         description: step.description,
-        success_symptom: step.success_symptom || '',
+        success_symptom: (step.success_symptom && step.success_symptom.trim()) ? step.success_symptom.trim() : 'N/A',
         points: Number(step.points) || 0,
         value: Number(step.value) || 0,
         on_failure: step.on_failure || 'stop'
@@ -695,6 +707,7 @@ router.get('/:id', async (req, res) => {
     
     test.steps = steps.map(s => ({
       ...s,
+      success_symptom: (s.success_symptom && s.success_symptom.trim()) ? s.success_symptom.trim() : 'N/A',
       points: Number(s.points) || 0,
       value: Number(s.value) || 0,
       on_failure: s.on_failure || 'stop'
@@ -741,14 +754,15 @@ router.post('/:id/steps', async (req, res) => {
     const { step_number, description, success_symptom, value, points, on_failure } = req.body;
     
     const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
+    const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
     const result = await testsDb.prepare(`
       INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, success_symptom || '', pointsVal, pointsVal, on_failure || 'stop');
+    `).run(id, step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop');
     
     cache.invalidate('stepCount:' + id);
     cache.invalidate('totalPoints:' + id);
-    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: success_symptom || '', value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop' });
+    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop' });
   } catch (error) {
     console.error('Add step error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -761,11 +775,12 @@ router.put('/:testId/steps/:stepId', async (req, res) => {
     const { testId, stepId } = req.params;
     const { step_number, description, success_symptom, value, points, on_failure } = req.body;
     const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
+    const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
 
     await testsDb.prepare(`
       UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
       WHERE id = ? AND test_id = ?
-    `).run(step_number, description, success_symptom || '', pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
+    `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
 
     cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step updated successfully' });

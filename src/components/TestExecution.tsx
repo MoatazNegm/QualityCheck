@@ -324,9 +324,9 @@ const TestExecution: React.FC = () => {
 
       <div className='step-info'>
         <h3>Step {currentStep.step_number}: {currentStep.description}</h3>
-        {currentStep.success_symptom && (
-          <p><strong>Expected Success:</strong> {currentStep.success_symptom}</p>
-        )}
+        <p className='step-symptom'>
+          <strong>Success Symptom:</strong> {currentStep.success_symptom || 'N/A'}
+        </p>
         <p className='step-points'>
           <span className='points-badge'>{currentStep.points ?? 10} pts</span>
         </p>

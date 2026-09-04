@@ -1067,13 +1067,14 @@ const AdminPanel: React.FC = () => {
 
   const saveStep = async (testId: number, step: TestStepAdmin) => {
     const pointsVal = Number(step.points !== undefined && step.points !== null ? step.points : step.value) || 0;
+    const symptomVal = (step.success_symptom && step.success_symptom.trim()) ? step.success_symptom.trim() : 'N/A';
     await fetch(`${API_BASE}/api/tests/${testId}/steps/${step.id}`, {
       method: 'PUT',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step_number: step.step_number,
         description: step.description,
-        success_symptom: step.success_symptom || '',
+        success_symptom: symptomVal,
         value: pointsVal,
         points: pointsVal,
         on_failure: step.on_failure
@@ -1084,6 +1085,7 @@ const AdminPanel: React.FC = () => {
       [testId]: (prev[testId] || []).map(s => s.id === step.id ? {
         ...s,
         description: step.description,
+        success_symptom: symptomVal,
         value: pointsVal,
         points: pointsVal,
         on_failure: step.on_failure
@@ -1099,18 +1101,19 @@ const AdminPanel: React.FC = () => {
 
   const addStep = async (
     testId: number,
-    payload: { afterStepNumber: number | null; description: string; points: number; on_failure: string }
+    payload: { afterStepNumber: number | null; description: string; success_symptom?: string; points: number; on_failure: string }
   ) => {
     const steps = managedSteps[testId] || [];
     const maxStep = steps.length ? Math.max(...steps.map(s => s.step_number)) : 0;
     const stepNumber = payload.afterStepNumber === null ? maxStep + 1 : payload.afterStepNumber + 0.5;
+    const symptomVal = (payload.success_symptom && payload.success_symptom.trim()) ? payload.success_symptom.trim() : 'N/A';
     await fetch(`${API_BASE}/api/tests/${testId}/steps`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         step_number: stepNumber,
         description: payload.description.trim(),
-        success_symptom: '',
+        success_symptom: symptomVal,
         value: payload.points,
         points: payload.points,
         on_failure: payload.on_failure
@@ -1552,7 +1555,7 @@ const AdminPanel: React.FC = () => {
         <div className="admin-section">
           <h3>Import Tests from Excel</h3>
           <p className="admin-hint">
-          Each sheet tab becomes a test. Columns used: <strong>Test case</strong> (step description), <strong>Expected Success</strong> (success symptom), and <strong>Points</strong> (defaults to 10 if missing).
+          Each sheet tab becomes a test. Columns used: <strong>Step Description</strong> (or Test case), <strong>Success Symptom</strong> (or Expected Success, defaults to 'N/A' if omitted), and <strong>Points</strong> (defaults to 10 if missing).
           </p>
           <form onSubmit={handleImport} className="upload-form">
             <input
@@ -3886,16 +3889,17 @@ interface ManageTestRowProps {
   onExpand: () => void;
   onSaveStep: (step: TestStepAdmin) => void;
   onDeleteStep: (stepId: number) => void;
-  onAddStep: (payload: { afterStepNumber: number | null; description: string; points: number; on_failure: string }) => void;
+  onAddStep: (payload: { afterStepNumber: number | null; description: string; success_symptom: string; points: number; on_failure: string }) => void;
   onDelete: () => void;
 }
 
 const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, authHeaders, onExpand, onSaveStep, onDeleteStep, onAddStep, onDelete }) => {
   const [open, setOpen] = useState(false);
-  const [drafts, setDrafts] = useState<Record<number, { description: string; points: string; on_failure: string }>>({});
+  const [drafts, setDrafts] = useState<Record<number, { description: string; success_symptom: string; points: string; on_failure: string }>>({});
 
   // Add-step form state
   const [newDesc, setNewDesc] = useState('');
+  const [newSuccessSymptom, setNewSuccessSymptom] = useState('N/A');
   const [newPoints, setNewPoints] = useState('0');
   const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('stop');
   const [insertAfter, setInsertAfter] = useState<string>('end');
@@ -3909,11 +3913,12 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
   const getDraft = (step: TestStepAdmin) =>
     drafts[step.id] || {
       description: step.description,
+      success_symptom: (step.success_symptom && step.success_symptom.trim()) ? step.success_symptom.trim() : 'N/A',
       points: String(step.points !== undefined && step.points !== null ? step.points : (step.value ?? 0)),
       on_failure: step.on_failure || 'stop'
     };
 
-  const setDraft = (step: TestStepAdmin, patch: Partial<{ description: string; points: string; on_failure: string }>) =>
+  const setDraft = (step: TestStepAdmin, patch: Partial<{ description: string; success_symptom: string; points: string; on_failure: string }>) =>
     setDrafts(prev => ({ ...prev, [step.id]: { ...getDraft(step), ...patch } }));
 
   const handleSave = (step: TestStepAdmin) => {
@@ -3922,6 +3927,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
     onSaveStep({
       ...step,
       description: d.description,
+      success_symptom: d.success_symptom.trim() || 'N/A',
       value: pts,
       points: pts,
       on_failure: d.on_failure
@@ -3936,10 +3942,12 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
       await onAddStep({
         afterStepNumber: insertAfter === 'end' ? null : parseFloat(insertAfter),
         description: newDesc,
+        success_symptom: newSuccessSymptom.trim() || 'N/A',
         points: Number(newPoints) || 0,
         on_failure: newOnFailure
       });
       setNewDesc('');
+      setNewSuccessSymptom('N/A');
       setNewPoints('0');
       setNewOnFailure('stop');
       setInsertAfter('end');
@@ -3961,12 +3969,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
       }
       if (!currentSteps || currentSteps.length === 0) return;
 
-      const header = 'Step #,Description,Points';
+      const header = 'Step #,Description,Success Symptom,Points';
       const rows = currentSteps.map((s: any) => {
         const desc = String(s.description || '').replace(/"/g, '""');
+        const symptom = String(s.success_symptom || 'N/A').replace(/"/g, '""');
         const stepNum = s.step_number ?? '';
         const points = s.points ?? s.value ?? 0;
-        return `"${stepNum}","${desc}","${points}"`;
+        return `"${stepNum}","${desc}","${symptom}","${points}"`;
       });
       const csv = [header, ...rows].join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -4021,6 +4030,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                 <tr>
                   <th>#</th>
                   <th>Description</th>
+                  <th>Success Symptom</th>
                   <th>Points</th>
                   <th>If Fails</th>
                   <th>Actions</th>
@@ -4038,6 +4048,15 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                           className="step-desc-input"
                           value={d.description}
                           onChange={e => setDraft(step, { description: e.target.value })}
+                        />
+                      </td>
+                      <td className="step-symptom-cell">
+                        <input
+                          type="text"
+                          className="step-symptom-input"
+                          value={d.success_symptom}
+                          onChange={e => setDraft(step, { success_symptom: e.target.value })}
+                          placeholder="Success Symptom"
                         />
                       </td>
                       <td className="step-points-cell">
@@ -4087,6 +4106,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
               className="user-input"
               value={newDesc}
               onChange={e => setNewDesc(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="Success symptom (e.g. expected behavior, defaults to N/A)"
+              className="user-input"
+              value={newSuccessSymptom}
+              onChange={e => setNewSuccessSymptom(e.target.value)}
             />
             <input
               type="number"

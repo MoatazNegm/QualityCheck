@@ -900,7 +900,12 @@ const ReportsView: React.FC = () => {
                                       <React.Fragment key={step.stepId}>
                                         <tr className="report-step-row-failed" style={{ cursor: 'pointer' }} onClick={() => toggleReportStepExpand(test.testId, step.stepId)}>
                                           <td className="step-num-cell">{step.stepNumber}</td>
-                                          <td>{step.description}</td>
+                                          <td>
+                                            <div>{step.description}</div>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                              <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {step.successSymptom || step.success_symptom || 'N/A'}
+                                            </div>
+                                          </td>
                                           <td><span className="status-badge status-fail">{step.fails}</span></td>
                                           <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
                                         </tr>
@@ -1194,7 +1199,12 @@ const ReportsView: React.FC = () => {
                                   {fu.submissions.map((sub: any, idx: number) => (
                                     <tr key={idx} className="report-step-row-failed">
                                       <td className="step-num-cell">{sub.stepNumber}</td>
-                                      <td>{sub.description}</td>
+                                      <td>
+                                        <div>{sub.description}</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                          <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
+                                        </div>
+                                      </td>
                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                       <td className="report-step-comment">{sub.comment || '—'}</td>
                                       <td>
@@ -1506,7 +1516,12 @@ const ReportsView: React.FC = () => {
                                         </strong>
                                       </td>
                                       <td className="step-num-cell">{sub.stepNumber}</td>
-                                      <td>{sub.description}</td>
+                                      <td>
+                                        <div>{sub.description}</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                          <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
+                                        </div>
+                                      </td>
                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                       <td className="report-step-comment">{sub.comment || '—'}</td>
                                       <td>
@@ -1785,7 +1800,12 @@ const ReportsView: React.FC = () => {
                             >
                               <td><strong>{step.testName}</strong></td>
                               <td className="step-num-cell">{step.stepNumber}</td>
-                              <td>{step.description}</td>
+                              <td>
+                                <div>{step.description}</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                  <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {step.successSymptom || step.success_symptom || 'N/A'}
+                                </div>
+                              </td>
                               <td>
                                 <span className="status-badge status-fail">{step.failCount}</span>
                               </td>
