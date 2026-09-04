@@ -46,8 +46,8 @@ async function getTestMonthlyRounds(userId, testId) {
         SELECT round_id AS r_id, step_id FROM test_results WHERE user_id = ? AND test_id = ? AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
       )
       GROUP BY r_id
-      HAVING (SELECT COUNT(*) FROM test_steps WHERE test_id = ?) > 0
-         AND COUNT(DISTINCT step_id) * 2 >= (SELECT COUNT(*) FROM test_steps WHERE test_id = ?)
+      HAVING (SELECT COUNT(*) FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1) > 0
+         AND COUNT(DISTINCT step_id) * 2 >= (SELECT COUNT(*) FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1)
     )
   `).get(userId, testId, userId, testId, testId, testId);
 
@@ -67,7 +67,7 @@ async function getBatchMonthlyRounds(userId, testIds) {
         SELECT test_id, round_id AS r_id, step_id FROM test_results WHERE user_id = ? AND test_id IN (${placeholders}) AND strftime('%Y-%m', executed_at) = strftime('%Y-%m', 'now')
       ) u
       JOIN (
-        SELECT test_id, COUNT(*) AS total_steps FROM test_steps WHERE test_id IN (${placeholders}) GROUP BY test_id
+        SELECT test_id, COUNT(*) AS total_steps FROM test_steps WHERE test_id IN (${placeholders}) AND COALESCE(points, value, 0) != -1 GROUP BY test_id
       ) s ON s.test_id = u.test_id
       GROUP BY u.test_id, u.r_id
       HAVING s.total_steps > 0 AND COUNT(DISTINCT u.step_id) * 2 >= s.total_steps
@@ -170,12 +170,15 @@ async function getActiveTestId(userId) {
 
 // Whether every step of a test has a recorded result for the user in the given round
 async function isTestCompleted(userId, testId, roundNo) {
-  const stepCountRow = await testsDb.prepare('SELECT COUNT(*) AS c FROM test_steps WHERE test_id = ?').get(testId);
+  const stepCountRow = await testsDb.prepare('SELECT COUNT(*) AS c FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1').get(testId);
   const stepCount = stepCountRow ? stepCountRow.c : 0;
   if (stepCount === 0) return false;
 
   const doneCountRow = await testsDb.prepare(
-    'SELECT COUNT(*) AS c FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ?'
+    `SELECT COUNT(DISTINCT tr.step_id) AS c
+     FROM test_results tr
+     JOIN test_steps ts ON ts.id = tr.step_id
+     WHERE tr.user_id = ? AND tr.test_id = ? AND tr.round_id = ? AND COALESCE(ts.points, ts.value, 0) != -1`
   ).get(userId, testId, roundNo);
   const doneCount = doneCountRow ? doneCountRow.c : 0;
 
@@ -187,9 +190,11 @@ async function getBatchCompletionCounts(userId, testIds, roundNo) {
   if (testIds.length === 0) return {};
   const placeholders = testIds.map(() => '?').join(',');
   const rows = await testsDb.prepare(`
-    SELECT test_id, COUNT(*) AS c FROM test_results
-    WHERE user_id = ? AND test_id IN (${placeholders}) AND round_id = ?
-    GROUP BY test_id
+    SELECT tr.test_id, COUNT(DISTINCT tr.step_id) AS c
+    FROM test_results tr
+    JOIN test_steps ts ON ts.id = tr.step_id
+    WHERE tr.user_id = ? AND tr.test_id IN (${placeholders}) AND tr.round_id = ? AND COALESCE(ts.points, ts.value, 0) != -1
+    GROUP BY tr.test_id
   `).all(userId, ...testIds, roundNo);
   const map = {};
   for (const r of rows) map[r.test_id] = r.c || 0;
@@ -211,7 +216,7 @@ async function getBatchStepCounts(testIds) {
   if (uncached.length > 0) {
     const placeholders = uncached.map(() => '?').join(',');
     const rows = await testsDb.prepare(
-      `SELECT test_id, COUNT(*) AS c FROM test_steps WHERE test_id IN (${placeholders}) GROUP BY test_id`
+      `SELECT test_id, COUNT(*) AS c FROM test_steps WHERE test_id IN (${placeholders}) AND COALESCE(points, value, 0) != -1 GROUP BY test_id`
     ).all(...uncached);
     for (const r of rows) {
       result[r.test_id] = r.c;
@@ -228,13 +233,13 @@ async function getBatchStepCounts(testIds) {
   return result;
 }
 
-// Total points awarded for a test (sum of its steps' points)
+// Total points awarded for a test (sum of its steps' points, excluding section headers)
 async function getTestTotalPoints(testId) {
   const cacheKey = `totalPoints:${testId}`;
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
   const row = await testsDb.prepare(
-    'SELECT COALESCE(SUM(COALESCE(points, value, 0)), 0) AS total FROM test_steps WHERE test_id = ?'
+    'SELECT COALESCE(SUM(CASE WHEN COALESCE(points, value, 0) > 0 THEN COALESCE(points, value, 0) ELSE 0 END), 0) AS total FROM test_steps WHERE test_id = ?'
   ).get(testId);
   const val = row ? row.total : 0;
   cache.set(cacheKey, val);
@@ -479,7 +484,11 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
           if (!description) continue;
           const rawSuccess = successKey ? String(row[successKey] || '').trim() : '';
           const successSymptom = rawSuccess || 'N/A';
-          const points = pointsKey ? (parseInt(String(row[pointsKey] || ''), 10) || 10) : 10;
+          let points = 10;
+          if (pointsKey && row[pointsKey] !== undefined && row[pointsKey] !== null && String(row[pointsKey]).trim() !== '') {
+            const parsed = parseInt(String(row[pointsKey]).trim(), 10);
+            if (!isNaN(parsed)) points = parsed;
+          }
           await tx.execute({
             sql: `INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points)
                   VALUES (?, ?, ?, ?, 'stop', ?)`,
@@ -594,8 +603,8 @@ router.delete('/:id/assignments/:userId', authenticateToken, requireAdmin, async
 router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const points = parseInt(req.body.points, 10);
-    if (isNaN(points) || points < 0) {
-      return res.status(400).json({ error: 'Points must be a non-negative number' });
+    if (isNaN(points) || points < -1) {
+      return res.status(400).json({ error: 'Points must be at least -1 (-1 for section headers)' });
     }
     await testsDb.prepare('UPDATE test_steps SET points = ?, value = ? WHERE id = ? AND test_id = ?')
       .run(points, points, req.params.stepId, req.params.testId);

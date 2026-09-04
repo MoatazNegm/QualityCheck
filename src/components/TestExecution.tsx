@@ -43,10 +43,35 @@ const TestExecution: React.FC = () => {
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
+  const isSectionStep = (step: TestStep | null | undefined): boolean => {
+    if (!step) return false;
+    return Number(step.points) === -1 || Number(step.value) === -1;
+  };
+
+  const getActiveSectionForIndex = (stepList: TestStep[], index: number): string | null => {
+    for (let i = index; i >= 0; i--) {
+      if (isSectionStep(stepList[i])) {
+        return stepList[i].description;
+      }
+    }
+    return null;
+  };
+
   useEffect(() => {
     if (user) loadTest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testId, user?.id]);
+
+  // Safety fallback: auto-advance past any section headers
+  useEffect(() => {
+    if (!loading && steps.length > 0 && stepIndex < steps.length && isSectionStep(steps[stepIndex])) {
+      let nextNonSection = stepIndex + 1;
+      while (nextNonSection < steps.length && isSectionStep(steps[nextNonSection])) {
+        nextNonSection++;
+      }
+      setStepIndex(nextNonSection);
+    }
+  }, [loading, steps, stepIndex]);
 
   const fetchSummary = async () => {
     try {
@@ -117,9 +142,15 @@ const TestExecution: React.FC = () => {
         return;
       }
 
-      const firstUnattempted = allSteps.findIndex(s => !doneIds.has(s.id));
+      const firstUnattempted = allSteps.findIndex(s => !isSectionStep(s) && !doneIds.has(s.id));
       if (firstUnattempted === -1) {
-        setStepIndex(0);
+        const anyRealRemaining = allSteps.some(s => !isSectionStep(s) && !doneIds.has(s.id));
+        if (!anyRealRemaining && allSteps.some(s => !isSectionStep(s))) {
+          setStepIndex(allSteps.length);
+        } else {
+          const firstReal = allSteps.findIndex(s => !isSectionStep(s));
+          setStepIndex(firstReal >= 0 ? firstReal : 0);
+        }
       } else {
         setStepIndex(firstUnattempted);
       }
@@ -195,10 +226,14 @@ const TestExecution: React.FC = () => {
           return;
         }
 
-        const nextIndex = stepIndex + 1;
+        let nextIndex = stepIndex + 1;
+        while (nextIndex < steps.length && isSectionStep(steps[nextIndex])) {
+          nextIndex++;
+        }
         setStepIndex(nextIndex);
 
-        const allDone = steps.every(s => newDone.has(s.id));
+        const realSteps = steps.filter(s => !isSectionStep(s));
+        const allDone = realSteps.every(s => newDone.has(s.id));
         if (allDone) {
           await markComplete(testId!);
         }
@@ -217,7 +252,12 @@ const TestExecution: React.FC = () => {
 
   const goToPrev = async () => {
     if (stepIndex <= 0) return;
-    const prevStep = steps[stepIndex - 1];
+    let prevIndex = stepIndex - 1;
+    while (prevIndex >= 0 && isSectionStep(steps[prevIndex])) {
+      prevIndex--;
+    }
+    if (prevIndex < 0) return;
+    const prevStep = steps[prevIndex];
     if (!prevStep) return;
 
     setSubmitting(true);
@@ -230,7 +270,7 @@ const TestExecution: React.FC = () => {
         const newDone = new Set(doneStepIds);
         newDone.delete(prevStep.id);
         setDoneStepIds(newDone);
-        setStepIndex(stepIndex - 1);
+        setStepIndex(prevIndex);
         resetForm();
         await fetchSummary();
         await fetchWarnings();
@@ -247,16 +287,27 @@ const TestExecution: React.FC = () => {
 
   if (loading) return <div>Loading...</div>;
 
-  const totalPoints = steps.reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0);
+  const realSteps = steps.filter(s => !isSectionStep(s));
+  const totalPoints = realSteps.reduce((sum, s) => {
+    const pts = Number(s.points) || Number(s.value) || 0;
+    return sum + (pts > 0 ? pts : 0);
+  }, 0);
   const earnedInTest = steps
     .slice(0, stepIndex)
-    .reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0);
+    .filter(s => !isSectionStep(s))
+    .reduce((sum, s) => {
+      const pts = Number(s.points) || Number(s.value) || 0;
+      return sum + (pts > 0 ? pts : 0);
+    }, 0);
 
-  const isCompleted = stepIndex >= steps.length;
+  const isCompleted = stepIndex >= steps.length || (realSteps.length > 0 && realSteps.every(s => doneStepIds.has(s.id)) && stepIndex >= steps.length);
   const currentStep = steps[stepIndex] ?? null;
   const isAlreadyDone = currentStep ? doneStepIds.has(currentStep.id) : false;
+  const currentRealIndex = currentStep ? realSteps.findIndex(s => s.id === currentStep.id) : 0;
+  const activeSection = currentStep ? getActiveSectionForIndex(steps, stepIndex) : null;
+  const canGoPrev = steps.slice(0, stepIndex).some(s => !isSectionStep(s));
 
-  if (isCompleted) {
+  if (isCompleted || !currentStep) {
     return (
       <div className='test-completed'>
         <h2>Test Completed</h2>
@@ -264,7 +315,7 @@ const TestExecution: React.FC = () => {
         <p className='points-summary'>Points earned in this test: <strong>{earnedInTest}/{totalPoints}</strong></p>
         <p className='points-summary'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></p>
         <div className='test-completed-actions'>
-          <button onClick={goToPrev} disabled={steps.length === 0 || submitting}>
+          <button onClick={goToPrev} disabled={realSteps.length === 0 || submitting}>
             {submitting ? 'Reverting...' : '← Go to Last Step'}
           </button>
           <button onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
@@ -317,13 +368,19 @@ const TestExecution: React.FC = () => {
 
       <div className='step-header'>
         <h2>{testName}</h2>
-        <span className='step-counter'>Step {currentStep.step_number} of {steps.length}</span>
+        <span className='step-counter'>Step {currentRealIndex + 1} of {realSteps.length}</span>
         <span className='test-total-points'>Earned: {earnedInTest}/{totalPoints} pts</span>
       </div>
       <div className='test-month-points'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></div>
 
       <div className='step-info'>
-        <h3>Step {currentStep.step_number}: {currentStep.description}</h3>
+        {activeSection && (
+          <div className='step-section-callout'>
+            <span className='section-callout-label'>section:</span>
+            <span className='section-callout-text'>{activeSection}</span>
+          </div>
+        )}
+        <h3>Step {currentRealIndex + 1}: {currentStep.description}</h3>
         <p className='step-symptom'>
           <strong>Success Symptom:</strong> {currentStep.success_symptom || 'N/A'}
         </p>
@@ -368,7 +425,7 @@ const TestExecution: React.FC = () => {
         )}
 
         <div className='step-nav'>
-          <button type='button' className='btn-secondary' onClick={goToPrev} disabled={stepIndex === 0 || submitting || user?.isSuspended}>
+          <button type='button' className='btn-secondary' onClick={goToPrev} disabled={!canGoPrev || submitting || user?.isSuspended}>
             ← Previous Step
           </button>
           <button type='submit' disabled={submitting || !result || user?.isSuspended}>

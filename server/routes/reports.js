@@ -249,7 +249,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
     }
 
-    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps GROUP BY test_id').all();
+    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id').all();
     const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
 
     // Determine fully passed tests in the selected version and date range from test_submissions
@@ -271,7 +271,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     }
 
     // Also check users who completed the last step of the test within the reporting period
-    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps ORDER BY test_id, step_number').all();
+    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps WHERE COALESCE(points, value, 0) != -1 ORDER BY test_id, step_number').all();
     const lastStepByTest = {};
     for (const step of allStepsRows) {
       lastStepByTest[step.test_id] = step.id;
@@ -724,8 +724,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     const stepFilterSub = stepId ? ' AND s.step_id = ? ' : ' ';
     const userFilterSub = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
-    // Step counts and last step ID per test to evaluate complete pass criteria
-    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps ORDER BY test_id, step_number').all();
+    // Step counts and last step ID per test to evaluate complete pass criteria (excluding section headers)
+    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps WHERE COALESCE(points, value, 0) != -1 ORDER BY test_id, step_number').all();
     const stepCountsMap = {};
     const lastStepByTest = {};
     for (const step of allStepsRows) {
@@ -1036,9 +1036,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       const activeTest = assignedTests.find(t => t.id === activeTestId);
       if (activeTest) {
         activeTestName = activeTest.name;
-        // Get all steps for the active test
+        // Get all steps for the active test (excluding section headers)
         const allSteps = await usersDb.prepare(
-          'SELECT id, step_number, description FROM test_steps WHERE test_id = ? ORDER BY step_number'
+          'SELECT id, step_number, description, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number'
         ).all(activeTestId);
         // Get step IDs already submitted in the current round
         const doneRows = await usersDb.prepare(
@@ -1046,7 +1046,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         ).all(userId, activeTestId, currentRound);
         const doneStepIds = new Set(doneRows.map(r => r.step_id));
         // First step not done
-        const nextStep = allSteps.find(s => !doneStepIds.has(s.id));
+        const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
         if (nextStep) {
           currentStepNumber = nextStep.step_number;
           currentStepDescription = nextStep.description;
@@ -1054,7 +1054,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       }
     }
 
-    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps GROUP BY test_id').all();
+    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id').all();
     const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
 
     // Build per-test result array

@@ -93,8 +93,11 @@ router.get('/user/:userId/test/:testId/next', async (req, res) => {
     ).all(userId, testId);
     const attemptedStepIds = attemptedRows.map(row => row.step_id);
     
-    // Find first unattempted step
-    const nextStep = steps.find(step => !attemptedStepIds.includes(step.id));
+    // Find first unattempted step (excluding section headers)
+    const nextStep = steps.find(step => {
+      const pts = Number(step.points ?? step.value ?? 0);
+      return pts !== -1 && !attemptedStepIds.includes(step.id);
+    });
     
     if (!nextStep) {
       return res.status(404).json({ error: 'No more steps' });
@@ -139,6 +142,14 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
 
     if (!result || !['pass', 'fail'].includes(result)) {
       return res.status(400).json({ error: 'Result must be pass or fail' });
+    }
+
+    const stepRow = await testsDb.prepare(
+      'SELECT COALESCE(points, value, 0) AS pts, step_number, description, on_failure FROM test_steps WHERE id = ?'
+    ).get(stepId);
+
+    if (stepRow && Number(stepRow.pts) === -1) {
+      return res.status(400).json({ error: 'Cannot submit results for a section header' });
     }
 
     const nowIso = new Date().toISOString();
@@ -235,9 +246,6 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
     // current progress is tracked separately via the upserted test_results row.
-    const stepRow = await testsDb.prepare(
-      'SELECT COALESCE(points, value, 0) AS pts, step_number, description, on_failure FROM test_steps WHERE id = ?'
-    ).get(stepId);
     const stepPoints = stepRow ? (Number(stepRow.pts) || 0) : 0;
 
     let pointsAwarded = stepPoints;

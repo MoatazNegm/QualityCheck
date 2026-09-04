@@ -57,9 +57,9 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
       doneMap[r.user_id][r.test_id] = r.c;
     }
 
-    // Batch: total step counts per test
+    // Batch: total step counts per test (excluding section headers)
     const stepRows = await testsDb.prepare(
-      'SELECT test_id, COUNT(*) AS c FROM test_steps GROUP BY test_id'
+      'SELECT test_id, COUNT(*) AS c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id'
     ).all();
     const stepMap = Object.fromEntries(stepRows.map(r => [r.test_id, r.c]));
 
@@ -139,7 +139,7 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
     for (const row of assigned) {
       const testId = row.test_id;
       const stepCountRow = await testsDb.prepare(
-        'SELECT COUNT(*) as c FROM test_steps WHERE test_id = ?'
+        'SELECT COUNT(*) as c FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1'
       ).get(testId);
       const doneCountRow = await testsDb.prepare(
         'SELECT COUNT(*) as c FROM test_results WHERE user_id = ? AND test_id = ?'

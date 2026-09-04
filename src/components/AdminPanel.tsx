@@ -1066,7 +1066,8 @@ const AdminPanel: React.FC = () => {
   };
 
   const saveStep = async (testId: number, step: TestStepAdmin) => {
-    const pointsVal = Number(step.points !== undefined && step.points !== null ? step.points : step.value) || 0;
+    const rawPts = step.points !== undefined && step.points !== null ? step.points : step.value;
+    const pointsVal = isNaN(Number(rawPts)) ? 0 : Number(rawPts);
     const symptomVal = (step.success_symptom && step.success_symptom.trim()) ? step.success_symptom.trim() : 'N/A';
     await fetch(`${API_BASE}/api/tests/${testId}/steps/${step.id}`, {
       method: 'PUT',
@@ -3923,7 +3924,8 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
 
   const handleSave = (step: TestStepAdmin) => {
     const d = getDraft(step);
-    const pts = Number(d.points) || 0;
+    const rawPts = d.points;
+    const pts = isNaN(Number(rawPts)) ? 0 : Number(rawPts);
     onSaveStep({
       ...step,
       description: d.description,
@@ -3939,11 +3941,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
     if (!newDesc.trim()) return;
     setAdding(true);
     try {
+      const rawPts = newPoints;
+      const pts = isNaN(Number(rawPts)) ? 0 : Number(rawPts);
       await onAddStep({
         afterStepNumber: insertAfter === 'end' ? null : parseFloat(insertAfter),
         description: newDesc,
         success_symptom: newSuccessSymptom.trim() || 'N/A',
-        points: Number(newPoints) || 0,
+        points: pts,
         on_failure: newOnFailure
       });
       setNewDesc('');
@@ -3997,9 +4001,9 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
       <div className="assignment-header" onClick={handleToggle}>
         <span className="test-name">{test.name}</span>
         <span className="assignment-summary">
-          {steps !== undefined ? `${steps.length} step(s)` : ''}
+          {steps !== undefined ? `${steps.filter(s => Number(s.points) !== -1 && Number(s.value) !== -1).length} step(s)` : ''}
           {steps !== undefined && steps.length > 0
-            ? ` • ${steps.reduce((sum, s) => sum + (Number(s.points) || Number(s.value) || 0), 0)} pts`
+            ? ` • ${steps.reduce((sum, s) => sum + (Number(s.points) > 0 ? Number(s.points) : (Number(s.value) > 0 ? Number(s.value) : 0)), 0)} pts`
             : (test.totalPoints !== undefined && test.totalPoints > 0 ? ` • ${test.totalPoints} pts` : '')}
         </span>
         <button
@@ -4039,9 +4043,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
               <tbody>
                 {sortedSteps.map(step => {
                   const d = getDraft(step);
+                  const isSection = Number(d.points) === -1 || (d.points === '' && Number(step.points) === -1);
                   return (
-                    <tr key={step.id}>
-                      <td className="step-num-cell">{step.step_number}</td>
+                    <tr key={step.id} className={isSection ? 'section-step-row' : ''}>
+                      <td className="step-num-cell">
+                        {step.step_number}
+                        {isSection && <span className="section-badge-inline" title="Section Header (-1 points)">[SECTION]</span>}
+                      </td>
                       <td className="step-desc-cell">
                         <input
                           type="text"
@@ -4056,16 +4064,17 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                           className="step-symptom-input"
                           value={d.success_symptom}
                           onChange={e => setDraft(step, { success_symptom: e.target.value })}
-                          placeholder="Success Symptom"
+                          placeholder={isSection ? 'N/A (Section Header)' : 'Success Symptom'}
                         />
                       </td>
                       <td className="step-points-cell">
                         <input
                           type="number"
-                          min={0}
+                          min={-1}
                           className="points-input"
                           value={d.points}
                           onChange={e => setDraft(step, { points: e.target.value })}
+                          title="Points (-1 for Section Header)"
                         />
                       </td>
                       <td className="step-failure-cell">
@@ -4073,6 +4082,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                           className="failure-select"
                           value={d.on_failure}
                           onChange={e => setDraft(step, { on_failure: e.target.value })}
+                          disabled={isSection}
                         >
                           <option value="continue">Continue</option>
                           <option value="stop">Hard Stop</option>
@@ -4116,8 +4126,9 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
             />
             <input
               type="number"
-              min={0}
-              placeholder="Points"
+              min={-1}
+              placeholder="Points (-1 for Section)"
+              title="Use -1 to create a Section Header instead of an executable step"
               className="user-input step-points-add"
               value={newPoints}
               onChange={e => setNewPoints(e.target.value)}
