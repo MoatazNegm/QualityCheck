@@ -1,6 +1,12 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000137**: Streamlined 3-Line Add Step Form with Narrow Reference Attachment and Inline Layout:
+  - **Structured 3-Line Form Architecture**: Redesigned the "Add Step" section in `ManageTestRow` into three purposeful horizontal rows:
+    - **Line 1 (Header & Positioning)**: Clean header row displaying `<h4>Add Step</h4>` and the `Insert after:` label and dropdown inline.
+    - **Line 2 (Step Details)**: Mirrors the test step table sequence directly above it, neatly containing Step Description (flexible `AutoResizeTextarea`), Success Symptom (flexible `AutoResizeTextarea`), Points input (50px, `min={-1}`), and Failure Policy dropdown ("Continue" / "Hard Stop").
+    - **Line 3 (Attachment & Submission)**: Compact `📎 Reference Attachment (optional):` file input (narrowed to 240px with small button) and the `+ Add Step` submission button side-by-side.
+  - **Form State & Input Resetting**: Bound the attachment file input to a `useRef` to visually reset the chosen file upon successful step addition.
 - **v1.0000136**: Compact Single-Line Step Fields with Dynamic Multi-Line Auto-Wrapping, Narrower Upload and Points Controls:
   - **Compact Single-Line Step Rows**: Standardized step fields in the Manage Tests view (`ManageTestRow`) to start on a compact single line (28px height, 0.82rem font, tight cell padding) so opening a test card displays all steps compactly without excessive vertical height.
   - **Dynamic Multi-Line Auto-Wrapping (`AutoResizeTextarea`)**: Implemented `AutoResizeTextarea` with real-time `scrollHeight` detection and `onInput` auto-expansion. Steps remain strictly on one line when brief, and dynamically wrap and expand to two or more lines the moment typed or existing text overflows horizontally, completely eliminating horizontal scrolling.

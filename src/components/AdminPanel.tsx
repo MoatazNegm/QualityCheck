@@ -4023,6 +4023,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
   const [newOnFailure, setNewOnFailure] = useState<'continue' | 'stop'>('stop');
   const [insertAfter, setInsertAfter] = useState<string>('end');
   const [newAttachmentFile, setNewAttachmentFile] = useState<File | null>(null);
+  const newAttachmentInputRef = useRef<HTMLInputElement>(null);
   const [adding, setAdding] = useState(false);
 
   const handleToggle = () => {
@@ -4085,6 +4086,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
       setNewOnFailure('stop');
       setInsertAfter('end');
       setNewAttachmentFile(null);
+      if (newAttachmentInputRef.current) newAttachmentInputRef.current.value = '';
     } finally {
       setAdding(false);
     }
@@ -4281,52 +4283,61 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
           )}
 
           <form onSubmit={handleAdd} className="add-step-form">
-            <h4>Add Step</h4>
-            <div className="add-step-row">
-              <label>Insert after:</label>
-              <select value={insertAfter} onChange={e => setInsertAfter(e.target.value)}>
-                <option value="end">At the end</option>
-                {sortedSteps && sortedSteps.map(s => (
-                  <option key={s.id} value={s.step_number}>After step {s.step_number}</option>
-                ))}
+            <div className="add-step-header-row">
+              <h4>Add Step</h4>
+              <div className="add-step-insert-row">
+                <label>Insert after:</label>
+                <select value={insertAfter} onChange={e => setInsertAfter(e.target.value)}>
+                  <option value="end">At the end</option>
+                  {sortedSteps && sortedSteps.map(s => (
+                    <option key={s.id} value={s.step_number}>After step {s.step_number}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="add-step-fields-row">
+              <AutoResizeTextarea
+                placeholder="Step description"
+                className="user-input add-step-desc-input"
+                value={newDesc}
+                onChange={val => setNewDesc(val)}
+              />
+              <AutoResizeTextarea
+                placeholder="Success symptom (defaults to N/A)"
+                className="user-input add-step-symptom-input"
+                value={newSuccessSymptom}
+                onChange={val => setNewSuccessSymptom(val)}
+              />
+              <input
+                type="number"
+                min={-1}
+                placeholder="Pts"
+                title="Points (-1 for Section Header)"
+                className="user-input add-step-points-input"
+                value={newPoints}
+                onChange={e => setNewPoints(e.target.value)}
+              />
+              <select className="failure-select add-step-failure-select" value={newOnFailure} onChange={e => setNewOnFailure(e.target.value as 'continue' | 'stop')}>
+                <option value="continue">Continue</option>
+                <option value="stop">Hard Stop</option>
               </select>
             </div>
-            <AutoResizeTextarea
-              placeholder="Step description"
-              className="user-input add-step-desc-input"
-              value={newDesc}
-              onChange={val => setNewDesc(val)}
-            />
-            <AutoResizeTextarea
-              placeholder="Success symptom (e.g. expected behavior, defaults to N/A)"
-              className="user-input add-step-symptom-input"
-              value={newSuccessSymptom}
-              onChange={val => setNewSuccessSymptom(val)}
-            />
-            <div className="add-step-attachment-row">
-              <label style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Reference Attachment (optional):</label>
-              <input
-                type="file"
-                className="user-input file-input-add-step"
-                onChange={e => setNewAttachmentFile(e.target.files?.[0] || null)}
-              />
+
+            <div className="add-step-bottom-row">
+              <div className="add-step-attachment-inline">
+                <label className="add-step-attachment-label">📎 Reference Attachment (optional):</label>
+                <input
+                  ref={newAttachmentInputRef}
+                  type="file"
+                  className="file-input-compact"
+                  onChange={e => setNewAttachmentFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <button type="submit" className="btn btn-sm add-step-btn" disabled={adding || !newDesc.trim()}>
+                {adding ? 'Adding...' : '+ Add Step'}
+              </button>
             </div>
-            <input
-              type="number"
-              min={-1}
-              placeholder="Points (-1 for Section)"
-              title="Use -1 to create a Section Header instead of an executable step"
-              className="user-input step-points-add"
-              value={newPoints}
-              onChange={e => setNewPoints(e.target.value)}
-            />
-            <select className="failure-select" value={newOnFailure} onChange={e => setNewOnFailure(e.target.value as 'continue' | 'stop')}>
-              <option value="continue">Continue on failure</option>
-              <option value="stop">Hard stop on failure</option>
-            </select>
-            <button type="submit" className="btn" disabled={adding || !newDesc.trim()}>
-              {adding ? 'Adding...' : 'Add Step'}
-            </button>
           </form>
         </div>
       )}
