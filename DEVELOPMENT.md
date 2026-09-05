@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000136**: Compact Single-Line Step Fields with Dynamic Multi-Line Auto-Wrapping, Narrower Upload and Points Controls:
+  - **Compact Single-Line Step Rows**: Standardized step fields in the Manage Tests view (`ManageTestRow`) to start on a compact single line (28px height, 0.82rem font, tight cell padding) so opening a test card displays all steps compactly without excessive vertical height.
+  - **Dynamic Multi-Line Auto-Wrapping (`AutoResizeTextarea`)**: Implemented `AutoResizeTextarea` with real-time `scrollHeight` detection and `onInput` auto-expansion. Steps remain strictly on one line when brief, and dynamically wrap and expand to two or more lines the moment typed or existing text overflows horizontally, completely eliminating horizontal scrolling.
+  - **Narrower Points & Upload Controls**: Narrowed points input to 44px (`.points-input`) and points column to 52px, tightened failure dropdown to 92px, compacted the upload button and attachment pills to 80px max-width, and reduced icon action buttons to 19px, freeing up over 76% of horizontal table space for Description and Success Symptom.
+  - **Horizontal Overflow Prevention & Refined Fonts**: Added `overflow-x: auto` on `.manage-steps-body` and scaled typography slightly down across the steps table (0.72rem headers, 0.78rem badges/points, 0.82rem descriptions) for a clean, sharp, compact view that never spills out of the test card.
 - **v1.0000135**: Widened Admin Panel Layout and Added Multi-Line Text Wrapping for Step Descriptions & Success Symptoms:
   - **Widened Admin Right Panel Layout**: Expanded `.admin-panel` from a rigid `max-width: 900px` to `width: calc(100% - 2.5rem); max-width: 1750px; margin: 1.75rem auto; padding: 0 1.25rem;`, eliminating the large empty gutters on both sides and allowing tables, step managers, and reports to span the full available display area.
   - **Dynamic Step Description & Success Symptom Sizing**: Removed the restrictive `max-width: 320px` constraint on `.step-desc-cell` and `.step-symptom-cell`. Allocated 42% table width to Description and 32% to Success Symptom, giving them spacious room across wide displays while keeping compact control columns fixed.

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import ReportsView from './ReportsView';
 
@@ -3950,6 +3950,53 @@ const AssignmentRow: React.FC<AssignmentRowProps> = ({ test, users, assignedUser
   );
 };
 
+interface AutoResizeTextareaProps {
+  value: string;
+  onChange: (val: string) => void;
+  className?: string;
+  placeholder?: string;
+  title?: string;
+  disabled?: boolean;
+}
+
+const AutoResizeTextarea: React.FC<AutoResizeTextareaProps> = ({
+  value,
+  onChange,
+  className,
+  placeholder,
+  title,
+  disabled
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const adjustHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const newHeight = Math.max(28, el.scrollHeight);
+    el.style.height = `${newHeight}px`;
+  };
+
+  useLayoutEffect(() => {
+    adjustHeight();
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      rows={1}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      onInput={adjustHeight}
+      className={className}
+      placeholder={placeholder}
+      title={title}
+      disabled={disabled}
+      style={{ overflowY: 'hidden', resize: 'none' }}
+    />
+  );
+};
+
 interface ManageTestRowProps {
   test: Test;
   steps: TestStepAdmin[] | undefined;
@@ -4115,13 +4162,13 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
             <table className="manage-steps-table">
               <thead>
                 <tr>
-                  <th>#</th>
-                  <th>Description</th>
-                  <th>Success Symptom</th>
-                  <th>Attachment</th>
-                  <th>Points</th>
-                  <th>If Fails</th>
-                  <th>Actions</th>
+                  <th className="step-num-cell">#</th>
+                  <th className="step-desc-cell">Description</th>
+                  <th className="step-symptom-cell">Success Symptom</th>
+                  <th className="step-attachment-cell">Attachment</th>
+                  <th className="step-points-cell">Points</th>
+                  <th className="step-failure-cell">If Fails</th>
+                  <th className="step-actions-cell">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -4135,20 +4182,18 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                         {isSection && <span className="section-badge-inline" title="Section Header (-1 points)">[SECTION]</span>}
                       </td>
                       <td className="step-desc-cell">
-                        <textarea
-                          rows={2}
+                        <AutoResizeTextarea
                           className="step-desc-input"
                           value={d.description}
-                          onChange={e => setDraft(step, { description: e.target.value })}
+                          onChange={val => setDraft(step, { description: val })}
                           placeholder="Step description"
                         />
                       </td>
                       <td className="step-symptom-cell">
-                        <textarea
-                          rows={2}
+                        <AutoResizeTextarea
                           className="step-symptom-input"
                           value={d.success_symptom}
-                          onChange={e => setDraft(step, { success_symptom: e.target.value })}
+                          onChange={val => setDraft(step, { success_symptom: val })}
                           placeholder={isSection ? 'N/A (Section Header)' : 'Success Symptom'}
                         />
                       </td>
@@ -4246,19 +4291,17 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
                 ))}
               </select>
             </div>
-            <textarea
-              rows={2}
+            <AutoResizeTextarea
               placeholder="Step description"
               className="user-input add-step-desc-input"
               value={newDesc}
-              onChange={e => setNewDesc(e.target.value)}
+              onChange={val => setNewDesc(val)}
             />
-            <textarea
-              rows={2}
+            <AutoResizeTextarea
               placeholder="Success symptom (e.g. expected behavior, defaults to N/A)"
               className="user-input add-step-symptom-input"
               value={newSuccessSymptom}
-              onChange={e => setNewSuccessSymptom(e.target.value)}
+              onChange={val => setNewSuccessSymptom(val)}
             />
             <div className="add-step-attachment-row">
               <label style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Reference Attachment (optional):</label>

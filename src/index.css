@@ -714,29 +714,32 @@ body {
 /* Manage Steps table */
 .manage-steps-body {
   border-top: 1px solid var(--border-color);
-  padding: 0.75rem 1.5rem 1rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+  overflow-x: auto;
   animation: fadeInDown 0.2s ease-out;
 }
 
 .manage-steps-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
+  table-layout: auto;
 }
 
 .manage-steps-table th {
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: 0.35rem 0.45rem;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
 }
 
 .manage-steps-table td {
-  padding: 0.55rem 0.75rem;
+  padding: 0.22rem 0.35rem;
   border-bottom: 1px solid rgba(255,255,255,0.03);
   color: var(--text-secondary);
   vertical-align: middle;
@@ -747,42 +750,55 @@ body {
 }
 
 .step-num-cell {
-  width: 55px;
-  min-width: 50px;
+  width: 44px;
+  min-width: 38px;
+  max-width: 50px;
   color: var(--text-muted) !important;
   font-weight: 600;
+  font-size: 0.78rem;
   vertical-align: middle;
+  text-align: center;
   white-space: nowrap;
 }
 
 .step-desc-cell {
-  min-width: 280px;
-  width: 42%;
+  min-width: 190px;
+  width: 46%;
   vertical-align: middle;
 }
 
 .step-symptom-cell {
-  min-width: 240px;
-  width: 32%;
+  min-width: 150px;
+  width: 30%;
   vertical-align: middle;
 }
 
-.step-points-cell {
-  width: 90px;
-  min-width: 85px;
+.step-attachment-cell {
+  width: 110px;
+  min-width: 95px;
+  max-width: 125px;
   vertical-align: middle;
   white-space: nowrap;
 }
 
+.step-points-cell {
+  width: 52px;
+  min-width: 46px;
+  max-width: 58px;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-align: center;
+}
+
 .points-input {
-  width: 80px;
+  width: 44px;
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  padding: 0.18rem 0.25rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 0.9rem;
+  font-size: 0.78rem;
   text-align: center;
   transition: var(--transition-all);
 }
@@ -799,19 +815,20 @@ body {
   box-sizing: border-box;
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 0.45rem 0.65rem;
+  border-radius: 5px;
+  padding: 0.22rem 0.4rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 0.82rem;
+  line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: break-word;
-  resize: vertical;
-  min-height: 52px;
+  min-height: 28px;
+  height: 28px;
+  field-sizing: content;
   display: block;
-  transition: var(--transition-all);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .step-desc-input:focus,
@@ -824,33 +841,36 @@ body {
 .failure-select {
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  padding: 0.18rem 0.3rem;
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 0.85rem;
+  font-size: 0.76rem;
+  width: 92px;
 }
 
 .step-failure-cell {
-  width: 125px;
-  min-width: 120px;
+  width: 98px;
+  min-width: 90px;
+  max-width: 108px;
   vertical-align: middle;
   white-space: nowrap;
 }
 
 .step-actions-cell {
-  width: 145px;
-  min-width: 140px;
+  width: 105px;
+  min-width: 98px;
   display: flex;
-  gap: 0.4rem;
+  gap: 0.25rem;
   white-space: nowrap;
   vertical-align: middle;
 }
 
 .step-actions-cell .btn-secondary,
 .step-actions-cell .btn-danger {
-  padding: 0.35rem 0.7rem;
-  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.74rem;
+  border-radius: 4px;
 }
 
 .add-step-form {
@@ -879,25 +899,34 @@ body {
 }
 
 .step-points-add {
-  width: 90px;
+  width: 58px;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.3rem;
+  text-align: center;
 }
 
 .add-step-desc-input {
   flex: 3;
-  min-width: 280px;
-  min-height: 52px;
-  resize: vertical;
-  line-height: 1.45;
+  min-width: 200px;
+  min-height: 28px;
+  height: 28px;
+  field-sizing: content;
+  line-height: 1.35;
+  font-size: 0.82rem;
+  padding: 0.22rem 0.4rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .add-step-symptom-input {
   flex: 2;
-  min-width: 240px;
-  min-height: 52px;
-  resize: vertical;
-  line-height: 1.45;
+  min-width: 160px;
+  min-height: 28px;
+  height: 28px;
+  field-sizing: content;
+  line-height: 1.35;
+  font-size: 0.82rem;
+  padding: 0.22rem 0.4rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -2396,21 +2425,21 @@ body {
 .attachment-control-group {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.2rem;
 }
 
 .attachment-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.6rem;
+  gap: 0.2rem;
+  padding: 0.14rem 0.35rem;
   background: rgba(99, 102, 241, 0.15);
   border: 1px solid rgba(99, 102, 241, 0.35);
-  border-radius: 6px;
+  border-radius: 4px;
   color: #c7d2fe;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   text-decoration: none;
-  max-width: 150px;
+  max-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2426,13 +2455,13 @@ body {
 .btn-upload-attachment {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.6rem;
+  gap: 0.2rem;
+  padding: 0.14rem 0.38rem;
   background: rgba(255, 255, 255, 0.05);
   border: 1px dashed rgba(255, 255, 255, 0.25);
-  border-radius: 6px;
+  border-radius: 4px;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.73rem;
   cursor: pointer;
   transition: var(--transition-all);
 }
@@ -2447,13 +2476,13 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 19px;
+  height: 19px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   transition: var(--transition-all);
 }
 
@@ -2466,14 +2495,14 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 19px;
+  height: 19px;
+  border-radius: 3px;
   background: rgba(239, 68, 68, 0.15);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: #f87171;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   line-height: 1;
   padding: 0;
   transition: var(--transition-all);
