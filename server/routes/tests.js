@@ -450,7 +450,43 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
   }
 });
 
-// Import tests from Excel file (admin only)
+function isNumericValue(val) {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') return !isNaN(val);
+  const str = String(val).trim();
+  if (!str) return false;
+  return /^-?\d+(\.\d+)?$/.test(str);
+}
+
+function parsePoints(val) {
+  if (val === undefined || val === null || String(val).trim() === '') return 10;
+  const parsed = parseInt(String(val).trim(), 10);
+  return isNaN(parsed) ? 10 : parsed;
+}
+
+function isHeaderRow(row0, row1) {
+  if (!Array.isArray(row0) || row0.length === 0) return false;
+  // If row0 col 0 is a number, row0 cannot be a header
+  if (isNumericValue(row0[0])) return false;
+
+  // If row1 exists and row1 col 0 is a number, but row0 col 0 is not, row0 is definitely a header
+  if (row1 && isNumericValue(row1[0])) return true;
+
+  // If row0's points column (or last column) is already a number, row0 cannot be a header
+  const row0LastIdx = row0.length - 1;
+  if (isNumericValue(row0[row0LastIdx])) return false;
+
+  // Otherwise, if row1 exists and row1's last column IS numeric, row0 has 'Points' label text -> row0 is header
+  if (row1) {
+    const row1LastIdx = row1.length - 1;
+    if (isNumericValue(row1[row1LastIdx])) return true;
+  }
+
+  // Check common header keywords
+  return row0.some(c => /^(step|desc|symptom|expect|point|score|value|case|result|test|#|no)/i.test(String(c).trim()));
+}
+
+// Import tests from Excel or CSV file (admin only)
 router.post('/import', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -467,54 +503,67 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
     try {
       for (const sheetName of workbook.SheetNames) {
         const sheet = workbook.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
+        const rows = rawRows.filter(r => Array.isArray(r) && r.some(c => String(c ?? '').trim() !== ''));
         if (rows.length === 0) continue;
 
-        const sampleKeys = Object.keys(rows[0]);
-        const testCaseKey = sampleKeys.find(k => {
-          const lk = k.toLowerCase().trim();
-          return lk.includes('step description') || lk.includes('description') || lk.includes('test case') || lk === 'step';
-        }) || sampleKeys[0];
+        let dataRows = rows;
+        if (rows.length > 0) {
+          const row0 = rows[0];
+          const row1 = rows.length > 1 ? rows[1] : null;
+          if (isHeaderRow(row0, row1)) {
+            dataRows = rows.slice(1);
+          }
+        }
 
-        const successKey = sampleKeys.find(k => {
-          const lk = k.toLowerCase().trim();
-          return lk.includes('success symptom') || lk.includes('expected success') || lk.includes('symptom') || lk.includes('success');
-        });
+        if (dataRows.length === 0) continue;
 
-        const pointsKey = sampleKeys.find(k => {
-          const lk = k.toLowerCase().trim();
-          return lk.includes('point') || lk.includes('value') || lk.includes('score');
-        });
+        // Determine whether column 0 in dataRows contains numbers or words
+        const numericCol0Count = dataRows.filter(r => isNumericValue(r[0])).length;
+        const col0IsNumbers = numericCol0Count > 0 && numericCol0Count >= dataRows.length * 0.5;
 
         const testName = workbook.SheetNames.length === 1 ? baseName : `${baseName} - ${sheetName}`;
 
         const result = await tx.execute({
           sql: 'INSERT INTO tests (name, description) VALUES (?, ?)',
-          args: [testName, 'Imported from Excel']
+          args: [testName, 'Imported from file']
         });
         const testId = Number(result.lastInsertRowid);
 
-        let stepNumber = 1;
-        for (const row of rows) {
-          const description = String(row[testCaseKey] || '').trim();
-          if (!description) continue;
-          const rawSuccess = successKey ? String(row[successKey] || '').trim() : '';
-          const successSymptom = rawSuccess || 'N/A';
-          let points = 10;
-          if (pointsKey && row[pointsKey] !== undefined && row[pointsKey] !== null && String(row[pointsKey]).trim() !== '') {
-            const parsed = parseInt(String(row[pointsKey]).trim(), 10);
-            if (!isNaN(parsed)) points = parsed;
+        let autoStepNumber = 1;
+        for (const row of dataRows) {
+          let stepNumber;
+          let description;
+          let successSymptom;
+          let points;
+
+          if (col0IsNumbers) {
+            // 4 columns: [step_number, description, success_symptom, points]
+            const rawNum = parseInt(String(row[0]).trim(), 10);
+            stepNumber = !isNaN(rawNum) && rawNum > 0 ? rawNum : autoStepNumber;
+            description = String(row[1] || '').trim();
+            successSymptom = String(row[2] || '').trim() || 'N/A';
+            points = parsePoints(row[3]);
+          } else {
+            // 3 columns: [description, success_symptom, points], auto-numbered
+            stepNumber = autoStepNumber;
+            description = String(row[0] || '').trim();
+            successSymptom = String(row[1] || '').trim() || 'N/A';
+            points = parsePoints(row[2]);
           }
+
+          if (!description) continue;
+
           await tx.execute({
-            sql: `INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points)
-                  VALUES (?, ?, ?, ?, 'stop', ?)`,
-            args: [testId, stepNumber, description, successSymptom, points]
+            sql: `INSERT INTO test_steps (test_id, step_number, description, success_symptom, on_failure, points, value)
+                  VALUES (?, ?, ?, ?, 'stop', ?, ?)`,
+            args: [testId, stepNumber, description, successSymptom, points, points]
           });
-          stepNumber++;
+          autoStepNumber++;
         }
 
-        imported.push({ id: testId, name: testName, stepsCount: stepNumber - 1 });
+        imported.push({ id: testId, name: testName, stepsCount: autoStepNumber - 1 });
       }
       await tx.commit();
       cache.invalidatePrefix('stepCount:');
@@ -527,7 +576,7 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
     res.json({ imported });
   } catch (error) {
     console.error('Import error:', error);
-    res.status(500).json({ error: 'Failed to import Excel file' });
+    res.status(500).json({ error: 'Failed to import Excel or CSV file' });
   }
 });
 

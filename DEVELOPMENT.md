@@ -1,6 +1,12 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000139**: Robust Position-Based Excel and CSV Test Import (4-Column & 3-Column Auto-Mapping):
+  - **Position-Based Column Mapping (Regardless of Headers)**: Completely decoupled test importing in `POST /api/tests/import` from English header name matching. Uses raw 2D grid cell parsing (`{ header: 1 }`):
+    - **Numeric Column 0 (4 Columns)**: If the first column contains numbers (e.g. 1, 2, 3...), column 0 is used as the `step_number`, column 1 as `description`, column 2 as `success_symptom` (defaulting to `'N/A'`), and column 3 as `points` (preserving `-1` for section headers, defaulting to `10`).
+    - **Text/Words Column 0 (3 Columns)**: If the first column contains text/words, steps are automatically numbered sequentially (1, 2, 3...), with column 0 mapped to `description`, column 1 to `success_symptom` (defaulting to `'N/A'`), and column 2 to `points` (defaulting to `10`, preserving `-1`).
+  - **Comprehensive Header Row Detection (`isHeaderRow`)**: Automatically detects whether row 0 is a header row by evaluating type differences between row 0 and row 1, non-numeric values in the points column, and common header keywords across any language. Non-header data files starting directly on row 0 are preserved without data loss.
+  - **Full CSV Support & UI Update**: Updated Admin Panel file picker (`accept=".xlsx,.xls,.csv"`) and instructions. SheetJS parses `.csv` (including UTF-8 BOM, quoted cells, and Arabic characters) with identical fidelity to `.xlsx` workbooks.
 - **v1.0000138**: Added Top-Right Square Download Test Sheet Button in Test Execution:
   - **Full Test Sheet CSV Export**: Added `downloadFullTestSheet` function in `TestExecution.tsx` that exports all test steps as an RFC 4180 compliant CSV file prefixed with UTF-8 BOM (`\uFEFF`) for full multilingual/Excel compatibility. The export includes `Step #`, `Step Description`, `Success Symptom`, and `Points` (correctly identifying section headers as `-1`).
   - **Top-Right Square Button in Step View**: Rendered a dedicated, compact square button (`.btn-download-test-square`, 52px × 52px) positioned in the top-right corner of the test execution step header (`.step-header`). It features a download tray SVG icon with a bold "Test Sheet" label, tooltip explanation, and smooth hover glow effect.

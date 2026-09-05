@@ -1620,15 +1620,18 @@ const AdminPanel: React.FC = () => {
 
       {activeTab === 'upload' && (
         <div className="admin-section">
-          <h3>Import Tests from Excel</h3>
+          <h3>Import Tests from Excel or CSV</h3>
           <p className="admin-hint">
-          Each sheet tab becomes a test. Columns used: <strong>Step Description</strong> (or Test case), <strong>Success Symptom</strong> (or Expected Success, defaults to 'N/A' if omitted), and <strong>Points</strong> (defaults to 10 if missing).
+            Upload an Excel (.xlsx, .xls) or CSV (.csv) file. Each sheet or CSV file becomes a test.
+            Columns are mapped automatically regardless of header labels:
+            if the first column contains numbers, it is considered the Step # (followed by Description, Success Symptom, and Points);
+            if the first column contains words, steps are auto-numbered (Description, Success Symptom, and Points).
           </p>
           <form onSubmit={handleImport} className="upload-form">
             <input
               ref={fileInputRef}
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,.csv"
               className="file-input"
             />
             <button type="submit" className="btn" disabled={importing}>
