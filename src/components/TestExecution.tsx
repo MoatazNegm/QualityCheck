@@ -287,6 +287,33 @@ const TestExecution: React.FC = () => {
     }
   };
 
+  const downloadFullTestSheet = () => {
+    if (!steps || steps.length === 0) {
+      alert('No steps available to download for this test.');
+      return;
+    }
+    const sorted = steps.slice().sort((a, b) => a.step_number - b.step_number);
+    const header = ['Step #', 'Step Description', 'Success Symptom', 'Points'];
+    const rows = sorted.map(s => {
+      const stepNum = s.step_number ?? '';
+      const desc = String(s.description || '').replace(/"/g, '""');
+      const symptom = String(s.success_symptom || 'N/A').replace(/"/g, '""');
+      const pts = isSectionStep(s) ? -1 : (s.points ?? s.value ?? 0);
+      return `"${stepNum}","${desc}","${symptom}","${pts}"`;
+    });
+    const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = String(testName || `test_${testId}`).replace(/[^a-z0-9_-]/gi, '_');
+    a.download = `${safeName}_test_sheet.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) return <div>Loading...</div>;
 
   const realSteps = steps.filter(s => !isSectionStep(s));
@@ -319,6 +346,9 @@ const TestExecution: React.FC = () => {
         <div className='test-completed-actions'>
           <button onClick={goToPrev} disabled={realSteps.length === 0 || submitting}>
             {submitting ? 'Reverting...' : '← Go to Last Step'}
+          </button>
+          <button type='button' className='btn-secondary' onClick={downloadFullTestSheet}>
+            📥 Download Test Sheet
           </button>
           <button onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
         </div>
@@ -369,9 +399,27 @@ const TestExecution: React.FC = () => {
       )}
 
       <div className='step-header'>
-        <h2>{testName}</h2>
-        <span className='step-counter'>Step {currentRealIndex + 1} of {realSteps.length}</span>
-        <span className='test-total-points'>Earned: {earnedInTest}/{totalPoints} pts</span>
+        <div className='step-header-info'>
+          <h2>{testName}</h2>
+          <div className='step-header-meta'>
+            <span className='step-counter'>Step {currentRealIndex + 1} of {realSteps.length}</span>
+            <span className='test-total-points'>Earned: {earnedInTest}/{totalPoints} pts</span>
+          </div>
+        </div>
+        <button
+          type='button'
+          className='btn-download-test-square'
+          onClick={downloadFullTestSheet}
+          title='Download complete test sheet (all steps, success symptoms, and points)'
+          aria-label='Download Test Sheet'
+        >
+          <svg className='download-icon' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' />
+            <polyline points='7 10 12 15 17 10' />
+            <line x1='12' y1='15' x2='12' y2='3' />
+          </svg>
+          <span className='download-btn-label'>Test Sheet</span>
+        </button>
       </div>
       <div className='test-month-points'>Points earned this month: <strong>{monthEarned !== null ? monthEarned : '—'}</strong></div>
 

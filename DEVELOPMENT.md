@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000138**: Added Top-Right Square Download Test Sheet Button in Test Execution:
+  - **Full Test Sheet CSV Export**: Added `downloadFullTestSheet` function in `TestExecution.tsx` that exports all test steps as an RFC 4180 compliant CSV file prefixed with UTF-8 BOM (`\uFEFF`) for full multilingual/Excel compatibility. The export includes `Step #`, `Step Description`, `Success Symptom`, and `Points` (correctly identifying section headers as `-1`).
+  - **Top-Right Square Button in Step View**: Rendered a dedicated, compact square button (`.btn-download-test-square`, 52px × 52px) positioned in the top-right corner of the test execution step header (`.step-header`). It features a download tray SVG icon with a bold "Test Sheet" label, tooltip explanation, and smooth hover glow effect.
+  - **Test Completion Screen Integration**: Added a secondary "📥 Download Test Sheet" button in the test completion screen action row, allowing testers to download the complete test sheet upon finishing.
 - **v1.0000137**: Streamlined 3-Line Add Step Form with Narrow Reference Attachment and Inline Layout:
   - **Structured 3-Line Form Architecture**: Redesigned the "Add Step" section in `ManageTestRow` into three purposeful horizontal rows:
     - **Line 1 (Header & Positioning)**: Clean header row displaying `<h4>Add Step</h4>` and the `Insert after:` label and dropdown inline.
