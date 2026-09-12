@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000140**: Fixed Transient "You Already Submitted" Warning Flash During Step Advancement:
+  - **Synchronous Step Advancement & State Batching**: In `TestExecution.tsx`, eliminated the race condition where `setDoneStepIds(newDone)` was called before asynchronous `await` network calls (`fetchSummary()`, `fetchWarnings()`, `refreshUser()`). The step index (`setStepIndex(nextIndex)`), completed step set (`setDoneStepIds(newDone)`), and form state (`resetForm()`) now update together synchronously upon step submission success.
+  - **Non-Blocking Background Metric Refreshes**: Triggered points summary, user warnings, and session refreshes in parallel via `Promise.all` in the background without delaying step transitions.
+  - **Submission-State Warning Guard**: Explicitly guarded `isAlreadyDone` with `!submitting` so that the redo notice is never rendered while submission or step transition is in flight.
 - **v1.0000139**: Robust Position-Based Excel and CSV Test Import (4-Column & 3-Column Auto-Mapping):
   - **Position-Based Column Mapping (Regardless of Headers)**: Completely decoupled test importing in `POST /api/tests/import` from English header name matching. Uses raw 2D grid cell parsing (`{ header: 1 }`):
     - **Numeric Column 0 (4 Columns)**: If the first column contains numbers (e.g. 1, 2, 3...), column 0 is used as the `step_number`, column 1 as `description`, column 2 as `success_symptom` (defaulting to `'N/A'`), and column 3 as `points` (preserving `-1` for section headers, defaulting to `10`).

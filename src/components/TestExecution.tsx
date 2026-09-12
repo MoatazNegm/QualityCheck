@@ -214,13 +214,10 @@ const TestExecution: React.FC = () => {
         const data = await res.json();
         const newDone = new Set(doneStepIds);
         newDone.add(step.id);
-        setDoneStepIds(newDone);
-        resetForm();
-        await fetchSummary();
-        await fetchWarnings();
-        await refreshUser();
 
         if (data.autoEnded || (result === 'fail' && (!step.on_failure || step.on_failure === 'stop'))) {
+          setDoneStepIds(newDone);
+          resetForm();
           if (!data.autoEnded) {
             await endTest(testId!);
           }
@@ -232,13 +229,26 @@ const TestExecution: React.FC = () => {
         while (nextIndex < steps.length && isSectionStep(steps[nextIndex])) {
           nextIndex++;
         }
+
+        // Advance step, update done IDs, and reset form together in the same state update batch
+        setDoneStepIds(newDone);
         setStepIndex(nextIndex);
+        resetForm();
 
         const realSteps = steps.filter(s => !isSectionStep(s));
         const allDone = realSteps.every(s => newDone.has(s.id));
         if (allDone) {
           await markComplete(testId!);
         }
+
+        // Refresh metrics concurrently in background without delaying the step transition
+        Promise.all([
+          fetchSummary(),
+          fetchWarnings(),
+          refreshUser()
+        ]).catch(err => {
+          console.error('Error refreshing metrics after step submission:', err);
+        });
       } else {
         const errorData = await res.json().catch(() => ({}));
         alert(errorData.error || 'Failed to submit step result. Please check the file size or parameters and try again.');
@@ -331,7 +341,7 @@ const TestExecution: React.FC = () => {
 
   const isCompleted = stepIndex >= steps.length || (realSteps.length > 0 && realSteps.every(s => doneStepIds.has(s.id)) && stepIndex >= steps.length);
   const currentStep = steps[stepIndex] ?? null;
-  const isAlreadyDone = currentStep ? doneStepIds.has(currentStep.id) : false;
+  const isAlreadyDone = Boolean(currentStep && doneStepIds.has(currentStep.id) && !submitting);
   const currentRealIndex = currentStep ? realSteps.findIndex(s => s.id === currentStep.id) : 0;
   const activeSection = currentStep ? getActiveSectionForIndex(steps, stepIndex) : null;
   const canGoPrev = steps.slice(0, stepIndex).some(s => !isSectionStep(s));
