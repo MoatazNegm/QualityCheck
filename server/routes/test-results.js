@@ -10,7 +10,7 @@ async function getAssignedTestsOrdered(userId) {
   return await testsDb.prepare(`
     SELECT t.* FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
-    WHERE ta.user_id = ?
+    WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
     ORDER BY t.id
   `).all(userId);
 }

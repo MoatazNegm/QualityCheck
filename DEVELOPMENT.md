@@ -1,6 +1,30 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000143**: Fixed Missing Success Symptom and Reference Attachments in Test Report:
+  - **Test Report Success Symptom Population**: Resolved an omission in `server/routes/reports.js` (`GET /api/reports/test-report`) where `ts.success_symptom` was omitted from the `failedSubmissions` SQL query and submission object mapping. This previously caused all failed steps in the Test Report (including tests with populated symptoms like `users_2nodes_OneCluster`) to fall back to `'N/A'`.
+  - **Full Step Reference Attachments in Test & Passed Reports**: Added `ts.attachment_path` and `ts.attachment_name` across `user-report`, `test-report`, `passed-report`, and `failed-report` backend queries and mapped them into submission objects.
+  - **UI Integration in Test Report & Admin Panel**: Added reference attachment download links in `ReportsView.tsx` under Test Report and Passed Steps Report, and unified the Test Report table row in `AdminPanel.tsx` to render both `Success Symptom` and reference attachment links matching the design of `ReportsView.tsx`.
+- **v1.0000142**: Disabled Tests Management, Dedicated Admin Tab, Auto-Assignment on Re-Enable, and Points/Reports Isolation:
+  - **Points Report Preservation**: Historical points earned on disabled tests remain fully calculated and displayed in user total points, user progress drill-downs, and points payment records. In `server/routes/reports.js` (`/points` and `/user-progress/:userId`), earned points from disabled tests are aggregated without loss, and disabled tests are clearly identified with `(Disabled)` tags in user points drill-downs.
+  - **Exclusion from Step Audit Reports**: Disabled tests are cleanly removed from step-investigation reports where pass/fail troubleshooting is unnecessary:
+    - `user-report`: Filtered `rawAssignedTests` to `COALESCE(t.is_deleted, 0) = 0`, hiding disabled tests from the pass/fail step breakdown while keeping total points earned untouched.
+    - `test-report`: Filtered test query with `COALESCE(is_deleted, 0) = 0`.
+    - `passed-report`: Filtered test query with `COALESCE(is_deleted, 0) = 0`.
+    - `failed-report`: Joined `tests` table with `COALESCE(t.is_deleted, 0) = 0` to omit failure records belonging to disabled tests.
+    - `ReportsView.tsx`: Test Report, Passed Steps Report, and Failed Steps Report selectors now show only active tests, while the Points Report selector preserves access to all tests with a `(Disabled)` label indicator.
+  - **Dedicated "Disabled Tests" Admin Panel Tab**:
+    - Added a new top-level **"Disabled Tests"** tab in `AdminPanel.tsx` next to "Manage Tests", featuring a dynamic counter badge showing the number of disabled tests.
+    - Renders an informative management view displaying test name, step counts, total points, and a prominent **"✓ Enable Test"** action (plus **"✓ Enable All Disabled Tests"**).
+  - **Auto-Assignment on Re-Enable (`POST /api/tests/:id/enable` & `POST /api/tests/enable-all`)**:
+    - When a test is re-enabled from the Disabled Tests tab, the backend resets `is_deleted = 0` and automatically assigns all non-admin users (`SELECT id FROM users WHERE is_admin = 0`) to the test via `INSERT OR IGNORE INTO test_assignments`.
+    - Automatically refreshes assignments and caches so the re-enabled test immediately appears in "Manage Tests" and "Assign Tests" views with all testers assigned.
+  - **UI Terminology Refinement**: Renamed test deletion action in Manage Tests from "Delete" to "Disable" (`title="Disable this test"`), providing clear confirmation messaging that disabled tests can be restored at any time from the Disabled Tests tab.
+- **v1.0000141**: Soft-Delete Tests to Disappear from Manage Tests View while Preserving History & Reports:
+  - **Non-Destructive Test Deletion (`is_deleted` Column & Migration)**: Replaced physical table row deletion (`DELETE FROM tests WHERE id = ?`) with a soft-delete mechanism (`UPDATE tests SET is_deleted = 1 WHERE id = ?`). Added `is_deleted BOOLEAN DEFAULT 0` column to `tests` table in `server/db/db.js` with startup schema migrations ensuring existing records default to `0`.
+  - **Complete Historical Records & Reports Preservation**: All associated test steps, submissions, execution results, points logs, and uploaded configuration files remain completely intact in the database. In `server/routes/reports.js` (`user-report`), updated test selection to include tests with submissions in the reporting date range even if soft-deleted. In `ReportsView.tsx`, test dropdown selectors display all historical tests with an `(Archived)` badge indicator.
+  - **Manage Tests & Assignments View Clean-up**: In `AdminPanel.tsx`, filtered tests with `tests.filter(t => !t.is_deleted)` across the "Manage Tests" tab, "Assignments" tab, and user assignment modal so deleted tests cleanly disappear from active administrative workflows.
+  - **Active Test Loop Auto-Exclusion**: Updated `getAssignedTestsOrdered` in `server/routes/tests.js` and `server/routes/test-results.js` to exclude deleted tests (`AND COALESCE(t.is_deleted, 0) = 0`), ensuring testers automatically skip deleted tests in active rounds.
 - **v1.0000140**: Fixed Transient "You Already Submitted" Warning Flash During Step Advancement:
   - **Synchronous Step Advancement & State Batching**: In `TestExecution.tsx`, eliminated the race condition where `setDoneStepIds(newDone)` was called before asynchronous `await` network calls (`fetchSummary()`, `fetchWarnings()`, `refreshUser()`). The step index (`setStepIndex(nextIndex)`), completed step set (`setDoneStepIds(newDone)`), and form state (`resetForm()`) now update together synchronously upon step submission success.
   - **Non-Blocking Background Metric Refreshes**: Triggered points summary, user warnings, and session refreshes in parallel via `Promise.all` in the background without delaying step transitions.

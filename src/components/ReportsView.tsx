@@ -13,6 +13,7 @@ interface Test {
   id: number;
   name: string;
   description: string;
+  is_deleted?: number | boolean;
 }
 
 interface User {
@@ -255,9 +256,9 @@ const ReportsView: React.FC = () => {
       if (res.ok) {
         const data: Test[] = await res.json();
         setTests(data);
-        const allTestIds = data.map(t => t.id);
-        setPassedReportTestIds(allTestIds);
-        setFailedReportTestIds(allTestIds);
+        const activeTestIds = data.filter(t => !t.is_deleted).map(t => t.id);
+        setPassedReportTestIds(activeTestIds);
+        setFailedReportTestIds(activeTestIds);
       }
     } catch {
       // ignore
@@ -1001,7 +1002,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder={testReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                  value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? (testReportTestIds.length === tests.length ? 'All Tests' : testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? (testReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setTestReportTestSearch(e.target.value)}
                   onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
@@ -1011,7 +1012,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={testReportTestIds.length === 0 || testReportTestIds.length === tests.length}
+                        checked={testReportTestIds.length === 0 || testReportTestIds.length === tests.filter(t => !t.is_deleted).length}
                         onChange={() => {
                           setTestReportTestIds([]);
                           setTestReportData(null);
@@ -1020,7 +1021,7 @@ const ReportsView: React.FC = () => {
                       <strong>All Tests</strong>
                     </label>
                     {tests
-                      .filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
+                      .filter(t => !t.is_deleted && t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
                       .map(t => (
                         <label
                           key={t.id}
@@ -1218,6 +1219,20 @@ const ReportsView: React.FC = () => {
                                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                                           <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
                                         </div>
+                                        {(sub.attachment_path || sub.attachmentPath) && (
+                                          <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                            <a
+                                              href={`${API_BASE}${sub.attachment_path || sub.attachmentPath}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="report-file-link"
+                                              download={sub.attachment_name || sub.attachmentName || true}
+                                              onClick={e => e.stopPropagation()}
+                                            >
+                                              📎 Reference File: {sub.attachment_name || sub.attachmentName || 'Download'}
+                                            </a>
+                                          </div>
+                                        )}
                                       </td>
                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                       <td className="report-step-comment">{sub.comment || '—'}</td>
@@ -1320,7 +1335,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder={passedReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                  value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? (passedReportTestIds.length === tests.length ? 'All Tests' : passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? (passedReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setPassedReportTestSearch(e.target.value)}
                   onFocus={() => { setShowPassedTestDropdown(true); setPassedReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowPassedTestDropdown(false), 150)}
@@ -1330,7 +1345,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={passedReportTestIds.length === 0 || passedReportTestIds.length === tests.length}
+                        checked={passedReportTestIds.length === 0 || passedReportTestIds.length === tests.filter(t => !t.is_deleted).length}
                         onChange={() => {
                           setPassedReportTestIds([]);
                           setPassedReportData(null);
@@ -1339,7 +1354,7 @@ const ReportsView: React.FC = () => {
                       <strong>All Tests</strong>
                     </label>
                     {tests
-                      .filter(t => t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase()))
+                      .filter(t => !t.is_deleted && t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase()))
                       .map(t => (
                         <label
                           key={t.id}
@@ -1535,6 +1550,20 @@ const ReportsView: React.FC = () => {
                                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                                           <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
                                         </div>
+                                        {(sub.attachment_path || sub.attachmentPath) && (
+                                          <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                            <a
+                                              href={`${API_BASE}${sub.attachment_path || sub.attachmentPath}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="report-file-link"
+                                              download={sub.attachment_name || sub.attachmentName || true}
+                                              onClick={e => e.stopPropagation()}
+                                            >
+                                              📎 Reference File: {sub.attachment_name || sub.attachmentName || 'Download'}
+                                            </a>
+                                          </div>
+                                        )}
                                       </td>
                                       <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
                                       <td className="report-step-comment">{sub.comment || '—'}</td>
@@ -1639,7 +1668,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder="Search tests..."
-                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (failedReportTestIds.length === tests.length ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : failedReportTestSearch)}
+                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (failedReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : failedReportTestSearch)}
                   onChange={e => setFailedReportTestSearch(e.target.value)}
                   onFocus={() => { setShowFailedTestDropdown(true); setFailedReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowFailedTestDropdown(false), 150)}
@@ -1649,17 +1678,17 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={failedReportTestIds.length === tests.length && tests.length > 0}
+                        checked={failedReportTestIds.length === tests.filter(t => !t.is_deleted).length && tests.filter(t => !t.is_deleted).length > 0}
                         onChange={() => {
-                          if (failedReportTestIds.length === tests.length) setFailedReportTestIds([]);
-                          else setFailedReportTestIds(tests.map(t => t.id));
+                          if (failedReportTestIds.length === tests.filter(t => !t.is_deleted).length) setFailedReportTestIds([]);
+                          else setFailedReportTestIds(tests.filter(t => !t.is_deleted).map(t => t.id));
                           setFailedReportData(null);
                         }}
                       />
                       <strong>Select All Tests</strong>
                     </label>
                     {tests
-                      .filter(t => t.name.toLowerCase().includes(failedReportTestSearch.toLowerCase()))
+                      .filter(t => !t.is_deleted && t.name.toLowerCase().includes(failedReportTestSearch.toLowerCase()))
                       .map(t => (
                         <label
                           key={t.id}
@@ -2007,7 +2036,7 @@ const ReportsView: React.FC = () => {
                               setExpandedPointsUser(null);
                             }}
                           />
-                          {t.name}
+                          {t.name}{t.is_deleted ? ' (Disabled)' : ''}
                         </label>
                       ))}
                   </div>

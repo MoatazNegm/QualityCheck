@@ -29,7 +29,7 @@ async function getAssignedTestsOrdered(userId) {
   return await testsDb.prepare(`
     SELECT t.* FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
-    WHERE ta.user_id = ?
+    WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
     ORDER BY t.id
   `).all(userId);
 }
@@ -273,6 +273,7 @@ router.get('/', authenticateToken, async (req, res) => {
       const allTests = await testsDb.prepare('SELECT * FROM tests ORDER BY id').all();
       tests = await Promise.all(allTests.map(async t => ({
         ...t,
+        is_deleted: t.is_deleted ? 1 : 0,
         locked: false,
         isActive: false,
         completed: false,
@@ -309,6 +310,7 @@ router.get('/', authenticateToken, async (req, res) => {
         const doneCount = completionMap[t.id] || 0;
         return {
           ...t,
+          is_deleted: t.is_deleted ? 1 : 0,
           locked: isLocked,
           isActive: isActive,
           completed: stepCount > 0 && doneCount >= stepCount,
@@ -682,13 +684,68 @@ router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, a
   }
 });
 
-// Delete entire test (admin only)
+// Disable test (soft delete so points and history remain intact while hiding from active loops)
 router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    await testsDb.prepare('DELETE FROM tests WHERE id = ?').run(req.params.id);
-    res.json({ message: 'Test deleted' });
+    await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
+    cache.invalidatePrefix('stepCount:');
+    cache.invalidatePrefix('totalPoints:');
+    res.json({ message: 'Test disabled successfully' });
   } catch (error) {
-    console.error('Delete test error:', error);
+    console.error('Disable test error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:id/disable', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
+    cache.invalidatePrefix('stepCount:');
+    cache.invalidatePrefix('totalPoints:');
+    res.json({ message: 'Test disabled successfully' });
+  } catch (error) {
+    console.error('Disable test error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Re-enable test and assign all non-admin users to it by default
+router.post('/:id/enable', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const testId = req.params.id;
+    await testsDb.prepare('UPDATE tests SET is_deleted = 0 WHERE id = ?').run(testId);
+
+    // Assign all non-admin users (testers) to this test by default
+    const nonAdmins = await testsDb.prepare('SELECT id FROM users WHERE is_admin = 0').all();
+    for (const u of nonAdmins) {
+      await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(testId, u.id);
+    }
+
+    cache.invalidatePrefix('stepCount:');
+    cache.invalidatePrefix('totalPoints:');
+    res.json({ message: 'Test enabled successfully and assigned to all users' });
+  } catch (error) {
+    console.error('Enable test error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Enable all disabled tests and assign all non-admin users to them by default
+router.post('/enable-all', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const disabledTests = await testsDb.prepare('SELECT id FROM tests WHERE is_deleted = 1').all();
+    const nonAdmins = await testsDb.prepare('SELECT id FROM users WHERE is_admin = 0').all();
+    for (const t of disabledTests) {
+      await testsDb.prepare('UPDATE tests SET is_deleted = 0 WHERE id = ?').run(t.id);
+      for (const u of nonAdmins) {
+        await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(t.id, u.id);
+      }
+    }
+    cache.invalidatePrefix('stepCount:');
+    cache.invalidatePrefix('totalPoints:');
+    res.json({ message: 'All disabled tests enabled and assigned to all users' });
+  } catch (error) {
+    console.error('Enable all tests error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

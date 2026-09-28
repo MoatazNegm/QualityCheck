@@ -264,7 +264,8 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS tests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      description TEXT
+      description TEXT,
+      is_deleted BOOLEAN DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS test_steps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -478,6 +479,15 @@ async function runMigrations() {
     }
     await clientWrapper.execute({
       sql: "UPDATE test_steps SET success_symptom = 'N/A' WHERE success_symptom IS NULL OR TRIM(success_symptom) = ''"
+    });
+
+    const testCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(tests)' })).rows;
+    if (!testCols.some(c => c.name === 'is_deleted')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE tests ADD COLUMN is_deleted BOOLEAN DEFAULT 0' });
+      console.log('Migration: added is_deleted column to tests');
+    }
+    await clientWrapper.execute({
+      sql: 'UPDATE tests SET is_deleted = 0 WHERE is_deleted IS NULL'
     });
     const userCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(users)' })).rows;
     if (!userCols.some(c => c.name === 'is_suspended')) {

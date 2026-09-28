@@ -153,8 +153,8 @@ async function applyBackup(backup, res) {
     // Insert Tests
     for (const test of backup.tests) {
       batch.push({
-        sql: 'INSERT INTO tests (id, name, description) VALUES (?, ?, ?)',
-        args: [test.id, test.name, test.description]
+        sql: 'INSERT INTO tests (id, name, description, is_deleted) VALUES (?, ?, ?, ?)',
+        args: [test.id, test.name, test.description, test.is_deleted ? 1 : 0]
       });
     }
 

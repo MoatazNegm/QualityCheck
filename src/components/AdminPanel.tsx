@@ -7,6 +7,7 @@ interface Test {
   name: string;
   description: string;
   totalPoints?: number;
+  is_deleted?: number | boolean;
 }
 
 interface User {
@@ -78,7 +79,7 @@ const AdminPanel: React.FC = () => {
   const [importSaveError, setImportSaveError] = useState('');
   const [importSaveSuccess, setImportSaveSuccess] = useState('');
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings'>('upload');
   const [thresholdMinutes, setThresholdMinutes] = useState<string>('3');
   const [maxMonthlyRounds, setMaxMonthlyRounds] = useState<string>('8');
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -1189,11 +1190,74 @@ const AdminPanel: React.FC = () => {
     await normalizeSteps(testId);
   };
 
-  const handleDeleteTest = async (testId: number, testName: string) => {
-    if (!window.confirm(`Delete test "${testName}" and all its steps? This cannot be undone.`)) return;
+  const [enablingTestId, setEnablingTestId] = useState<number | null>(null);
+  const [enableMessage, setEnableMessage] = useState<string>('');
+
+  const refreshAssignments = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/assignments/bulk`, { headers: authHeaders });
+      if (res.ok) {
+        setAssignments(await res.json());
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDisableTest = async (testId: number, testName: string) => {
+    if (!window.confirm(`Disable test "${testName}"? It will be moved to the Disabled Tests tab and can be re-enabled at any time.`)) return;
     await fetch(`${API_BASE}/api/tests/${testId}`, { method: 'DELETE', headers: authHeaders });
-    setTests(prev => prev.filter(t => t.id !== testId));
+    setTests(prev => prev.map(t => t.id === testId ? { ...t, is_deleted: 1 } : t));
     setManagedSteps(prev => { const n = { ...prev }; delete n[testId]; return n; });
+  };
+
+  const handleEnableTest = async (testId: number) => {
+    setEnablingTestId(testId);
+    setEnableMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/${testId}/enable`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        setTests(prev => prev.map(t => t.id === testId ? { ...t, is_deleted: 0 } : t));
+        await refreshAssignments();
+        setEnableMessage('Test enabled successfully and assigned to all users.');
+        setTimeout(() => setEnableMessage(''), 4000);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Failed to enable test');
+      }
+    } catch {
+      alert('Network error while enabling test');
+    } finally {
+      setEnablingTestId(null);
+    }
+  };
+
+  const handleEnableAllTests = async () => {
+    if (!window.confirm('Enable all disabled tests and assign all users to them by default?')) return;
+    setEnablingTestId(-1);
+    setEnableMessage('');
+    try {
+      const res = await fetch(`${API_BASE}/api/tests/enable-all`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        setTests(prev => prev.map(t => ({ ...t, is_deleted: 0 })));
+        await refreshAssignments();
+        setEnableMessage('All disabled tests enabled and assigned to all users.');
+        setTimeout(() => setEnableMessage(''), 4000);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Failed to enable tests');
+      }
+    } catch {
+      alert('Network error while enabling tests');
+    } finally {
+      setEnablingTestId(null);
+    }
   };
 
   const openHistory = async (user: User) => {
@@ -1593,6 +1657,12 @@ const AdminPanel: React.FC = () => {
           Manage Tests
         </button>
         <button
+          className={`tab-btn ${activeTab === 'disabled' ? 'active' : ''}`}
+          onClick={() => setActiveTab('disabled')}
+        >
+          Disabled Tests {tests.filter(t => t.is_deleted).length > 0 ? `(${tests.filter(t => t.is_deleted).length})` : ''}
+        </button>
+        <button
           className={`tab-btn ${activeTab === 'versions' ? 'active' : ''}`}
           onClick={() => setActiveTab('versions')}
         >
@@ -1839,11 +1909,11 @@ const AdminPanel: React.FC = () => {
             <strong> hard-stop</strong> the whole test. Insert a new step between existing ones, or delete a step.
             Step numbers are kept sequential automatically.
           </p>
-          {tests.length === 0 ? (
+          {tests.filter(t => !t.is_deleted).length === 0 ? (
             <p>No tests available. Upload an Excel file first.</p>
           ) : (
             <div className="assignment-list">
-              {tests.map(test => (
+              {tests.filter(t => !t.is_deleted).map(test => (
                 <ManageTestRow
                   key={test.id}
                   test={test}
@@ -1856,9 +1926,72 @@ const AdminPanel: React.FC = () => {
                   onAddStep={(payload) => addStep(test.id, payload)}
                   onUploadAttachment={(stepId, file) => uploadStepAttachment(test.id, stepId, file)}
                   onRemoveAttachment={(stepId) => removeStepAttachment(test.id, stepId)}
-                  onDelete={() => handleDeleteTest(test.id, test.name)}
+                  onDelete={() => handleDisableTest(test.id, test.name)}
                 />
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'disabled' && (
+        <div className="admin-section">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+            <div>
+              <h3>Disabled Tests</h3>
+              <p className="admin-hint" style={{ margin: 0 }}>
+                These tests are currently disabled. They are hidden from active tester loops and step investigation reports, while their historical points remain intact in user points totals.
+                Re-enabling a test restores it to Manage Tests and assigns all users to it by default.
+              </p>
+            </div>
+            {tests.filter(t => t.is_deleted).length > 0 && (
+              <button
+                className="btn btn-secondary"
+                disabled={enablingTestId !== null}
+                onClick={handleEnableAllTests}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                {enablingTestId === -1 ? 'Enabling All...' : '✓ Enable All Disabled Tests'}
+              </button>
+            )}
+          </div>
+
+          {enableMessage && <p className="success-msg">{enableMessage}</p>}
+
+          {tests.filter(t => t.is_deleted).length === 0 ? (
+            <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--card-bg, #1e293b)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <p style={{ margin: 0, color: 'var(--text-muted)' }}>No disabled tests. All tests are currently active.</p>
+            </div>
+          ) : (
+            <div className="assignment-list">
+              {tests.filter(t => t.is_deleted).map(test => {
+                const stepCount = managedSteps[test.id] ? managedSteps[test.id].filter(s => Number(s.points) !== -1 && Number(s.value) !== -1).length : null;
+                const totalPts = test.totalPoints ?? (managedSteps[test.id] ? managedSteps[test.id].reduce((sum, s) => sum + (Number(s.points) > 0 ? Number(s.points) : 0), 0) : 0);
+                const isEnabling = enablingTestId === test.id;
+
+                return (
+                  <div key={test.id} className="assignment-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.2rem', gap: '1rem', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <span className="test-name" style={{ fontWeight: 600, fontSize: '1rem' }}>{test.name}</span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {stepCount !== null ? `${stepCount} step(s)` : ''}
+                        {totalPts > 0 ? ` • ${totalPts} pts total` : ''}
+                        {test.description ? ` • ${test.description}` : ''}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                      <button
+                        className="btn"
+                        style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
+                        disabled={enablingTestId !== null}
+                        onClick={() => handleEnableTest(test.id)}
+                      >
+                        {isEnabling ? 'Enabling...' : '✓ Enable Test'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1867,11 +2000,11 @@ const AdminPanel: React.FC = () => {
       {activeTab === 'assign' && (
         <div className="admin-section">
           <h3>Assign Tests to Users</h3>
-          {tests.length === 0 ? (
+          {tests.filter(t => !t.is_deleted).length === 0 ? (
             <p>No tests available. Upload an Excel file first.</p>
           ) : (
             <div className="assignment-list">
-              {tests.map(test => (
+              {tests.filter(t => !t.is_deleted).map(test => (
                 <AssignmentRow
                   key={test.id}
                   test={test}
@@ -2663,7 +2796,26 @@ const AdminPanel: React.FC = () => {
                                             <td>{fu.userName}</td>
                                             <td className="step-num-cell">{sub.stepNumber}</td>
                                             <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
-                                            <td>{sub.description}</td>
+                                            <td>
+                                              <div>{sub.description}</div>
+                                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                                <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
+                                              </div>
+                                              {(sub.attachment_path || sub.attachmentPath) && (
+                                                <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                                  <a
+                                                    href={`${API_BASE}${sub.attachment_path || sub.attachmentPath}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="report-file-link"
+                                                    download={sub.attachment_name || sub.attachmentName || true}
+                                                    onClick={e => e.stopPropagation()}
+                                                  >
+                                                    📎 Reference File: {sub.attachment_name || sub.attachmentName || 'Download'}
+                                                  </a>
+                                                </div>
+                                              )}
+                                            </td>
                                             <td className="report-step-comment">{sub.comment || '—'}</td>
                                             <td>
                                               {sub.configFilePath ? (
@@ -3366,11 +3518,11 @@ const AdminPanel: React.FC = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                   <div>
                     <h4>Assigned Tests</h4>
-                    {tests.filter(t => detailUserAssignments[t.id]).length === 0 ? (
+                    {tests.filter(t => !t.is_deleted && detailUserAssignments[t.id]).length === 0 ? (
                       <p className="admin-hint">No assigned tests.</p>
                     ) : (
                       <div className="selected-tags">
-                        {tests.filter(t => detailUserAssignments[t.id]).map(t => (
+                        {tests.filter(t => !t.is_deleted && detailUserAssignments[t.id]).map(t => (
                           <span key={t.id} className="selected-tag" style={{ border: '1px solid #ef444455', background: '#ef444412', color: '#ef4444' }}>
                             {t.name}
                             <button type="button" onClick={() => toggleDetailAssignment(t.id, true)}>×</button>
@@ -3381,11 +3533,11 @@ const AdminPanel: React.FC = () => {
                   </div>
                   <div>
                     <h4>Unassigned Tests</h4>
-                    {tests.filter(t => !detailUserAssignments[t.id]).length === 0 ? (
+                    {tests.filter(t => !t.is_deleted && !detailUserAssignments[t.id]).length === 0 ? (
                       <p className="admin-hint">All tests are assigned.</p>
                     ) : (
                       <div className="selected-tags">
-                        {tests.filter(t => !detailUserAssignments[t.id]).map(t => (
+                        {tests.filter(t => !t.is_deleted && !detailUserAssignments[t.id]).map(t => (
                           <span key={t.id} className="selected-tag" style={{ border: '1px solid #10b98155', background: '#10b98112', color: '#10b981' }}>
                             {t.name}
                             <button type="button" onClick={() => toggleDetailAssignment(t.id, false)}>+</button>
@@ -4150,7 +4302,7 @@ const ManageTestRow: React.FC<ManageTestRowProps> = ({ test, steps, loading, aut
         </button>
         <button
           className="btn-icon btn-icon-danger"
-          title="Delete this test"
+          title="Disable this test"
           onClick={e => { e.stopPropagation(); onDelete(); }}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>

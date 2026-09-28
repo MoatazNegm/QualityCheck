@@ -165,10 +165,14 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const rawAssignedTests = await testsDb.prepare(
       `SELECT DISTINCT t.id, t.name
        FROM tests t
-       INNER JOIN test_assignments ta ON ta.test_id = t.id
-       WHERE ta.user_id IN (${placeholders})
+       WHERE COALESCE(t.is_deleted, 0) = 0
+         AND t.id IN (
+           SELECT test_id FROM test_assignments WHERE user_id IN (${placeholders})
+           UNION
+           SELECT test_id FROM test_submissions WHERE user_id IN (${placeholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilterSub}
+         )
        ORDER BY t.name, t.id`
-    ).all(...userIds);
+    ).all(...userIds, ...userIds, start, end, ...versionIds);
 
     const nameToTestIdsMap = {};
     const uniqueTests = [];
@@ -200,6 +204,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
          ts.step_number,
          ts.description,
          ts.success_symptom,
+         ts.attachment_path,
+         ts.attachment_name,
          s.comment,
          s.config_file_path,
          s.round_id,
@@ -222,6 +228,10 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
         description: row.description,
         successSymptom: row.success_symptom || 'N/A',
         success_symptom: row.success_symptom || 'N/A',
+        attachmentPath: row.attachment_path || null,
+        attachment_path: row.attachment_path || null,
+        attachmentName: row.attachment_name || null,
+        attachment_name: row.attachment_name || null,
         userId: row.user_id,
         userName: resolvedName,
         username: resolvedName,
@@ -337,6 +347,10 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
             stepNumber: sub.stepNumber,
             description: sub.description,
             successSymptom: sub.successSymptom || 'N/A',
+            attachmentPath: sub.attachmentPath || null,
+            attachment_path: sub.attachment_path || null,
+            attachmentName: sub.attachmentName || null,
+            attachment_name: sub.attachment_name || null,
             fails: 0,
             rounds: [],
             submissions: []
@@ -555,7 +569,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
     let tests;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      tests = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id').all();
       testIds = tests.map(t => t.id);
     } else {
       testIds = String(testIdsRaw)
@@ -568,7 +582,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0`).all(...testIds);
     }
 
     if (tests.length === 0) {
@@ -601,6 +615,9 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
          s.step_id,
          ts.step_number,
          ts.description,
+         ts.success_symptom,
+         ts.attachment_path,
+         ts.attachment_name,
          s.comment,
          s.config_file_path,
          s.round_id,
@@ -629,6 +646,12 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
         stepId: row.step_id,
         stepNumber: row.step_number,
         description: row.description,
+        successSymptom: row.success_symptom || 'N/A',
+        success_symptom: row.success_symptom || 'N/A',
+        attachmentPath: row.attachment_path || null,
+        attachment_path: row.attachment_path || null,
+        attachmentName: row.attachment_name || null,
+        attachment_name: row.attachment_name || null,
         comment: row.comment,
         configFilePath: row.config_file_path,
         roundId: row.round_id,
@@ -697,7 +720,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     let tests;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
+      tests = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id').all();
       testIds = tests.map(t => t.id);
     } else {
       testIds = String(testIdsRaw)
@@ -710,7 +733,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0`).all(...testIds);
     }
 
     if (tests.length === 0) {
@@ -813,6 +836,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
          ts.step_number,
          ts.description,
          ts.success_symptom,
+         ts.attachment_path,
+         ts.attachment_name,
          s.comment,
          s.config_file_path,
          s.round_id,
@@ -836,6 +861,10 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
         description: row.description,
         successSymptom: row.success_symptom || 'N/A',
         success_symptom: row.success_symptom || 'N/A',
+        attachmentPath: row.attachment_path || null,
+        attachment_path: row.attachment_path || null,
+        attachmentName: row.attachment_name || null,
+        attachment_name: row.attachment_name || null,
         userId: row.user_id,
         userName: resolvedName,
         username: resolvedName,
@@ -952,13 +981,21 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     const testFilterPl = hasTestFilter ? ` AND pl.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
     const testFilterSub = hasTestFilter ? ` AND s.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
 
-    // Fetch user's assigned tests ordered by test id (the loop order, optionally filtered by testIds)
+    const versionFilterPl = versionIds.length > 0
+      ? ' AND pl.version_id IN (' + versionIds.map(() => '?').join(',') + ') '
+      : ' ';
+    const versionFilterSub = versionIds.length > 0
+      ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') '
+      : ' ';
+
+    // Fetch user's assigned tests or tests where points were earned (including disabled tests so deserved points are always shown)
     const assignedTests = await usersDb.prepare(
-      `SELECT DISTINCT t.id, t.name FROM tests t
-       INNER JOIN test_assignments ta ON ta.test_id = t.id
-       WHERE ta.user_id = ? ${testFilterAssigned}
+      `SELECT DISTINCT t.id, t.name, COALESCE(t.is_deleted, 0) as is_deleted FROM tests t
+       WHERE (t.id IN (SELECT test_id FROM test_assignments WHERE user_id = ?)
+          OR t.id IN (SELECT pl.test_id FROM points_log pl WHERE pl.user_id = ? AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilterPl}))
+          ${testFilterAssigned}
        ORDER BY t.id`
-    ).all(userId, ...(hasTestFilter ? testIds : []));
+    ).all(userId, userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
 
     // Fetch user's active test from loop state
     const loopState = await usersDb.prepare(
@@ -972,13 +1009,6 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       'SELECT round_no FROM user_rounds WHERE user_id = ?'
     ).get(userId);
     const currentRound = roundRow ? roundRow.round_no : 0;
-
-    const versionFilterPl = versionIds.length > 0
-      ? ' AND pl.version_id IN (' + versionIds.map(() => '?').join(',') + ') '
-      : ' ';
-    const versionFilterSub = versionIds.length > 0
-      ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') '
-      : ' ';
 
     // Batch: get points earned per test for this user in the date range
     const pointsRows = await usersDb.prepare(
@@ -1079,11 +1109,12 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 
       return {
         testId: test.id,
-        testName: test.name,
+        testName: test.name + (test.is_deleted ? ' (Disabled)' : ''),
         rounds: stats.rounds,
         pointsEarned,
         status,
-        failedSteps
+        failedSteps,
+        is_deleted: test.is_deleted ? 1 : 0
       };
     });
 
@@ -1190,7 +1221,7 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
-    const testsRows = await testsDb.prepare('SELECT id, name FROM tests').all();
+    const testsRows = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0').all();
     const testNames = Object.fromEntries(testsRows.map(t => [t.id, t.name]));
 
     const failedSubmissions = await testsDb.prepare(
@@ -1201,13 +1232,17 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
          ts.step_number,
          ts.description,
          ts.success_symptom,
+         ts.attachment_path,
+         ts.attachment_name,
          s.comment,
          s.config_file_path,
          s.round_id,
          s.executed_at
        FROM test_submissions s
        JOIN test_steps ts ON ts.id = s.step_id
+       JOIN tests t ON t.id = s.test_id
        WHERE s.result = 'fail'
+         AND COALESCE(t.is_deleted, 0) = 0
          AND s.executed_at >= ? AND s.executed_at <= ? 
          ${versionFilter} ${testFilter} ${userFilter}
        ORDER BY s.executed_at DESC`
@@ -1230,6 +1265,10 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
           description: row.description,
           successSymptom: row.success_symptom || 'N/A',
           success_symptom: row.success_symptom || 'N/A',
+          attachmentPath: row.attachment_path || null,
+          attachment_path: row.attachment_path || null,
+          attachmentName: row.attachment_name || null,
+          attachment_name: row.attachment_name || null,
           failCount: 0,
           failures: []
         };
