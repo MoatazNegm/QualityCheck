@@ -5,6 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
+const { saveUploadedFile } = require('../utils/fileStorage');
 
 async function getAssignedTestsOrdered(userId) {
   return await testsDb.prepare(`
@@ -24,54 +25,67 @@ async function getCurrentVersionId() {
   return val;
 }
 
-// Configure uploads. On Vercel, `dataDir` is /tmp because the deployment
-// filesystem is read-only; locally it is the project root.
-const { dataDir } = require('../utils/dataDir');
-const uploadDir = path.join(dataDir, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    // Embed the user/test/step ids so every saved file is unambiguously related
-    // to the exact failed step it was submitted for, plus a timestamp+random
-    // suffix so a re-failure in a later loop round is always a distinct file.
-    const userId = req.user && req.user.userId ? req.user.userId : 'anon';
-    const testId = req.params && req.params.testId ? req.params.testId : 't';
-    const stepId = req.params && req.params.stepId ? req.params.stepId : 's';
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, `configFile-u${userId}-t${testId}-s${stepId}-${uniqueSuffix}${ext}`);
-  }
-});
-
+// Configure uploads via memory storage so saveUploadedFile handles Dropbox/DB/disk
 const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
-  fileFilter: (req, file, cb) => {
-    // Accept any file type for configuration files
-    cb(null, true);
-  }
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 
 const uploadConfigFile = (req, res, next) => {
-  upload.single('configFile')(req, res, (err) => {
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return next();
+  }
+  upload.fields([{ name: 'configFile', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, (err) => {
     if (err) {
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({ error: 'Uploaded configuration file exceeds the 100MB size limit.' });
-        }
-        return res.status(400).json({ error: `File upload error: ${err.message}` });
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Uploaded configuration file exceeds the 100MB size limit.' });
       }
       return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    if (req.files) {
+      req.file = req.files.configFile?.[0] || req.files.file?.[0] || null;
     }
     next();
   });
 };
+
+// Get next unattempted step for the logged-in user
+router.get('/:testId/next', authenticateToken, async (req, res) => {
+  try {
+    const { testId } = req.params;
+    const userId = req.user.userId;
+
+    const test = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+    if (!test) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+
+    const steps = await testsDb.prepare('SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number').all(testId);
+    const attemptedRows = await testsDb.prepare(
+      'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ?'
+    ).all(userId, testId);
+    const attemptedStepIds = attemptedRows.map(row => row.step_id);
+
+    const nextStep = steps.find(step => {
+      const pts = Number(step.points ?? step.value ?? 0);
+      return pts !== -1 && !attemptedStepIds.includes(step.id);
+    });
+
+    if (!nextStep) {
+      return res.status(404).json({ error: 'No more steps', allDone: true });
+    }
+
+    res.json({
+      step: nextStep,
+      test_name: test.name,
+      test_id: parseInt(testId, 10)
+    });
+  } catch (error) {
+    console.error('Error fetching next step:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // Get next unattempted step for a user and test
 router.get('/user/:userId/test/:testId/next', async (req, res) => {
@@ -137,11 +151,16 @@ router.get('/user/:userId/test/:testId', async (req, res) => {
 router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
-    const userId = req.user.userId; // always from JWT — never trust client-supplied userId
-    const { result, comment } = req.body;
+    const userId = req.user.userId; // always from token or API key
+    const { result, comment, fileData, fileName, configFileBase64, configFileName, configFilePath: providedFilePath } = req.body || {};
 
-    if (!result || !['pass', 'fail'].includes(result)) {
-      return res.status(400).json({ error: 'Result must be pass or fail' });
+    let normalizedResult = String(result || '').trim().toLowerCase();
+    if (['yes', 'y', 'pass', 'passed', 'true', '1'].includes(normalizedResult)) {
+      normalizedResult = 'pass';
+    } else if (['no', 'n', 'fail', 'failed', 'false', '0'].includes(normalizedResult)) {
+      normalizedResult = 'fail';
+    } else {
+      return res.status(400).json({ error: "Result must be 'pass'/'fail' or 'yes'/'no'" });
     }
 
     const stepRow = await testsDb.prepare(
@@ -153,49 +172,42 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     }
 
     const nowIso = new Date().toISOString();
-    let configFilePath = null;
+    let configFilePath = providedFilePath || null;
+
     if (req.file) {
-      configFilePath = `/uploads/${req.file.filename}`;
-      let dropboxFileId = null;
+      const ext = path.extname(req.file.originalname) || '';
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const filename = `configFile-u${userId}-t${testId}-s${stepId}-${uniqueSuffix}${ext}`;
       try {
-        const isDropboxActive = await require('../dropbox/dropboxService').isDropboxConfigured();
-        if (isDropboxActive) {
-          try {
-            const fileBuffer = require('fs').readFileSync(req.file.path);
-            dropboxFileId = await require('../dropbox/dropboxService').uploadFileToDropbox(
-              fileBuffer,
-              req.file.filename,
-              req.file.mimetype || 'application/octet-stream'
-            );
-            console.log(`[Upload] Uploaded ${req.file.filename} to Dropbox (ID: ${dropboxFileId})`);
-          } catch (dropboxErr) {
-            console.error('[Upload] Dropbox upload failed, falling back to local/DB storage:', dropboxErr);
-          }
-        }
-
-        const origName = req.file.originalname || req.file.filename;
-        const mimeType = req.file.mimetype || 'application/octet-stream';
-        let base64Data = null;
-        if (!dropboxFileId) {
-          const fileBuffer = require('fs').readFileSync(req.file.path);
-          base64Data = fileBuffer.toString('base64');
-        }
-
-        await testsDb.prepare(`
-          INSERT OR REPLACE INTO uploaded_files (filename, original_name, mime_type, file_size, dropbox_file_id, file_data, uploaded_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(req.file.filename, origName, mimeType, req.file.size, dropboxFileId, base64Data, nowIso);
-
-        // If stored in Dropbox, delete the temporary file from disk immediately
-        if (dropboxFileId && fs.existsSync(req.file.path)) {
-          try {
-            fs.unlinkSync(req.file.path);
-          } catch (unlinkErr) {
-            console.warn('[Upload] Failed to clean up temp local file:', unlinkErr.message);
-          }
-        }
+        const saved = await saveUploadedFile({
+          fileBuffer: req.file.buffer,
+          filename,
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          size: req.file.size
+        });
+        configFilePath = saved.filePath;
       } catch (uploadSaveErr) {
         console.error('Failed to save upload record:', uploadSaveErr);
+      }
+    } else if (fileData || configFileBase64) {
+      try {
+        const rawB64 = fileData || configFileBase64;
+        const fileBuffer = Buffer.from(rawB64, 'base64');
+        const origName = fileName || configFileName || 'attachment.bin';
+        const ext = path.extname(origName) || '';
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const filename = `configFile-u${userId}-t${testId}-s${stepId}-${uniqueSuffix}${ext}`;
+        const saved = await saveUploadedFile({
+          fileBuffer,
+          filename,
+          originalName: origName,
+          mimeType: req.body?.mimeType || 'application/octet-stream',
+          size: fileBuffer.length
+        });
+        configFilePath = saved.filePath;
+      } catch (uploadSaveErr) {
+        console.error('Failed to save base64 upload record:', uploadSaveErr);
       }
     }
 
@@ -226,7 +238,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     const subId = await testsDb.prepare(`
       INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(roundNo, userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, nowIso);
+    `).run(roundNo, userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, nowIso);
 
     // Upsert: keep exactly ONE result row per (user, test, step) so the loop/next-step
     // logic and the per-step current view work. The full history lives in test_submissions.
@@ -241,7 +253,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     const resultId = await testsDb.prepare(`
       INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, result, comment || null, configFilePath, currentVersionId, roundNo, nowIso);
+    `).run(userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, roundNo, nowIso);
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -264,7 +276,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
     }
 
-    if (result === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
+    if (normalizedResult === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
       const prevTimeMs = new Date(prevFailed.executed_at).getTime();
       const diffSec = (Date.now() - prevTimeMs) / 1000;
       if (diffSec >= 0 && diffSec <= thresholdSec) {
@@ -297,7 +309,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     // 2. The current version differs from the version under which this test was started.
     let autoEnded = false;
     const stepOnFailure = stepRow ? (stepRow.on_failure || 'stop') : 'stop';
-    const isHardStopFail = (result === 'fail' && stepOnFailure === 'stop');
+    const isHardStopFail = (normalizedResult === 'fail' && stepOnFailure === 'stop');
 
     const loopState = await testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
     const versionMismatch = loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId;
@@ -316,7 +328,17 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       }
     }
 
-    res.json({ id: resultId.lastInsertRowid, submissionId: subId.lastInsertRowid, roundId: roundNo, message: 'Result submitted successfully', autoEnded, warning: warningCreated });
+    res.json({
+      id: resultId.lastInsertRowid,
+      submissionId: subId.lastInsertRowid,
+      roundId: roundNo,
+      result: normalizedResult,
+      pointsAwarded,
+      configFilePath,
+      message: 'Result submitted successfully',
+      autoEnded,
+      warning: warningCreated
+    });
   } catch (error) {
     console.error('Submit result error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -403,6 +425,25 @@ router.get('/summary', authenticateToken, async (req, res) => {
     res.json({ monthEarned: row ? row.earned : 0, monthStart: monthStartStr });
   } catch (error) {
     console.error('Summary error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get all results for current authenticated user
+router.get('/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const results = await testsDb.prepare(`
+      SELECT tr.*, t.name as test_name, ts.step_number, ts.description as step_description
+      FROM test_results tr
+      JOIN tests t ON tr.test_id = t.id
+      JOIN test_steps ts ON tr.step_id = ts.id
+      WHERE tr.user_id = ?
+      ORDER BY tr.executed_at DESC
+    `).all(userId);
+    res.json(results);
+  } catch (error) {
+    console.error('Get my results error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

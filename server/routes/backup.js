@@ -68,6 +68,10 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
     const versions = await testsDb.prepare('SELECT * FROM versions').all();
     const userWarnings = await testsDb.prepare('SELECT * FROM user_warnings').all();
     const settings = await testsDb.prepare('SELECT * FROM settings').all();
+    let apiKeys = [];
+    try {
+      apiKeys = await testsDb.prepare('SELECT * FROM api_keys').all();
+    } catch (_) {}
 
     const files = await collectReferencedFiles();
 
@@ -90,6 +94,7 @@ router.get('/export', authenticateToken, requireAdmin, async (req, res) => {
       versions,
       user_warnings: userWarnings,
       settings,
+      api_keys: apiKeys,
       files,
     };
 
@@ -261,6 +266,18 @@ async function applyBackup(backup, res) {
         sql: 'INSERT OR REPLACE INTO settings (key, value, description, updated_at) VALUES (?, ?, ?, ?)',
         args: [s.key, s.value, s.description || null, s.updated_at || null]
       });
+    }
+
+    // Insert API Keys
+    if (Array.isArray(backup.api_keys) && backup.api_keys.length > 0) {
+      batch.push({ sql: 'DELETE FROM api_keys', args: [] });
+      for (const ak of backup.api_keys) {
+        batch.push({
+          sql: `INSERT OR REPLACE INTO api_keys (id, name, key_hash, key_prefix, user_id, role, is_active, created_at, last_used_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [ak.id, ak.name, ak.key_hash, ak.key_prefix, ak.user_id, ak.role || 'tester', ak.is_active ?? 1, ak.created_at || null, ak.last_used_at || null]
+        });
+      }
     }
 
     await testsDb.client.execute({ sql: 'PRAGMA foreign_keys = OFF' });

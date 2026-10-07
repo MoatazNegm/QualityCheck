@@ -1,0 +1,488 @@
+# QualityCheck REST API & AI Agent Integration Guide
+
+Welcome to the QualityCheck API documentation. This API is designed to allow automated AI agents, test runners, and developer scripts to perform **all** testing and management actions that can be done in the web UI.
+
+---
+
+## 1. Interactive Swagger UI & OpenAPI Specification
+
+- **Interactive Swagger Documentation**: [http://localhost:4006/api/docs](http://localhost:4006/api/docs)
+- **Machine-Readable OpenAPI 3.0 JSON**: [http://localhost:4006/api/openapi.json](http://localhost:4006/api/openapi.json)
+
+You can explore endpoints and run live API requests directly using Swagger UI with your generated API key.
+
+---
+
+## 2. Authentication & API Key Management
+
+The admin can generate API keys directly in the **Admin Panel → Settings → API Key Management** section.
+
+### How to Authenticate
+When calling any API endpoint, pass your API key in **one** of the following ways:
+
+1. **Header (Recommended)**:
+   ```http
+   X-API-Key: qc_your_api_key_here
+   ```
+2. **Bearer Token**:
+   ```http
+   Authorization: Bearer qc_your_api_key_here
+   ```
+3. **Query Parameter**:
+   ```http
+   GET /api/tests?api_key=qc_your_api_key_here
+   ```
+
+### User Attribution & Valid Names
+When generating an API key, the admin assigns a valid name (or selects an existing user). Every action performed with this key (submitting results, uploading evidence, creating tests, earning points) is attributed to this user across the entire system (reports, test submissions, audit trails, and points ledger).
+
+### Check Your Identity (`/api/api-keys/me`)
+Verify your credentials and check who you are authenticated as:
+
+```bash
+curl -X GET http://localhost:4006/api/api-keys/me \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+**Response (200 OK):**
+```json
+{
+  "authenticated": true,
+  "user": {
+    "userId": 3,
+    "username": "AI_Agent_01",
+    "isAdmin": false,
+    "userGroups": ["testers"],
+    "role": "tester",
+    "isApiKey": true,
+    "apiKeyName": "Automated QA Agent Alpha"
+  }
+}
+```
+
+---
+
+## 3. Tester & AI Agent Workflow
+
+An AI testing agent typically executes the following workflow:
+
+```
+[1. GET /api/tests/active] -> Discover current active test
+       ↓
+[2. GET /api/test-results/{testId}/next] -> Get next unattempted step
+       ↓
+[Execute Step Instructions & Inspect System]
+       ↓
+[3. POST /api/test-results/{testId}/steps/{stepId}] -> Submit result (pass/fail or yes/no)
+       ↓
+[Repeat until test is done]
+       ↓
+[4. POST /api/tests/{testId}/complete] -> Advance testing cycle to next test
+```
+
+---
+
+### 3.1 List Assigned Tests
+```bash
+curl -X GET http://localhost:4006/api/tests \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+Returns assigned tests with execution and lock status (`isActive`, `locked`, `completed`, `monthlyRounds`, `totalPoints`).
+
+---
+
+### 3.2 Get the Currently Active Test (`/api/tests/active`)
+Returns the unlocked test that the agent should execute in the current testing cycle:
+
+```bash
+curl -X GET http://localhost:4006/api/tests/active \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+**Response (200 OK):**
+```json
+{
+  "activeTest": {
+    "id": 5,
+    "name": "User Registration & Onboarding",
+    "description": "Verifies account creation and verification emails",
+    "steps": [
+      {
+        "id": 21,
+        "test_id": 5,
+        "step_number": 1,
+        "description": "Navigate to /register and fill in username and password",
+        "success_symptom": "Form renders cleanly and validation indicators show green",
+        "points": 10,
+        "value": 10,
+        "on_failure": "stop",
+        "attachment_path": null,
+        "attachment_name": null
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 3.3 Get Next Unattempted Step (`/api/test-results/{testId}/next`)
+Fetches the first unattempted step in the test for the authenticated agent:
+
+```bash
+curl -X GET http://localhost:4006/api/test-results/5/next \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+---
+
+### 3.4 Submit Test Result (`POST /api/test-results/{testId}/steps/{stepId}`)
+
+Supports:
+- Result values: `'pass'`, `'fail'`, `'yes'`, `'no'` (case-insensitive).
+- Optional comments.
+- Evidence attachment: via direct file upload (`multipart/form-data`) OR JSON base64 (`fileData`).
+
+#### Option A: Submit via JSON (Clean & Simple for AI Agents)
+```bash
+curl -X POST http://localhost:4006/api/test-results/5/steps/21 \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "result": "pass",
+    "comment": "Verification succeeded. Response time was 85ms."
+  }'
+```
+
+#### Option B: Submit via JSON with Base64 Screenshot/Log
+```bash
+curl -X POST http://localhost:4006/api/test-results/5/steps/21 \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "result": "fail",
+    "comment": "Element #submit-btn timed out after 5000ms",
+    "fileData": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "fileName": "timeout_error.png"
+  }'
+```
+
+#### Option C: Submit via Multipart Form Data with File
+```bash
+curl -X POST http://localhost:4006/api/test-results/5/steps/21 \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -F "result=pass" \
+  -F "comment=All tests passed" \
+  -F "configFile=@/path/to/log.txt"
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": 142,
+  "submissionId": 358,
+  "roundId": 1,
+  "result": "pass",
+  "pointsAwarded": 10,
+  "configFilePath": "/uploads/configFile-u3-t5-s21-1710000000.png",
+  "message": "Result submitted successfully",
+  "autoEnded": false,
+  "warning": null
+}
+```
+
+> **Note on Consecutive Failures**: If a tester fails steps rapidly across different tests (under the configured threshold, e.g. 3 minutes), points are zeroed out and a warning is logged explaining the withhold.
+
+---
+
+### 3.5 Standalone File Upload (`POST /api/upload`)
+Upload log files, crash dumps, or screenshots independently:
+
+```bash
+curl -X POST http://localhost:4006/api/upload \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -F "file=@/path/to/evidence.zip"
+```
+
+Or with JSON:
+```bash
+curl -X POST http://localhost:4006/api/upload \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileName": "system.log",
+    "fileData": "U3lzdGVtIGV2ZW50IGxvZw==",
+    "mimeType": "text/plain"
+  }'
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "filePath": "/uploads/upload-u3-1710000000.log",
+  "filename": "upload-u3-1710000000.log",
+  "originalName": "system.log",
+  "fileSize": 16,
+  "mimeType": "text/plain"
+}
+```
+
+---
+
+### 3.6 Complete Test (`POST /api/tests/{testId}/complete`)
+When all non-section steps are finished, mark the test as complete to advance the loop:
+
+```bash
+curl -X POST http://localhost:4006/api/tests/5/complete \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+---
+
+### 3.7 End Test Early (`POST /api/tests/{testId}/end`)
+If a hard-stop failure occurs or the agent needs to end the test early:
+
+```bash
+curl -X POST http://localhost:4006/api/tests/5/end \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+---
+
+### 3.8 Restart / Re-activate Test (`POST /api/tests/{testId}/activate`)
+```bash
+curl -X POST http://localhost:4006/api/tests/5/activate \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+---
+
+### 3.9 Revert Step Result (`DELETE /api/test-results/{testId}/steps/{stepId}`)
+Reverts the result and deducted/earned points for a step in the current round:
+
+```bash
+curl -X DELETE http://localhost:4006/api/test-results/5/steps/21 \
+  -H "X-API-Key: qc_your_api_key_here"
+```
+
+---
+
+### 3.10 Metrics, Warnings & History
+- **Points Summary**: `GET /api/test-results/summary`
+- **Warnings**: `GET /api/test-results/warnings`
+- **History**: `GET /api/test-results/history`
+
+---
+
+## 4. Developer & Admin API: Test Authoring & Management
+
+Developers and Admins can programmatically manage tests, steps, attachments, versions, and imports.
+
+### 4.1 Create a Test (`POST /api/tests`)
+```bash
+curl -X POST http://localhost:4006/api/tests \
+  -H "X-API-Key: qc_developer_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Order Fulfillment Service",
+    "description": "Verifies order processing, payment capture, and dispatch"
+  }'
+```
+
+### 4.2 Add Step to Test (`POST /api/tests/{id}/steps`)
+```bash
+curl -X POST http://localhost:4006/api/tests/5/steps \
+  -H "X-API-Key: qc_developer_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "step_number": 1,
+    "description": "Send POST request to create an order",
+    "success_symptom": "Status 201 Created with order ID",
+    "points": 15,
+    "on_failure": "stop"
+  }'
+```
+
+### 4.3 Update Step (`PUT /api/tests/{testId}/steps/{stepId}`)
+```bash
+curl -X PUT http://localhost:4006/api/tests/5/steps/21 \
+  -H "X-API-Key: qc_developer_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "step_number": 1,
+    "description": "Updated step description",
+    "success_symptom": "Updated success symptom",
+    "points": 20,
+    "on_failure": "continue"
+  }'
+```
+
+### 4.4 Delete Step (`DELETE /api/tests/{testId}/steps/{stepId}`)
+```bash
+curl -X DELETE http://localhost:4006/api/tests/5/steps/21 \
+  -H "X-API-Key: qc_developer_api_key"
+```
+
+### 4.5 Reorder Steps (`PUT /api/tests/{testId}/steps/reorder`)
+```bash
+curl -X PUT http://localhost:4006/api/tests/5/steps/reorder \
+  -H "X-API-Key: qc_developer_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "stepOrder": [
+      { "id": 21, "step_number": 1 },
+      { "id": 22, "step_number": 2 }
+    ]
+  }'
+```
+
+### 4.6 Upload Reference Attachment for a Step (`POST /api/tests/{testId}/steps/{stepId}/attachment`)
+```bash
+curl -X POST http://localhost:4006/api/tests/5/steps/21/attachment \
+  -H "X-API-Key: qc_developer_api_key" \
+  -F "file=@/path/to/expected_output.json"
+```
+
+### 4.7 Import Tests from Excel or CSV (`POST /api/tests/import`)
+Supports importing Excel (.xlsx) workbooks or CSV files:
+```bash
+curl -X POST http://localhost:4006/api/tests/import \
+  -H "X-API-Key: qc_developer_api_key" \
+  -F "file=@/path/to/TestSuite.xlsx"
+```
+Or via JSON with base64 file data:
+```bash
+curl -X POST http://localhost:4006/api/tests/import \
+  -H "X-API-Key: qc_developer_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileName": "TestSuite.xlsx",
+    "fileData": "<base64_encoded_file>"
+  }'
+```
+
+### 4.8 Disable / Enable Tests
+- **Disable Test**: `DELETE /api/tests/{id}` or `POST /api/tests/{id}/disable`
+- **Enable Test**: `POST /api/tests/{id}/enable`
+- **Enable All Tests**: `POST /api/tests/enable-all`
+
+---
+
+## 5. API Keys Administration API
+
+Only administrators can create or revoke API keys.
+
+### 5.1 Generate an API Key (`POST /api/api-keys`)
+```bash
+curl -X POST http://localhost:4006/api/api-keys \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Automated AI Regression Bot",
+    "role": "tester",
+    "userName": "AI_Regression_Bot"
+  }'
+```
+
+**Response (201 Created):**
+```json
+{
+  "message": "API key created successfully. Please copy it now as it will not be displayed again.",
+  "key": "qc_e1a4f028b17c8d92...",
+  "apiKey": {
+    "id": 4,
+    "name": "Automated AI Regression Bot",
+    "key_prefix": "qc_e1a4f028...",
+    "role": "tester",
+    "user_id": 8,
+    "username": "AI_Regression_Bot",
+    "is_active": 1,
+    "created_at": "2026-10-07T12:00:00.000Z"
+  }
+}
+```
+
+### 5.2 List API Keys (`GET /api/api-keys`)
+```bash
+curl -X GET http://localhost:4006/api/api-keys \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+### 5.3 Toggle API Key Status (`PATCH /api/api-keys/{id}/toggle`)
+```bash
+curl -X PATCH http://localhost:4006/api/api-keys/4/toggle \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+### 5.4 Revoke / Delete API Key (`DELETE /api/api-keys/{id}`)
+```bash
+curl -X DELETE http://localhost:4006/api/api-keys/4 \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+---
+
+## 6. Python Integration Example
+
+Here is a ready-to-run Python script for an AI testing agent:
+
+```python
+import requests
+import json
+import base64
+
+API_BASE = "http://localhost:4006/api"
+API_KEY = "qc_your_api_key_here"
+HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
+
+def run_agent():
+    # 1. Verify caller identity
+    me = requests.get(f"{API_BASE}/api-keys/me", headers=HEADERS).json()
+    print(f"Logged in as: {me['user']['username']} (Role: {me['user']['role']})")
+
+    # 2. Get active test
+    res = requests.get(f"{API_BASE}/tests/active", headers=HEADERS).json()
+    active_test = res.get("activeTest")
+    if not active_test:
+        print("No active test available.")
+        return
+
+    test_id = active_test["id"]
+    print(f"Executing Test: {active_test['name']} (ID: {test_id})")
+
+    # 3. Step execution loop
+    while True:
+        step_res = requests.get(f"{API_BASE}/test-results/{test_id}/next", headers=HEADERS)
+        if step_res.status_code == 404:
+            print("All steps completed!")
+            break
+
+        step = step_res.json()["step"]
+        step_id = step["id"]
+        print(f"\nStep {step['step_number']}: {step['description']}")
+        print(f"Expected Symptom: {step['success_symptom']}")
+
+        # Simulate execution or run automated checks
+        # Result can be 'pass' / 'fail' or 'yes' / 'no'
+        result = "yes"
+        comment = "Automated verification completed successfully."
+
+        sub_res = requests.post(
+            f"{API_BASE}/test-results/{test_id}/steps/{step_id}",
+            headers=HEADERS,
+            json={"result": result, "comment": comment}
+        ).json()
+        print(f"-> Submitted: {sub_res['result']} (Points awarded: {sub_res.get('pointsAwarded', 0)})")
+
+        if sub_res.get("autoEnded"):
+            print("Test auto-ended due to stop condition.")
+            break
+
+    # 4. Mark test complete
+    complete_res = requests.post(f"{API_BASE}/tests/{test_id}/complete", headers=HEADERS).json()
+    print(f"Test cycle complete: {complete_res.get('message')}")
+
+if __name__ == "__main__":
+    run_agent()
+```

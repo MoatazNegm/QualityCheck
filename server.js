@@ -147,6 +147,11 @@ const reportRoutes = require('./server/routes/reports');
 const backupRoutes = require('./server/routes/backup');
 const versionRoutes = require('./server/routes/versions');
 const settingsRoutes = require('./server/routes/settings');
+const apiKeyRoutes = require('./server/routes/api-keys');
+const uploadRoutes = require('./server/routes/upload');
+const docsRoutes = require('./server/routes/docs');
+
+const { authenticateToken } = require('./server/middleware/auth');
 
 app.use('/api/auth', authRoutes.router || authRoutes);
 app.use('/api/users', userRoutes);
@@ -156,6 +161,33 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/versions', versionRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/api-keys', apiKeyRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/docs', docsRoutes);
+
+// Direct API User Guide download endpoints
+app.get('/api/get_user_guide', authenticateToken, docsRoutes.handleGetUserGuide);
+app.post('/api/get_user_guide', authenticateToken, docsRoutes.handleGetUserGuide);
+app.get('/api/user-guide', authenticateToken, docsRoutes.handleGetUserGuide);
+app.post('/api/user-guide', authenticateToken, docsRoutes.handleGetUserGuide);
+
+// Raw OpenAPI specifications
+app.get('/api/openapi.json', (req, res) => {
+  try {
+    const spec = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'server/docs/openapi.json'), 'utf8'));
+    res.json(spec);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load OpenAPI specification' });
+  }
+});
+app.get('/api/swagger.json', (req, res) => {
+  try {
+    const spec = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'server/docs/openapi.json'), 'utf8'));
+    res.json(spec);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load OpenAPI specification' });
+  }
+});
 
 // Health check
 app.get('/api/health', (req, res) => {

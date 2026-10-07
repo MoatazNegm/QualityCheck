@@ -35,10 +35,34 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Sync token to document.cookie helper
+  const syncCookieToken = (tok: string | null) => {
+    try {
+      if (tok) {
+        document.cookie = `token=${encodeURIComponent(tok)}; path=/; max-age=86400; SameSite=Lax`;
+        document.cookie = `auth_token=${encodeURIComponent(tok)}; path=/; max-age=86400; SameSite=Lax`;
+      } else {
+        document.cookie = 'token=; path=/; max-age=0; SameSite=Lax';
+        document.cookie = 'auth_token=; path=/; max-age=0; SameSite=Lax';
+        document.cookie = 'jwt=; path=/; max-age=0; SameSite=Lax';
+      }
+    } catch (e) {
+      // Ignore in non-browser environments
+    }
+  };
+
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
+    let storedToken = localStorage.getItem('token');
+    if (!storedToken && typeof document !== 'undefined' && document.cookie) {
+      const match = document.cookie.match(/(?:^|;\s*)(?:token|auth_token)=([^;]+)/);
+      if (match) {
+        storedToken = decodeURIComponent(match[1]);
+        localStorage.setItem('token', storedToken);
+      }
+    }
     if (storedToken) {
       setToken(storedToken);
+      syncCookieToken(storedToken);
       validateToken(storedToken);
     } else {
       setIsLoading(false);
@@ -53,14 +77,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+        syncCookieToken(tok);
       } else {
         localStorage.removeItem('token');
+        syncCookieToken(null);
         setToken(null);
         setUser(null);
       }
     } catch (error) {
       console.error('Token validation failed:', error);
       localStorage.removeItem('token');
+      syncCookieToken(null);
       setToken(null);
       setUser(null);
     } finally {
@@ -77,8 +104,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+        syncCookieToken(token);
       } else {
         localStorage.removeItem('token');
+        syncCookieToken(null);
         setToken(null);
         setUser(null);
       }
@@ -103,12 +132,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setToken(data.token);
     setUser(data.user);
     localStorage.setItem('token', data.token);
+    syncCookieToken(data.token);
   };
 
   const logout = () => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
+    syncCookieToken(null);
+    fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' }).catch(() => {});
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {

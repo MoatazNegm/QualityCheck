@@ -56,6 +56,18 @@ const Sidebar: React.FC = () => {
             {!collapsed && <span className='sidebar-link-text'>Admin Panel</span>}
           </NavLink>
         )}
+        {(user?.isAdmin || user?.userGroups?.includes('admins') || user?.userGroups?.includes('developers')) && (
+          <a
+            href='/api/docs'
+            target='_blank'
+            rel='noopener noreferrer'
+            className='sidebar-link'
+            title='Interactive REST API Documentation'
+          >
+            <span className='sidebar-link-icon'>📖</span>
+            {!collapsed && <span className='sidebar-link-text'>API Docs ↗</span>}
+          </a>
+        )}
       </nav>
     </aside>
   );

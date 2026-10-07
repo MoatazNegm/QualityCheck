@@ -112,6 +112,16 @@ router.post('/login', async (req, res) => {
       console.warn('Non-fatal session store error:', sessionErr);
     }
 
+    // Set cookies so browser navigations and downloads are automatically authenticated
+    const cookieOptions = {
+      path: '/',
+      maxAge: 24 * 60 * 60 * 1000,
+      sameSite: 'lax',
+      httpOnly: false
+    };
+    res.cookie('token', token, cookieOptions);
+    res.cookie('auth_token', token, cookieOptions);
+
     res.json({
       token,
       user: {
@@ -130,7 +140,26 @@ router.post('/login', async (req, res) => {
 
 // Verify token
 router.get('/verify', (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  let token = req.headers.authorization?.split(' ')[1];
+  if (!token && req.headers.authorization && !req.headers.authorization.startsWith('Bearer ')) {
+    token = req.headers.authorization.trim();
+  }
+  if (!token && req.headers['x-access-token']) {
+    token = String(req.headers['x-access-token']).trim();
+  }
+  if (!token && req.query) {
+    token = req.query.token || req.query.auth_token || req.query.access_token;
+  }
+  if (!token && req.headers && req.headers.cookie) {
+    const cookies = {};
+    req.headers.cookie.split(';').forEach(c => {
+      const parts = c.split('=');
+      if (parts.length >= 2) {
+        cookies[parts[0].trim()] = decodeURIComponent(parts.slice(1).join('=').trim());
+      }
+    });
+    token = cookies['token'] || cookies['auth_token'] || cookies['jwt'] || cookies['access_token'];
+  }
   
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -156,7 +185,20 @@ router.get('/verify', (req, res) => {
 
 // Logout
 router.post('/logout', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  let token = req.headers.authorization?.split(' ')[1];
+  if (!token && req.query) {
+    token = req.query.token || req.query.auth_token;
+  }
+  if (!token && req.headers && req.headers.cookie) {
+    const cookies = {};
+    req.headers.cookie.split(';').forEach(c => {
+      const parts = c.split('=');
+      if (parts.length >= 2) {
+        cookies[parts[0].trim()] = decodeURIComponent(parts.slice(1).join('=').trim());
+      }
+    });
+    token = cookies['token'] || cookies['auth_token'];
+  }
   
   if (token) {
     try {
@@ -165,6 +207,11 @@ router.post('/logout', async (req, res) => {
       console.error('Logout db error:', e);
     }
   }
+
+  res.clearCookie('token', { path: '/' });
+  res.clearCookie('auth_token', { path: '/' });
+  res.clearCookie('jwt', { path: '/' });
+  res.clearCookie('access_token', { path: '/' });
   
   res.json({ message: 'Logged out successfully' });
 });

@@ -169,7 +169,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
          AND t.id IN (
            SELECT test_id FROM test_assignments WHERE user_id IN (${placeholders})
            UNION
-           SELECT test_id FROM test_submissions WHERE user_id IN (${placeholders}) AND executed_at >= ? AND executed_at <= ? ${versionFilterSub}
+           SELECT s.test_id FROM test_submissions s WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
          )
        ORDER BY t.name, t.id`
     ).all(...userIds, ...userIds, start, end, ...versionIds);
@@ -294,16 +294,31 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}`
     ).all(...userIds, start, end, ...versionIds);
 
-    for (const sub of lastStepSubmissions) {
-      if (lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]) {
-        const needed = stepCountsMap[sub.test_id] || 0;
-        const distinctPassed = await testsDb.prepare(
-          `SELECT COUNT(DISTINCT step_id) as count
-           FROM test_submissions
-           WHERE test_id = ? AND user_id = ? AND result = 'pass' AND executed_at <= ?`
-        ).get(sub.test_id, sub.user_id, sub.executed_at);
+    const lastStepCandidates = lastStepSubmissions.filter(
+      sub => lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]
+    );
+    if (lastStepCandidates.length > 0) {
+      const candTestIds = [...new Set(lastStepCandidates.map(s => s.test_id))];
+      const tPlaceholders = candTestIds.map(() => '?').join(',');
+      const passHistory = await testsDb.prepare(
+        `SELECT test_id, user_id, step_id, executed_at
+         FROM test_submissions
+         WHERE result = 'pass' AND user_id IN (${placeholders}) AND test_id IN (${tPlaceholders})`
+      ).all(...userIds, ...candTestIds);
 
-        if (needed > 0 && (distinctPassed?.count || 0) >= needed) {
+      const historyByKey = {};
+      for (const h of passHistory) {
+        const key = h.test_id + ':' + h.user_id;
+        (historyByKey[key] = historyByKey[key] || []).push(h);
+      }
+
+      for (const sub of lastStepCandidates) {
+        const needed = stepCountsMap[sub.test_id] || 0;
+        const distinct = new Set();
+        for (const h of historyByKey[sub.test_id + ':' + sub.user_id] || []) {
+          if (h.executed_at <= sub.executed_at) distinct.add(h.step_id);
+        }
+        if (needed > 0 && distinct.size >= needed) {
           if (!usersFullyPassedByTest[sub.test_id]) usersFullyPassedByTest[sub.test_id] = new Set();
           usersFullyPassedByTest[sub.test_id].add(sub.user_id);
         }

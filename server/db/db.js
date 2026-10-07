@@ -368,6 +368,18 @@ async function initDB() {
       drive_file_id TEXT,
       file_data TEXT,
       uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      key_hash TEXT UNIQUE NOT NULL,
+      key_prefix TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      role TEXT NOT NULL DEFAULT 'tester',
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_used_at DATETIME,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `.split(';')
    .map(s => s.trim())
@@ -389,7 +401,9 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_test_assignments_user ON test_assignments(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_user_warnings_user_created ON user_warnings(user_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_point_payments_user ON point_payments(user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_uploaded_files_filename ON uploaded_files(filename)'
+    'CREATE INDEX IF NOT EXISTS idx_uploaded_files_filename ON uploaded_files(filename)',
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }
@@ -455,6 +469,11 @@ async function runMigrations() {
     if (!uwCols.some(c => c.name === 'version_id')) {
       await clientWrapper.execute({ sql: 'ALTER TABLE user_warnings ADD COLUMN version_id INTEGER' });
       console.log('Migration: added version_id column to user_warnings');
+    }
+    const tsCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(test_submissions)' })).rows;
+    if (tsCols.length > 0 && !tsCols.some(c => c.name === 'version_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE test_submissions ADD COLUMN version_id INTEGER' });
+      console.log('Migration: added version_id column to test_submissions');
     }
 
     // Now safely create indexes on columns that may have just been migrated
@@ -563,6 +582,28 @@ async function runMigrations() {
 
     await clientWrapper.execute({
       sql: 'CREATE INDEX IF NOT EXISTS idx_uploaded_files_dropbox_id ON uploaded_files(dropbox_file_id)'
+    });
+
+    // Ensure api_keys table and indexes exist
+    await clientWrapper.execute({
+      sql: `CREATE TABLE IF NOT EXISTS api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        key_hash TEXT UNIQUE NOT NULL,
+        key_prefix TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'tester',
+        is_active INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_used_at DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )`
+    });
+    await clientWrapper.execute({
+      sql: 'CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)'
+    });
+    await clientWrapper.execute({
+      sql: 'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)'
     });
 
     const defaultSettings = [

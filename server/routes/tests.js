@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const XLSX = require('xlsx');
 const { testsDb, bumpRound, getRound, cache } = require('../db/db');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { saveUploadedFile } = require('../utils/fileStorage');
 
 const upload = multer({ 
@@ -328,6 +328,44 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
+// Get currently active test with steps for the logged-in user
+router.get('/active', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const activeTestId = await getActiveTestId(userId);
+    if (!activeTestId) {
+      return res.json({ activeTest: null, message: 'No active tests available for the current round or limit reached' });
+    }
+    const test = await testsDb.prepare('SELECT * FROM tests WHERE id = ?').get(activeTestId);
+    if (!test) {
+      return res.json({ activeTest: null, message: 'Active test not found' });
+    }
+    const steps = await testsDb.prepare(
+      `SELECT id, test_id, step_number, description, success_symptom,
+              COALESCE(points, value, 0) AS points,
+              COALESCE(value, points, 0) AS value,
+              COALESCE(on_failure, 'stop') AS on_failure,
+              attachment_path, attachment_name
+       FROM test_steps
+       WHERE test_id = ?
+       ORDER BY step_number`
+    ).all(activeTestId);
+    test.steps = steps.map(s => ({
+      ...s,
+      success_symptom: (s.success_symptom && s.success_symptom.trim()) ? s.success_symptom.trim() : 'N/A',
+      points: isNaN(Number(s.points)) ? 0 : Number(s.points),
+      value: isNaN(Number(s.value)) ? 0 : Number(s.value),
+      on_failure: s.on_failure || 'stop',
+      attachment_path: s.attachment_path || null,
+      attachment_name: s.attachment_name || null
+    }));
+    res.json({ activeTest: test });
+  } catch (error) {
+    console.error('Get active test error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Mark the current active test as completed and advance the loop to the next
 // assigned test (wrapping around to the first after the last). Per-user.
 router.post('/:testId/complete', authenticateToken, async (req, res) => {
@@ -488,14 +526,23 @@ function isHeaderRow(row0, row1) {
   return row0.some(c => /^(step|desc|symptom|expect|point|score|value|case|result|test|#|no)/i.test(String(c).trim()));
 }
 
-// Import tests from Excel or CSV file (admin only)
-router.post('/import', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
+// Import tests from Excel or CSV file (admin or developer)
+router.post('/import', authenticateToken, requireDeveloper, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    let fileBuffer = req.file ? req.file.buffer : null;
+    if (!fileBuffer && req.body && req.body.fileData) {
+      try {
+        fileBuffer = Buffer.from(req.body.fileData, 'base64');
+      } catch (parseErr) {
+        return res.status(400).json({ error: 'Invalid base64 fileData' });
+      }
     }
 
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    if (!fileBuffer) {
+      return res.status(400).json({ error: 'No file uploaded or fileData provided' });
+    }
+
+    const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const imported = [];
 
     const rawFileName = req.body.fileName || req.file.originalname || 'import';
@@ -582,17 +629,21 @@ router.post('/import', authenticateToken, requireAdmin, upload.single('file'), a
   }
 });
 
-// Rename test (admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+// Rename / update test (admin or developer)
+router.put('/:id', authenticateToken, requireDeveloper, async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, description } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Test name is required' });
     }
-    await testsDb.prepare('UPDATE tests SET name = ? WHERE id = ?').run(name.trim(), req.params.id);
-    res.json({ message: 'Test renamed successfully' });
+    if (description !== undefined) {
+      await testsDb.prepare('UPDATE tests SET name = ?, description = ? WHERE id = ?').run(name.trim(), description, req.params.id);
+    } else {
+      await testsDb.prepare('UPDATE tests SET name = ? WHERE id = ?').run(name.trim(), req.params.id);
+    }
+    res.json({ message: 'Test updated successfully' });
   } catch (error) {
-    console.error('Rename test error:', error);
+    console.error('Update test error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -667,8 +718,8 @@ router.delete('/:id/assignments/:userId', authenticateToken, requireAdmin, async
   }
 });
 
-// Update points for a step (admin only)
-router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, async (req, res) => {
+// Update points for a step (admin or developer)
+router.patch('/:testId/steps/:stepId/points', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const points = parseInt(req.body.points, 10);
     if (isNaN(points) || points < -1) {
@@ -685,7 +736,7 @@ router.patch('/:testId/steps/:stepId/points', authenticateToken, requireAdmin, a
 });
 
 // Disable test (soft delete so points and history remain intact while hiding from active loops)
-router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.delete('/:id', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
     cache.invalidatePrefix('stepCount:');
@@ -697,7 +748,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/:id/disable', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/:id/disable', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
     cache.invalidatePrefix('stepCount:');
@@ -710,7 +761,7 @@ router.post('/:id/disable', authenticateToken, requireAdmin, async (req, res) =>
 });
 
 // Re-enable test and assign all non-admin users to it by default
-router.post('/:id/enable', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/:id/enable', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const testId = req.params.id;
     await testsDb.prepare('UPDATE tests SET is_deleted = 0 WHERE id = ?').run(testId);
@@ -731,7 +782,7 @@ router.post('/:id/enable', authenticateToken, requireAdmin, async (req, res) => 
 });
 
 // Enable all disabled tests and assign all non-admin users to them by default
-router.post('/enable-all', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/enable-all', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const disabledTests = await testsDb.prepare('SELECT id FROM tests WHERE is_deleted = 1').all();
     const nonAdmins = await testsDb.prepare('SELECT id FROM users WHERE is_admin = 0').all();
@@ -868,47 +919,65 @@ router.get('/:testId/round', authenticateToken, async (req, res) => {
   }
 });
 
-// Create test (admin only)
-router.post('/', async (req, res) => {
+// Create test (admin or developer)
+router.post('/', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { name, description } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Test name is required' });
+    }
     
     const result = await testsDb.prepare(`
       INSERT INTO tests (name, description)
       VALUES (?, ?)
-    `).run(name, description);
+    `).run(String(name).trim(), description || null);
     
-    res.json({ id: result.lastInsertRowid, name, description });
+    res.status(201).json({ id: result.lastInsertRowid, name: String(name).trim(), description: description || null });
   } catch (error) {
     console.error('Create test error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Add step to test
-router.post('/:id/steps', async (req, res) => {
+// Add step to test (admin or developer)
+router.post('/:id/steps', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { id } = req.params;
     const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
     
+    if (!description || !String(description).trim()) {
+      return res.status(400).json({ error: 'Step description is required' });
+    }
+
+    const test = await testsDb.prepare('SELECT id FROM tests WHERE id = ?').get(id);
+    if (!test) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+
+    let nextStepNum = step_number;
+    if (!nextStepNum || isNaN(Number(nextStepNum))) {
+      const maxRow = await testsDb.prepare('SELECT MAX(step_number) as m FROM test_steps WHERE test_id = ?').get(id);
+      nextStepNum = (maxRow && maxRow.m ? maxRow.m : 0) + 1;
+    }
+
     const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
     const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
     const result = await testsDb.prepare(`
       INSERT INTO test_steps (test_id, step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null);
+    `).run(id, nextStepNum, String(description).trim(), successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null);
     
     cache.invalidate('stepCount:' + id);
     cache.invalidate('totalPoints:' + id);
-    res.json({ id: result.lastInsertRowid, test_id: parseInt(id), step_number, description, success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop', attachment_path: attachment_path || null, attachment_name: attachment_name || null });
+    res.status(201).json({ id: result.lastInsertRowid, test_id: parseInt(id, 10), step_number: nextStepNum, description: String(description).trim(), success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop', attachment_path: attachment_path || null, attachment_name: attachment_name || null });
   } catch (error) {
     console.error('Add step error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Update step
-router.put('/:testId/steps/:stepId', async (req, res) => {
+// Update step (admin or developer)
+router.put('/:testId/steps/:stepId', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
     const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
@@ -935,8 +1004,8 @@ router.put('/:testId/steps/:stepId', async (req, res) => {
   }
 });
 
-// Delete step
-router.delete('/:testId/steps/:stepId', async (req, res) => {
+// Delete step (admin or developer)
+router.delete('/:testId/steps/:stepId', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
     
@@ -950,12 +1019,26 @@ router.delete('/:testId/steps/:stepId', async (req, res) => {
   }
 });
 
-// Upload reference attachment for a step (admin only)
-router.post('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin, uploadStepAttachment, async (req, res) => {
+// Upload reference attachment for a step (admin or developer)
+router.post('/:testId/steps/:stepId/attachment', authenticateToken, requireDeveloper, uploadStepAttachment, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    let fileBuffer = req.file ? req.file.buffer : null;
+    let originalName = req.file ? req.file.originalname : (req.body?.fileName || 'attachment.bin');
+    let mimeType = req.file ? req.file.mimetype : (req.body?.mimeType || 'application/octet-stream');
+    let size = req.file ? req.file.size : 0;
+
+    if (!fileBuffer && req.body && req.body.fileData) {
+      try {
+        fileBuffer = Buffer.from(req.body.fileData, 'base64');
+        size = fileBuffer.length;
+      } catch (parseErr) {
+        return res.status(400).json({ error: 'Invalid base64 fileData' });
+      }
+    }
+
+    if (!fileBuffer) {
+      return res.status(400).json({ error: 'No file uploaded or fileData provided' });
     }
 
     const step = await testsDb.prepare('SELECT id FROM test_steps WHERE id = ? AND test_id = ?').get(stepId, testId);
@@ -963,16 +1046,16 @@ router.post('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin
       return res.status(404).json({ error: 'Step not found' });
     }
 
-    const ext = path.extname(req.file.originalname);
+    const ext = path.extname(originalName) || '';
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const filename = `stepRef-t${testId}-s${stepId}-${uniqueSuffix}${ext}`;
 
     const saved = await saveUploadedFile({
-      fileBuffer: req.file.buffer,
+      fileBuffer,
       filename,
-      originalName: req.file.originalname,
-      mimeType: req.file.mimetype,
-      size: req.file.size
+      originalName,
+      mimeType,
+      size
     });
 
     await testsDb.prepare(`
@@ -989,8 +1072,8 @@ router.post('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin
   }
 });
 
-// Delete reference attachment from a step (admin only)
-router.delete('/:testId/steps/:stepId/attachment', authenticateToken, requireAdmin, async (req, res) => {
+// Delete reference attachment from a step (admin or developer)
+router.delete('/:testId/steps/:stepId/attachment', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
     const step = await testsDb.prepare('SELECT id FROM test_steps WHERE id = ? AND test_id = ?').get(stepId, testId);
@@ -1009,15 +1092,19 @@ router.delete('/:testId/steps/:stepId/attachment', authenticateToken, requireAdm
   }
 });
 
-// Reorder steps
-router.put('/:testId/steps/reorder', async (req, res) => {
+// Reorder steps (admin or developer)
+router.put('/:testId/steps/reorder', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { testId } = req.params;
     const { stepOrder } = req.body;
     
+    if (!Array.isArray(stepOrder)) {
+      return res.status(400).json({ error: 'stepOrder must be an array of { id, step_number }' });
+    }
+
     const batch = stepOrder.map(({ id, step_number }) => ({
-      sql: 'UPDATE test_steps SET step_number = ? WHERE id = ?',
-      args: [step_number, id]
+      sql: 'UPDATE test_steps SET step_number = ? WHERE id = ? AND test_id = ?',
+      args: [step_number, id, testId]
     }));
     await testsDb.client.batch(batch, 'write');
     

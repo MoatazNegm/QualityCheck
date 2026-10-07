@@ -260,6 +260,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
     // Cascade delete in a transaction batch.
     await testsDb.client.batch([
       { sql: 'DELETE FROM user_sessions WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM api_keys WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM test_results WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM test_submissions WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM points_log WHERE user_id = ?', args: [userId] },

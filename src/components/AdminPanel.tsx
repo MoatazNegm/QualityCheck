@@ -54,6 +54,18 @@ interface Version {
   created_at: string;
 }
 
+interface ApiKeyItem {
+  id: number;
+  name: string;
+  key_prefix: string;
+  role: string;
+  user_id: number;
+  username: string;
+  is_active: number;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 const API_BASE = '';
 
 // Gzip a string using the browser's native CompressionStream. Returns a
@@ -79,7 +91,7 @@ const AdminPanel: React.FC = () => {
   const [importSaveError, setImportSaveError] = useState('');
   const [importSaveSuccess, setImportSaveSuccess] = useState('');
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings' | 'api-keys'>('upload');
   const [thresholdMinutes, setThresholdMinutes] = useState<string>('3');
   const [maxMonthlyRounds, setMaxMonthlyRounds] = useState<string>('8');
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -199,6 +211,21 @@ const AdminPanel: React.FC = () => {
   const [payPointsError, setPayPointsError] = useState('');
   const [payPointsSuccess, setPayPointsSuccess] = useState('');
 
+  // API Keys state for AI Agents and Developers
+  const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [keyName, setKeyName] = useState('');
+  const [keyRole, setKeyRole] = useState<'tester' | 'developer' | 'admin'>('tester');
+  const [keyUserMode, setKeyUserMode] = useState<'create' | 'existing'>('create');
+  const [keyExistingUserId, setKeyExistingUserId] = useState<number | ''>('');
+  const [keyCustomUsername, setKeyCustomUsername] = useState('');
+  const [keyGenerating, setKeyGenerating] = useState(false);
+  const [generatedRawKey, setGeneratedRawKey] = useState<string | null>(null);
+  const [generatedKeyMeta, setGeneratedKeyMeta] = useState<ApiKeyItem | null>(null);
+  const [apiKeySuccess, setApiKeySuccess] = useState('');
+  const [apiKeyError, setApiKeyError] = useState('');
+  const [copiedKey, setCopiedKey] = useState(false);
+
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
@@ -206,6 +233,7 @@ const AdminPanel: React.FC = () => {
     fetchUsers();
     fetchVersions();
     fetchSettings();
+    fetchApiKeys();
     const dates = getDefaultReportDates('current_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
@@ -1627,6 +1655,104 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/api-keys`, { headers: authHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeys(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch API keys:', err);
+    } finally {
+      setApiKeysLoading(false);
+    }
+  };
+
+  const handleGenerateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!keyName.trim()) {
+      setApiKeyError('Please enter a descriptive key name / agent identifier');
+      return;
+    }
+    setKeyGenerating(true);
+    setApiKeyError('');
+    setApiKeySuccess('');
+    try {
+      const payload: any = {
+        name: keyName.trim(),
+        role: keyRole
+      };
+      if (keyUserMode === 'existing' && keyExistingUserId) {
+        payload.userId = keyExistingUserId;
+      } else if (keyCustomUsername.trim()) {
+        payload.userName = keyCustomUsername.trim();
+      } else {
+        payload.userName = keyName.trim();
+      }
+
+      const res = await fetch(`${API_BASE}/api/api-keys`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate API key');
+      }
+
+      setGeneratedRawKey(data.key);
+      setGeneratedKeyMeta(data.apiKey);
+      setApiKeySuccess('API key generated successfully!');
+      setKeyName('');
+      setKeyCustomUsername('');
+      fetchApiKeys();
+      fetchUsers();
+    } catch (err: any) {
+      setApiKeyError(err.message || 'Error generating API key');
+    } finally {
+      setKeyGenerating(false);
+    }
+  };
+
+  const handleToggleApiKey = async (id: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/api-keys/${id}/toggle`, {
+        method: 'PATCH',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        fetchApiKeys();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to update key status');
+      }
+    } catch (err) {
+      console.error('Failed to toggle API key:', err);
+    }
+  };
+
+  const handleDeleteApiKey = async (id: number, name: string) => {
+    if (!window.confirm(`Are you sure you want to permanently revoke API key "${name}"? Any agent using this key will immediately lose access.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/api-keys/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        fetchApiKeys();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to delete API key');
+      }
+    } catch (err) {
+      console.error('Failed to delete API key:', err);
+    }
+  };
+
   return (
     <div className="admin-panel">
       <h2>Admin Panel</h2>
@@ -1685,6 +1811,13 @@ const AdminPanel: React.FC = () => {
           onClick={() => setActiveTab('settings')}
         >
           Settings
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'api-keys' ? 'active' : ''}`}
+          onClick={() => { setActiveTab('api-keys'); fetchApiKeys(); }}
+          style={{ fontWeight: 600, color: activeTab === 'api-keys' ? '#63b3ed' : undefined }}
+        >
+          🔑 API Keys & Agents
         </button>
       </div>
 
@@ -3632,17 +3765,95 @@ const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'settings' && (
+      {(activeTab === 'settings' || activeTab === 'api-keys') && (
         <div className="admin-section">
-          <h3>System Settings</h3>
-          <p className="admin-hint">
-            Configure application-wide business rules and time thresholds.
-          </p>
+          {activeTab === 'api-keys' && (
+            <div style={{ marginBottom: '1.25rem' }}>
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 0 0.5rem 0' }}>
+                <span>🔑</span> API Key Management & Developer Documentation
+              </h3>
+              <p className="admin-hint" style={{ margin: 0 }}>
+                Generate and manage scoped API keys for autonomous AI agents, developer scripts, and CI/CD tools. All test executions, yes/no step results, and file uploads performed with an API key are automatically attributed to the key's assigned user identity.
+              </p>
+            </div>
+          )}
 
-          {settingsLoading ? (
-            <p className="admin-hint">Loading settings...</p>
-          ) : (
-            <div style={{ maxWidth: '780px', margin: '1rem 0' }}>
+          {activeTab === 'settings' && (
+            <>
+              <h3>System Settings</h3>
+              <p className="admin-hint">
+                Configure application-wide business rules and time thresholds.
+              </p>
+
+              {/* High-visibility API Key Generator Quick Notice Banner */}
+              <div
+                style={{
+                  maxWidth: '960px',
+                  margin: '1rem 0 1.5rem 0',
+                  background: 'linear-gradient(135deg, rgba(49, 130, 206, 0.18), rgba(66, 153, 225, 0.08))',
+                  border: '1.5px solid #3182ce',
+                  borderRadius: '10px',
+                  padding: '1.25rem 1.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '1rem',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.12)'
+                }}
+              >
+                <div>
+                  <h4 style={{ margin: '0 0 0.35rem 0', color: '#63b3ed', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>🔑</span> API Key Generation for AI Agents & Developers
+                  </h4>
+                  <p style={{ margin: 0, color: 'var(--text-muted, #cbd5e0)', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                    Looking to generate API keys for autonomous AI agents or developer scripts? Keys with automatic user attribution can be managed directly here or in the dedicated tab.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => { setActiveTab('api-keys'); fetchApiKeys(); }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      background: 'linear-gradient(135deg, #3182ce, #2b6cb0)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      padding: '0.6rem 1.25rem',
+                      borderRadius: '6px',
+                      boxShadow: '0 2px 8px rgba(49, 130, 206, 0.4)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>🔑 Open API Keys & Agents Tab</span>
+                    <span>→</span>
+                  </button>
+                  <a
+                    href="#api-keys-section"
+                    className="btn-secondary"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      padding: '0.6rem 1rem',
+                      fontSize: '0.88rem',
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <span>Scroll to Generator ↓</span>
+                  </a>
+                </div>
+              </div>
+
+              {settingsLoading && <p className="admin-hint">Loading settings...</p>}
+            </>
+          )}
+
+          <div style={{ maxWidth: '960px', margin: '1rem 0' }}>
+            {activeTab === 'settings' && !settingsLoading && (
               <div
                 style={{
                   background: 'var(--card-bg, #1e2433)',
@@ -4045,8 +4256,471 @@ const AdminPanel: React.FC = () => {
                   </button>
                   </form>
               </div>
+            )}
+
+            {/* REST API Documentation & Swagger UI Quick-Link */}
+            <div id="api-keys-section">
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  marginTop: activeTab === 'settings' ? '1.5rem' : '0'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div style={{ flex: '1 1 300px' }}>
+                    <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span>📚</span> Interactive REST API Documentation (Swagger UI)
+                    </h4>
+                    <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                      Explore complete OpenAPI 3.0 specifications with live execution testing for AI agents, developers, and CI/CD pipelines. Includes endpoints for submitting test results (<code>yes/no</code>, <code>pass/fail</code>), file uploads, test authoring, and progress tracking.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.6rem 1.1rem',
+                        fontSize: '0.92rem',
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap'
+                      }}
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${API_BASE}/api/docs/get_user_guide?token=${encodeURIComponent(token || '')}`, {
+                            headers: authHeaders
+                          });
+                          if (!res.ok) {
+                            alert('Failed to download API user guide');
+                            return;
+                          }
+                          const blob = await res.blob();
+                          const url = window.URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = 'QualityCheck_API_User_Guide.md';
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          window.URL.revokeObjectURL(url);
+                        } catch (err) {
+                          alert('Error downloading API user guide');
+                        }
+                      }}
+                    >
+                      <span>📥 Download User Guide (.md)</span>
+                    </button>
+                    <a
+                      href={`/api/docs?token=${encodeURIComponent(token || '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        textDecoration: 'none',
+                        background: 'linear-gradient(135deg, #3182ce, #2b6cb0)',
+                        whiteSpace: 'nowrap',
+                        padding: '0.6rem 1.2rem',
+                        fontSize: '0.95rem',
+                        fontWeight: 600
+                      }}
+                    >
+                      <span>🚀 Open Swagger UI</span>
+                      <span style={{ fontSize: '0.85rem' }}>↗</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              {/* API Key Management for AI Agents & Developers */}
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  marginTop: '1.5rem'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>🔑</span> API Key Management for Developers & AI Agents
+                  </h4>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ fontSize: '0.85rem', padding: '0.3rem 0.75rem' }}
+                    onClick={fetchApiKeys}
+                    disabled={apiKeysLoading}
+                  >
+                    {apiKeysLoading ? 'Refreshing...' : '🔄 Refresh Keys'}
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(99, 179, 237, 0.08)',
+                    borderLeft: '4px solid #3182ce',
+                    borderRadius: '6px',
+                    padding: '1rem 1.1rem',
+                    marginBottom: '1.5rem',
+                    fontSize: '0.92rem',
+                    lineHeight: '1.5'
+                  }}
+                >
+                  <strong style={{ color: '#63b3ed', display: 'block', marginBottom: '0.4rem' }}>
+                    🤖 Identity & User Attribution for AI Agents
+                  </strong>
+                  <p style={{ margin: '0 0 0.5rem 0' }}>
+                    Generate scoped API keys for autonomous AI agents, automated testing pipelines, and developer tools. When an agent updates anything in the application (executes tests, records <code>yes/no</code> or <code>pass/fail</code> step results, uploads log/evidence files, or authors test cases), the author/tester will automatically be set to the user name assigned to this key across all reports, points ledgers, and audit logs.
+                  </p>
+                  <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
+                    <li><strong>Tester Role:</strong> Can query active tests, fetch next steps, submit results (pass/fail/yes/no), and upload attachments. Automatically assigned all current active tests upon key creation.</li>
+                    <li><strong>Developer Role:</strong> Can create tests, update descriptions, add/remove steps, configure points, and import Excel workbooks.</li>
+                    <li><strong>Admin Role:</strong> Full system access, including generating keys and modifying application settings.</li>
+                  </ul>
+                </div>
+
+                {/* Form to generate new API key */}
+                <form onSubmit={handleGenerateApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem', fontSize: '0.9rem' }}>
+                        API Key Name / Agent Identifier <span style={{ color: '#e53e3e' }}>*</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="user-input"
+                        placeholder="e.g. Agent-Tester-Alpha or Developer-Script"
+                        value={keyName}
+                        onChange={e => { setKeyName(e.target.value); setApiKeyError(''); }}
+                        style={{ width: '100%' }}
+                        required
+                      />
+                      <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
+                        Descriptive label identifying who or what is using this key.
+                      </small>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem', fontSize: '0.9rem' }}>
+                        Permission Role <span style={{ color: '#e53e3e' }}>*</span>
+                      </label>
+                      <select
+                        className="user-input"
+                        value={keyRole}
+                        onChange={e => setKeyRole(e.target.value as any)}
+                        style={{ width: '100%' }}
+                      >
+                        <option value="tester">Tester (Execute tests, submit results, upload files)</option>
+                        <option value="developer">Developer (Author tests, manage steps, configure points)</option>
+                        <option value="admin">Administrator (Full administrative access)</option>
+                      </select>
+                      <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
+                        Defines endpoint authorization and capabilities.
+                      </small>
+                    </div>
+                  </div>
+
+                  {/* User Attribution Mode */}
+                  <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color, #2d3748)', borderRadius: '8px', padding: '1rem' }}>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                      👤 User Attribution (Who will submissions and reports be credited to?)
+                    </label>
+                    <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                        <input
+                          type="radio"
+                          name="keyUserMode"
+                          value="create"
+                          checked={keyUserMode === 'create'}
+                          onChange={() => setKeyUserMode('create')}
+                        />
+                        <span>Auto-create / Use Dedicated User Account</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                        <input
+                          type="radio"
+                          name="keyUserMode"
+                          value="existing"
+                          checked={keyUserMode === 'existing'}
+                          onChange={() => setKeyUserMode('existing')}
+                        />
+                        <span>Link to Existing User</span>
+                      </label>
+                    </div>
+
+                    {keyUserMode === 'create' ? (
+                      <div>
+                        <input
+                          type="text"
+                          className="user-input"
+                          placeholder={keyName.trim() ? `Username will be: ${keyName.trim().replace(/\s+/g, '_')}` : "Custom username (optional, defaults to Key Name)"}
+                          value={keyCustomUsername}
+                          onChange={e => setKeyCustomUsername(e.target.value)}
+                          style={{ width: '100%', maxWidth: '380px' }}
+                        />
+                        <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
+                          If a user with this name already exists, the key will link to them. Otherwise, a new user account is automatically provisioned.
+                        </small>
+                      </div>
+                    ) : (
+                      <div>
+                        <select
+                          className="user-input"
+                          value={keyExistingUserId}
+                          onChange={e => setKeyExistingUserId(e.target.value ? Number(e.target.value) : '')}
+                          style={{ width: '100%', maxWidth: '380px' }}
+                          required={keyUserMode === 'existing'}
+                        >
+                          <option value="">-- Select an existing user --</option>
+                          {users.map(u => (
+                            <option key={u.id} value={u.id}>
+                              {u.username} ({u.is_admin ? 'Admin' : (u.user_groups || []).join(', ') || 'User'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {apiKeyError && <p className="error-msg" style={{ margin: 0 }}>{apiKeyError}</p>}
+                  {apiKeySuccess && !generatedRawKey && <p className="success-msg" style={{ margin: 0, color: '#48bb78' }}>✅ {apiKeySuccess}</p>}
+
+                  <div>
+                    <button
+                      type="submit"
+                      className="btn"
+                      disabled={keyGenerating || !keyName.trim() || (keyUserMode === 'existing' && !keyExistingUserId)}
+                      style={{ minWidth: '180px' }}
+                    >
+                      {keyGenerating ? 'Generating Key...' : '➕ Generate API Key'}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Banner when a new key is successfully generated */}
+                {generatedRawKey && (
+                  <div
+                    style={{
+                      marginTop: '1.5rem',
+                      background: 'rgba(72, 187, 120, 0.1)',
+                      border: '1.5px solid #48bb78',
+                      borderRadius: '8px',
+                      padding: '1.25rem',
+                      animation: 'fadeIn 0.3s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <span style={{ fontWeight: 700, color: '#48bb78', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>🎉</span> API Key Generated Successfully!
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                        onClick={() => { setGeneratedRawKey(null); setGeneratedKeyMeta(null); setCopiedKey(false); }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+
+                    <div style={{
+                      background: '#0d1117',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '6px',
+                      padding: '0.75rem 1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '1rem',
+                      fontFamily: 'monospace',
+                      fontSize: '0.95rem',
+                      color: '#58a6ff',
+                      wordBreak: 'break-all',
+                      marginBottom: '0.75rem'
+                    }}>
+                      <span>{generatedRawKey}</span>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          padding: '0.4rem 0.9rem',
+                          fontSize: '0.85rem',
+                          background: copiedKey ? '#38a169' : '#3182ce',
+                          whiteSpace: 'nowrap'
+                        }}
+                        onClick={() => {
+                          navigator.clipboard.writeText(generatedRawKey);
+                          setCopiedKey(true);
+                          setTimeout(() => setCopiedKey(false), 2500);
+                        }}
+                      >
+                        {copiedKey ? '✅ Copied!' : '📋 Copy Key'}
+                      </button>
+                    </div>
+
+                    <div style={{ fontSize: '0.88rem', color: '#e2e8f0', marginBottom: '0.5rem' }}>
+                      Attributed to user: <strong style={{ color: '#63b3ed' }}>{generatedKeyMeta?.username}</strong> &bull; Role: <strong style={{ textTransform: 'capitalize' }}>{generatedKeyMeta?.role}</strong>
+                    </div>
+
+                    <div style={{
+                      fontSize: '0.82rem',
+                      color: '#feb2b2',
+                      background: 'rgba(229, 62, 62, 0.15)',
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: '4px',
+                      borderLeft: '3px solid #e53e3e'
+                    }}>
+                      ⚠️ <strong>Warning:</strong> Please copy this key now and store it in a secure location. You will not be able to view this full key again once you navigate away!
+                    </div>
+                  </div>
+                )}
+
+                {/* Table of Existing API Keys */}
+                <div style={{ marginTop: '2rem' }}>
+                  <h5 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: 'var(--text-color, #e2e8f0)' }}>
+                    Active & Configured Keys ({apiKeys.length})
+                  </h5>
+
+                  {apiKeysLoading && apiKeys.length === 0 ? (
+                    <p className="admin-hint">Loading API keys...</p>
+                  ) : apiKeys.length === 0 ? (
+                    <div style={{
+                      padding: '1.5rem',
+                      background: 'rgba(255, 255, 255, 0.02)',
+                      border: '1px dashed var(--border-color, #2d3748)',
+                      borderRadius: '8px',
+                      textAlign: 'center',
+                      color: 'var(--text-muted, #a0aec0)'
+                    }}>
+                      No API keys generated yet. Use the form above to generate a key for AI agents or automated testers.
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="report-steps-table" style={{ width: '100%', fontSize: '0.9rem' }}>
+                        <thead>
+                          <tr>
+                            <th>Key Name</th>
+                            <th>Role</th>
+                            <th>Attributed User</th>
+                            <th>Prefix</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Status</th>
+                            <th style={{ textAlign: 'right' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {apiKeys.map(k => (
+                            <tr key={k.id} style={{ opacity: k.is_active ? 1 : 0.6 }}>
+                              <td style={{ fontWeight: 600 }}>{k.name}</td>
+                              <td>
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    padding: '0.15rem 0.5rem',
+                                    borderRadius: '10px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    textTransform: 'uppercase',
+                                    background:
+                                      k.role === 'admin'
+                                        ? 'rgba(237, 137, 54, 0.2)'
+                                        : k.role === 'developer'
+                                        ? 'rgba(159, 122, 234, 0.2)'
+                                        : 'rgba(49, 130, 206, 0.2)',
+                                    color:
+                                      k.role === 'admin'
+                                        ? '#f6ad55'
+                                        : k.role === 'developer'
+                                        ? '#d6bcfa'
+                                        : '#63b3ed',
+                                    border: `1px solid ${
+                                      k.role === 'admin'
+                                        ? 'rgba(237, 137, 54, 0.4)'
+                                        : k.role === 'developer'
+                                        ? 'rgba(159, 122, 234, 0.4)'
+                                        : 'rgba(49, 130, 206, 0.4)'
+                                    }`
+                                  }}
+                                >
+                                  {k.role}
+                                </span>
+                              </td>
+                              <td>
+                                <span style={{ color: '#90cdf4', fontWeight: 500 }}>
+                                  👤 {k.username || `User #${k.user_id}`}
+                                </span>
+                              </td>
+                              <td>
+                                <code style={{ background: 'rgba(0,0,0,0.3)', padding: '0.2rem 0.4rem', borderRadius: '4px', fontSize: '0.82rem' }}>
+                                  {k.key_prefix}
+                                </code>
+                              </td>
+                              <td style={{ fontSize: '0.82rem', color: 'var(--text-muted, #a0aec0)' }}>
+                                {k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}
+                              </td>
+                              <td style={{ fontSize: '0.82rem', color: 'var(--text-muted, #a0aec0)' }}>
+                                {k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : 'Never'}
+                              </td>
+                              <td>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 600,
+                                    color: k.is_active ? '#48bb78' : '#a0aec0'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '0.6rem' }}>●</span>
+                                  {k.is_active ? 'Active' : 'Inactive'}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.8rem' }}
+                                    title={k.is_active ? 'Deactivate key' : 'Activate key'}
+                                    onClick={() => handleToggleApiKey(k.id)}
+                                  >
+                                    {k.is_active ? 'Disable' : 'Enable'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-danger"
+                                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.8rem' }}
+                                    title="Revoke and permanently delete key"
+                                    onClick={() => handleDeleteApiKey(k.id, k.name)}
+                                  >
+                                    Revoke
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
