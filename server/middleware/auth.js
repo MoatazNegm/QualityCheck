@@ -164,7 +164,12 @@ const authenticateToken = async (req, res, next) => {
 };
 
 const requireAdmin = (req, res, next) => {
-  if (!req.user || !req.user.isAdmin) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const groups = req.user.userGroups || [];
+  const isAdmin = !!req.user.isAdmin || req.user.role === 'admin' || groups.includes('admins');
+  if (!isAdmin) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();

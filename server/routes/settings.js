@@ -47,35 +47,49 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// Update a setting (Admin only)
+// Update settings (Admin only) - supports single { key, value } or multiple settings in body
 router.put('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { key, value } = req.body;
-    if (!key || value === undefined || value === null) {
-      return res.status(400).json({ error: 'key and value are required' });
-    }
-
-    let valStr = String(value).trim();
-    if (key === 'consecutive_failure_threshold_seconds') {
-      const num = parseInt(valStr, 10);
-      if (isNaN(num) || num < 0) {
-        return res.status(400).json({ error: 'Threshold must be a non-negative number of seconds' });
+    const updates = {};
+    if (req.body.key !== undefined && req.body.value !== undefined) {
+      updates[req.body.key] = req.body.value;
+    } else if (req.body.settings && typeof req.body.settings === 'object') {
+      Object.assign(updates, req.body.settings);
+    } else if (typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+      for (const [k, v] of Object.entries(req.body)) {
+        if (v !== undefined && v !== null && typeof v !== 'object') {
+          updates[k] = v;
+        }
       }
     }
 
-    if (key === 'dropbox_app_secret' || key === 'dropbox_refresh_token') {
-      if (valStr === '__KEEP_EXISTING__' || valStr === '__CONFIGURED__') {
-        return res.json({ message: 'Existing Dropbox credentials retained' });
-      }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid setting key/value pairs provided' });
     }
 
-    await testsDb.prepare(`
-      INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-      ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
-    `).run(key, valStr, valStr);
+    for (const [key, value] of Object.entries(updates)) {
+      let valStr = String(value).trim();
+      if (key === 'consecutive_failure_threshold_seconds') {
+        const num = parseInt(valStr, 10);
+        if (isNaN(num) || num < 0) {
+          return res.status(400).json({ error: 'Threshold must be a non-negative number of seconds' });
+        }
+      }
+
+      if (key === 'dropbox_app_secret' || key === 'dropbox_refresh_token') {
+        if (valStr === '__KEEP_EXISTING__' || valStr === '__CONFIGURED__') {
+          continue;
+        }
+      }
+
+      await testsDb.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
+      `).run(key, valStr, valStr);
+    }
 
     cache.invalidate('settings');
-    res.json({ message: 'Setting updated successfully', key });
+    res.json({ message: 'Settings updated successfully', updated: Object.keys(updates) });
   } catch (error) {
     console.error('Update setting error:', error);
     res.status(500).json({ error: 'Server error' });

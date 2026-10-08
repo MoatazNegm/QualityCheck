@@ -423,7 +423,280 @@ curl -X DELETE http://localhost:4006/api/api-keys/4 \
 
 ---
 
-## 6. Python Integration Example
+## 6. Admin REST API Reference
+
+When authenticated with an admin API key (`X-API-Key: qc_...` with role `admin`) or a JWT Bearer token (`Authorization: Bearer <token>` for an admin user), administrators and automated systems can perform all administrative operations programmatically.
+
+### 6.1 User Management
+
+#### List All Users
+```http
+GET /api/users
+```
+Returns a list of all registered users, their roles, suspension status, and assigned groups (`testers`, `developers`, `admins`).
+
+#### Bulk User Summaries
+```http
+GET /api/users/summaries
+```
+Returns aggregate test execution statistics (assigned count, completed tests count, hard-stop failures, completed cycles) for all users in one fast response.
+
+#### Get User Profile & Stats
+```http
+GET /api/users/{id}
+```
+Returns user details along with their current execution metrics: `completedRounds`, `assignedTestsCount`, and `totalPointsEarned`.
+
+#### Create / Provision User
+```http
+POST /api/users
+Content-Type: application/json
+
+{
+  "username": "john_tester",
+  "password": "SecurePassword123!",
+  "isAdmin": false,
+  "user_groups": ["testers"]
+}
+```
+*Note: Newly created testers are automatically assigned all active system tests.*
+
+#### Update User
+```http
+PUT /api/users/{id}
+Content-Type: application/json
+
+{
+  "username": "john_tester_updated",
+  "isAdmin": false,
+  "user_groups": ["testers", "developers"]
+}
+```
+
+#### Suspend or Reactivate User
+```http
+PUT /api/users/{id}/suspend
+Content-Type: application/json
+
+{
+  "is_suspended": 1
+}
+```
+*(Set `0` to reactivate).*
+
+#### Reset User Password
+```http
+PUT /api/users/{id}/password
+Content-Type: application/json
+
+{
+  "newPassword": "BrandNewPassword123!"
+}
+```
+
+#### Payout / Deduct Points
+```http
+POST /api/users/{id}/pay-points
+Content-Type: application/json
+
+{
+  "pointsToPay": 500,
+  "note": "October QA incentive payout"
+}
+```
+
+#### Delete User (Cascade)
+```http
+DELETE /api/users/{id}
+```
+Permanently removes the user and cascades cleanup across test results, assignments, and points records.
+
+---
+
+### 6.2 Reporting Endpoints
+
+All reporting endpoints accept optional date filters (`startDate`, `endDate` in `YYYY-MM-DD` format) and `versionIds` (comma-separated or multiple parameters).
+
+#### User Performance Report
+```http
+GET /api/reports/user-report?userId=10,11,12&startDate=2026-10-01&endDate=2026-10-31&versionIds=13
+```
+Detailed breakdown of user tests, completed rounds, pass/fail steps, and awarded points. Supports single user ID or comma-separated user IDs.
+
+#### Test Execution Report
+```http
+GET /api/reports/test-report?testId=1,2,3&startDate=2026-10-01&endDate=2026-10-31
+```
+Execution breakdown per test case, step success rates, and tester comments.
+
+#### Passed Tests Report
+```http
+GET /api/reports/passed-report?startDate=2026-10-01&endDate=2026-10-31
+```
+List of test executions where all steps passed without hard-stops or failures.
+
+#### Failed Tests Report
+```http
+GET /api/reports/failed-report?startDate=2026-10-01&endDate=2026-10-31
+```
+Audit of failed test runs, including blocking step descriptions, tester comments, and failure timestamps.
+
+#### Points Ledger Report
+```http
+GET /api/reports/points?startDate=2026-10-01&endDate=2026-10-31
+```
+Ledger breakdown of all awarded points by user, test run, step, and activity type.
+
+#### Points Payment History
+```http
+GET /api/reports/points-payments?userId=10
+```
+Audit history of points paid out, cash equivalent values, and admin payment notes.
+
+#### System Monthly Financials
+```http
+GET /api/reports/monthly
+```
+System-wide monthly financial breakdown and completed testing cycles across all testers.
+
+#### Tester Monthly Financials
+```http
+GET /api/reports/monthly/{userId}
+```
+Detailed monthly financial calculations, threshold targets, bonus tiers, and cycle completions for a single tester.
+
+---
+
+### 6.3 Test & Assignment Management
+
+#### View All Test Assignments (Bulk)
+```http
+GET /api/tests/assignments/bulk
+```
+Returns a complete map of tests and their assigned user IDs: `{ [testId]: [userId1, userId2] }`.
+
+#### Assign User(s) to a Test
+```http
+POST /api/tests/{id}/assignments
+Content-Type: application/json
+
+{
+  "userIds": [10, 11]
+}
+```
+
+#### Remove User Assignment from a Test
+```http
+DELETE /api/tests/{id}/assignments/{userId}
+```
+
+#### Disable a Test Case
+```http
+POST /api/tests/{id}/disable
+```
+Disables the test case so it is bypassed in all active testing cycles.
+
+#### Enable a Test Case
+```http
+POST /api/tests/{id}/enable
+```
+
+#### Enable All Tests in Bulk
+```http
+POST /api/tests/enable-all
+```
+
+#### Get Test Details & Steps
+```http
+GET /api/tests/{id}
+```
+Returns full test details, prerequisites, and all defined test steps.
+
+---
+
+### 6.4 System Settings
+
+#### Get System Settings
+```http
+GET /api/settings
+```
+Retrieves all active configuration key-value pairs (points per round, thresholds, Dropbox tokens, etc.).
+
+#### Update Settings (Single or Batch)
+```http
+PUT /api/settings
+Content-Type: application/json
+
+{
+  "settings": {
+    "points_per_test": 150,
+    "monthly_target_rounds": 10
+  }
+}
+```
+*(Also supports single key updates: `{ "key": "points_per_test", "value": 150 }`).*
+
+#### Test Dropbox Integration
+```http
+POST /api/settings/test-dropbox
+```
+Validates the configured Dropbox access token and checks upload folder permissions.
+
+---
+
+### 6.5 Backup & Restore
+
+#### Export Full Database Backup
+```http
+GET /api/backup/export
+```
+Returns a complete, timestamped JSON snapshot of the entire database schema and data (`application/json`).
+
+#### Restore Database Backup
+```http
+POST /api/backup/import
+Content-Type: multipart/form-data
+
+file: <qualitycheck_backup_xxxx.json>
+```
+Restores database tables, tests, users, and audit records from a previously exported backup file.
+
+---
+
+### 6.6 Release Version Management
+
+#### List Release Versions
+```http
+GET /api/versions
+```
+Returns all release versions with their active status and creation timestamps.
+
+#### Create Release Version
+```http
+POST /api/versions
+Content-Type: application/json
+
+{
+  "version_number": "v2.5.0",
+  "description": "October 2026 Release"
+}
+```
+
+#### Set Current Active Version
+```http
+POST /api/versions/{id}/set-current
+```
+Activates the version as the default system version for incoming test runs.
+
+#### Delete Release Version
+```http
+DELETE /api/versions/{id}
+```
+Deletes a release version (only permitted if no test results or points are attached to it).
+
+---
+
+## 7. Python Integration Example
 
 Here is a ready-to-run Python script for an AI testing agent:
 

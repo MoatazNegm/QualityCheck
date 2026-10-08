@@ -186,6 +186,55 @@ router.get('/:id/completed-rounds', authenticateToken, requireAdmin, async (req,
   }
 });
 
+// Get single user details and statistics (admin, developer, or self)
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const groups = req.user.userGroups || [];
+    const isPrivileged = !!req.user.isAdmin || req.user.role === 'admin' || groups.includes('admins') || groups.includes('developers');
+    if (!isPrivileged && req.user.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const user = await usersDb.prepare('SELECT id, username, is_admin, is_suspended, user_groups, created_at FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    let parsedGroups = [];
+    try {
+      parsedGroups = typeof user.user_groups === 'string' ? JSON.parse(user.user_groups) : (user.user_groups || []);
+    } catch {
+      parsedGroups = user.is_admin ? ['admins'] : ['testers'];
+    }
+
+    const roundRow = await testsDb.prepare('SELECT round_no FROM user_rounds WHERE user_id = ?').get(userId);
+    const assignedRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_assignments WHERE user_id = ?').get(userId);
+    const pointsRow = await testsDb.prepare('SELECT COALESCE(SUM(points), 0) as totalPoints FROM points_log WHERE user_id = ?').get(userId);
+
+    res.json({
+      id: user.id,
+      username: user.username,
+      is_admin: !!user.is_admin,
+      is_suspended: !!user.is_suspended,
+      user_groups: parsedGroups,
+      created_at: user.created_at || null,
+      stats: {
+        completedRounds: roundRow ? roundRow.round_no : 0,
+        assignedTestsCount: assignedRow ? assignedRow.c : 0,
+        totalPointsEarned: pointsRow ? pointsRow.totalPoints : 0
+      }
+    });
+  } catch (error) {
+    console.error('Get user by id error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Create user (admin only)
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {

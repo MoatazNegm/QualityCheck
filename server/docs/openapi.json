@@ -47,41 +47,111 @@
       "Test": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer", "example": 1 },
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
           "name": "E2E Authentication Flow",
           "description": "Verifies login, token expiration, and permission checks",
-          "is_deleted": { "type": "integer", "example": 0 },
-          "locked": { "type": "boolean", "example": false },
-          "isActive": { "type": "boolean", "example": true },
-          "completed": { "type": "boolean", "example": false },
-          "totalPoints": { "type": "number", "example": 50 },
-          "monthlyRounds": { "type": "integer", "example": 2 },
-          "maxMonthlyRounds": { "type": "integer", "example": 8 },
-          "isMonthlyLocked": { "type": "boolean", "example": false }
+          "is_deleted": {
+            "type": "integer",
+            "example": 0
+          },
+          "locked": {
+            "type": "boolean",
+            "example": false
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "completed": {
+            "type": "boolean",
+            "example": false
+          },
+          "totalPoints": {
+            "type": "number",
+            "example": 50
+          },
+          "monthlyRounds": {
+            "type": "integer",
+            "example": 2
+          },
+          "maxMonthlyRounds": {
+            "type": "integer",
+            "example": 8
+          },
+          "isMonthlyLocked": {
+            "type": "boolean",
+            "example": false
+          }
         }
       },
       "TestStep": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer", "example": 10 },
-          "test_id": { "type": "integer", "example": 1 },
-          "step_number": { "type": "integer", "example": 1 },
-          "description": { "type": "string", "example": "Send POST request to /api/auth/login with valid credentials" },
-          "success_symptom": { "type": "string", "example": "Status 200, JWT token returned in JSON body" },
-          "points": { "type": "number", "example": 10 },
-          "value": { "type": "number", "example": 10 },
-          "on_failure": { "type": "string", "enum": ["stop", "continue"], "example": "stop" },
-          "attachment_path": { "type": "string", "nullable": true, "example": "/uploads/spec.pdf" },
-          "attachment_name": { "type": "string", "nullable": true, "example": "spec.pdf" }
+          "id": {
+            "type": "integer",
+            "example": 10
+          },
+          "test_id": {
+            "type": "integer",
+            "example": 1
+          },
+          "step_number": {
+            "type": "integer",
+            "example": 1
+          },
+          "description": {
+            "type": "string",
+            "example": "Send POST request to /api/auth/login with valid credentials"
+          },
+          "success_symptom": {
+            "type": "string",
+            "example": "Status 200, JWT token returned in JSON body"
+          },
+          "points": {
+            "type": "number",
+            "example": 10
+          },
+          "value": {
+            "type": "number",
+            "example": 10
+          },
+          "on_failure": {
+            "type": "string",
+            "enum": [
+              "stop",
+              "continue"
+            ],
+            "example": "stop"
+          },
+          "attachment_path": {
+            "type": "string",
+            "nullable": true,
+            "example": "/uploads/spec.pdf"
+          },
+          "attachment_name": {
+            "type": "string",
+            "nullable": true,
+            "example": "spec.pdf"
+          }
         }
       },
       "StepSubmissionRequest": {
         "type": "object",
-        "required": ["result"],
+        "required": [
+          "result"
+        ],
         "properties": {
           "result": {
             "type": "string",
-            "enum": ["pass", "fail", "yes", "no"],
+            "enum": [
+              "pass",
+              "fail",
+              "yes",
+              "no"
+            ],
             "description": "Result of step execution. Supports 'pass' / 'fail' or 'yes' / 'no' (case-insensitive).",
             "example": "pass"
           },
@@ -110,40 +180,120 @@
       "StepSubmissionResponse": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer", "example": 142 },
-          "submissionId": { "type": "integer", "example": 358 },
-          "roundId": { "type": "integer", "example": 1 },
-          "result": { "type": "string", "example": "pass" },
-          "pointsAwarded": { "type": "number", "example": 10 },
-          "configFilePath": { "type": "string", "nullable": true, "example": "/uploads/configFile-u2-t1-s10-1710000000.png" },
-          "message": { "type": "string", "example": "Result submitted successfully" },
-          "autoEnded": { "type": "boolean", "example": false },
-          "warning": { "type": "string", "nullable": true, "example": null }
+          "id": {
+            "type": "integer",
+            "example": 142
+          },
+          "submissionId": {
+            "type": "integer",
+            "example": 358
+          },
+          "roundId": {
+            "type": "integer",
+            "example": 1
+          },
+          "result": {
+            "type": "string",
+            "example": "pass"
+          },
+          "pointsAwarded": {
+            "type": "number",
+            "example": 10
+          },
+          "configFilePath": {
+            "type": "string",
+            "nullable": true,
+            "example": "/uploads/configFile-u2-t1-s10-1710000000.png"
+          },
+          "message": {
+            "type": "string",
+            "example": "Result submitted successfully"
+          },
+          "autoEnded": {
+            "type": "boolean",
+            "example": false
+          },
+          "warning": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
         }
       },
       "FileUploadResponse": {
         "type": "object",
         "properties": {
-          "success": { "type": "boolean", "example": true },
-          "filePath": { "type": "string", "example": "/uploads/upload-u2-1710000000.png" },
-          "filename": { "type": "string", "example": "upload-u2-1710000000.png" },
-          "originalName": { "type": "string", "example": "screenshot.png" },
-          "fileSize": { "type": "integer", "example": 40960 },
-          "mimeType": { "type": "string", "example": "image/png" }
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "filePath": {
+            "type": "string",
+            "example": "/uploads/upload-u2-1710000000.png"
+          },
+          "filename": {
+            "type": "string",
+            "example": "upload-u2-1710000000.png"
+          },
+          "originalName": {
+            "type": "string",
+            "example": "screenshot.png"
+          },
+          "fileSize": {
+            "type": "integer",
+            "example": 40960
+          },
+          "mimeType": {
+            "type": "string",
+            "example": "image/png"
+          }
         }
       },
       "ApiKey": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer", "example": 1 },
-          "name": { "type": "string", "example": "AI Testing Agent" },
-          "key_prefix": { "type": "string", "example": "qc_a1b2c3d4..." },
-          "role": { "type": "string", "enum": ["tester", "developer", "admin"], "example": "tester" },
-          "user_id": { "type": "integer", "example": 3 },
-          "username": { "type": "string", "example": "AI_Agent_01" },
-          "is_active": { "type": "integer", "example": 1 },
-          "created_at": { "type": "string", "example": "2026-10-07T12:00:00.000Z" },
-          "last_used_at": { "type": "string", "nullable": true, "example": "2026-10-07T12:30:00.000Z" }
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
+          "name": {
+            "type": "string",
+            "example": "AI Testing Agent"
+          },
+          "key_prefix": {
+            "type": "string",
+            "example": "qc_a1b2c3d4..."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "tester",
+              "developer",
+              "admin"
+            ],
+            "example": "tester"
+          },
+          "user_id": {
+            "type": "integer",
+            "example": 3
+          },
+          "username": {
+            "type": "string",
+            "example": "AI_Agent_01"
+          },
+          "is_active": {
+            "type": "integer",
+            "example": 1
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-10-07T12:00:00.000Z"
+          },
+          "last_used_at": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-10-07T12:30:00.000Z"
+          }
         }
       }
     }
@@ -151,7 +301,9 @@
   "paths": {
     "/docs/get_user_guide": {
       "get": {
-        "tags": ["Documentation & User Guide"],
+        "tags": [
+          "Documentation & User Guide"
+        ],
         "summary": "Download API User Guide & Integration Manual",
         "description": "Downloads the complete API user guide and AI agent integration manual (`QualityCheck_API_User_Guide.md`). Requires a valid API key passed via `X-API-Key` or `Authorization: Bearer <key>`.",
         "parameters": [
@@ -162,7 +314,11 @@
             "description": "Output format: 'markdown' (default downloaded file) or 'json' (structured JSON object with markdown text content)",
             "schema": {
               "type": "string",
-              "enum": ["markdown", "json", "raw"],
+              "enum": [
+                "markdown",
+                "json",
+                "raw"
+              ],
               "default": "markdown"
             }
           },
@@ -190,10 +346,18 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "title": { "type": "string" },
-                    "filename": { "type": "string" },
-                    "contentType": { "type": "string" },
-                    "content": { "type": "string" }
+                    "title": {
+                      "type": "string"
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "contentType": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -205,7 +369,9 @@
         }
       },
       "post": {
-        "tags": ["Documentation & User Guide"],
+        "tags": [
+          "Documentation & User Guide"
+        ],
         "summary": "Request / Download API User Guide via POST",
         "description": "Allows an AI agent to request the user guide using JSON body specifying `{ \"say\": \"get_user_guide\" }` or `{ \"action\": \"get_user_guide\" }`.",
         "requestBody": {
@@ -215,10 +381,27 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "say": { "type": "string", "example": "get_user_guide" },
-                  "action": { "type": "string", "example": "get_user_guide" },
-                  "command": { "type": "string", "example": "get_user_guide" },
-                  "format": { "type": "string", "enum": ["markdown", "json", "raw"], "default": "markdown" }
+                  "say": {
+                    "type": "string",
+                    "example": "get_user_guide"
+                  },
+                  "action": {
+                    "type": "string",
+                    "example": "get_user_guide"
+                  },
+                  "command": {
+                    "type": "string",
+                    "example": "get_user_guide"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "markdown",
+                      "json",
+                      "raw"
+                    ],
+                    "default": "markdown"
+                  }
                 }
               }
             }
@@ -236,7 +419,9 @@
     },
     "/api-keys/me": {
       "get": {
-        "tags": ["Authentication & API Keys"],
+        "tags": [
+          "Authentication & API Keys"
+        ],
         "summary": "Get authenticated user identity",
         "description": "Verifies credentials and returns information about the calling user or AI agent.",
         "responses": {
@@ -247,17 +432,46 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "authenticated": { "type": "boolean", "example": true },
+                    "authenticated": {
+                      "type": "boolean",
+                      "example": true
+                    },
                     "user": {
                       "type": "object",
                       "properties": {
-                        "userId": { "type": "integer", "example": 3 },
-                        "username": { "type": "string", "example": "AI_Agent_01" },
-                        "isAdmin": { "type": "boolean", "example": false },
-                        "userGroups": { "type": "array", "items": { "type": "string" }, "example": ["testers"] },
-                        "role": { "type": "string", "example": "tester" },
-                        "isApiKey": { "type": "boolean", "example": true },
-                        "apiKeyName": { "type": "string", "example": "AI Testing Agent" }
+                        "userId": {
+                          "type": "integer",
+                          "example": 3
+                        },
+                        "username": {
+                          "type": "string",
+                          "example": "AI_Agent_01"
+                        },
+                        "isAdmin": {
+                          "type": "boolean",
+                          "example": false
+                        },
+                        "userGroups": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "example": [
+                            "testers"
+                          ]
+                        },
+                        "role": {
+                          "type": "string",
+                          "example": "tester"
+                        },
+                        "isApiKey": {
+                          "type": "boolean",
+                          "example": true
+                        },
+                        "apiKeyName": {
+                          "type": "string",
+                          "example": "AI Testing Agent"
+                        }
                       }
                     }
                   }
@@ -265,13 +479,17 @@
               }
             }
           },
-          "401": { "description": "Unauthorized" }
+          "401": {
+            "description": "Unauthorized"
+          }
         }
       }
     },
     "/api-keys": {
       "get": {
-        "tags": ["Authentication & API Keys"],
+        "tags": [
+          "Authentication & API Keys"
+        ],
         "summary": "List API keys (Admin only)",
         "description": "Returns all generated API keys with user mapping and status.",
         "responses": {
@@ -281,16 +499,22 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/ApiKey" }
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKey"
+                  }
                 }
               }
             }
           },
-          "403": { "description": "Admin access required" }
+          "403": {
+            "description": "Admin access required"
+          }
         }
       },
       "post": {
-        "tags": ["Authentication & API Keys"],
+        "tags": [
+          "Authentication & API Keys"
+        ],
         "summary": "Generate a new API key (Admin only)",
         "description": "Generates a cryptographically secure API key. Can associate with an existing user or create a new user profile with the given name so all agent actions are attributed to that user.",
         "requestBody": {
@@ -299,12 +523,35 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
-                  "name": { "type": "string", "description": "Valid name/description for the key or agent", "example": "AI Test Agent Alpha" },
-                  "role": { "type": "string", "enum": ["tester", "developer", "admin"], "default": "tester", "example": "tester" },
-                  "userId": { "type": "integer", "description": "Optional existing user ID to bind this key to", "example": 2 },
-                  "userName": { "type": "string", "description": "Optional specific username to link or create", "example": "Agent_Alpha" }
+                  "name": {
+                    "type": "string",
+                    "description": "Valid name/description for the key or agent",
+                    "example": "AI Test Agent Alpha"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "tester",
+                      "developer",
+                      "admin"
+                    ],
+                    "default": "tester",
+                    "example": "tester"
+                  },
+                  "userId": {
+                    "type": "integer",
+                    "description": "Optional existing user ID to bind this key to",
+                    "example": 2
+                  },
+                  "userName": {
+                    "type": "string",
+                    "description": "Optional specific username to link or create",
+                    "example": "Agent_Alpha"
+                  }
                 }
               }
             }
@@ -318,25 +565,46 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "message": { "type": "string", "example": "API key created successfully" },
-                    "key": { "type": "string", "example": "qc_a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f7a8b" },
-                    "apiKey": { "$ref": "#/components/schemas/ApiKey" }
+                    "message": {
+                      "type": "string",
+                      "example": "API key created successfully"
+                    },
+                    "key": {
+                      "type": "string",
+                      "example": "qc_a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f7a8b"
+                    },
+                    "apiKey": {
+                      "$ref": "#/components/schemas/ApiKey"
+                    }
                   }
                 }
               }
             }
           },
-          "400": { "description": "Invalid parameters" },
-          "403": { "description": "Admin access required" }
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "403": {
+            "description": "Admin access required"
+          }
         }
       }
     },
     "/api-keys/{id}/toggle": {
       "patch": {
-        "tags": ["Authentication & API Keys"],
+        "tags": [
+          "Authentication & API Keys"
+        ],
         "summary": "Toggle API key status (Admin only)",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -346,8 +614,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "message": { "type": "string", "example": "API key deactivated successfully" },
-                    "is_active": { "type": "integer", "example": 0 }
+                    "message": {
+                      "type": "string",
+                      "example": "API key deactivated successfully"
+                    },
+                    "is_active": {
+                      "type": "integer",
+                      "example": 0
+                    }
                   }
                 }
               }
@@ -358,10 +632,19 @@
     },
     "/api-keys/{id}": {
       "delete": {
-        "tags": ["Authentication & API Keys"],
+        "tags": [
+          "Authentication & API Keys"
+        ],
         "summary": "Revoke and delete API key (Admin only)",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -371,7 +654,10 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "message": { "type": "string", "example": "API key revoked and deleted successfully" }
+                    "message": {
+                      "type": "string",
+                      "example": "API key revoked and deleted successfully"
+                    }
                   }
                 }
               }
@@ -382,7 +668,9 @@
     },
     "/tests": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "List assigned tests with lock & execution status",
         "description": "For testers, returns assigned tests with loop status (`isActive`, `locked`, `completed`, `monthlyRounds`). For developers/admins, returns all tests.",
         "responses": {
@@ -392,7 +680,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/Test" }
+                  "items": {
+                    "$ref": "#/components/schemas/Test"
+                  }
                 }
               }
             }
@@ -400,7 +690,9 @@
         }
       },
       "post": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Create a new test",
         "requestBody": {
           "required": true,
@@ -408,10 +700,18 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
-                  "name": { "type": "string", "example": "API Gateway Performance Suite" },
-                  "description": { "type": "string", "example": "Validates load thresholds and throughput" }
+                  "name": {
+                    "type": "string",
+                    "example": "API Gateway Performance Suite"
+                  },
+                  "description": {
+                    "type": "string",
+                    "example": "Validates load thresholds and throughput"
+                  }
                 }
               }
             }
@@ -425,9 +725,18 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "id": { "type": "integer", "example": 12 },
-                    "name": { "type": "string", "example": "API Gateway Performance Suite" },
-                    "description": { "type": "string", "example": "Validates load thresholds and throughput" }
+                    "id": {
+                      "type": "integer",
+                      "example": 12
+                    },
+                    "name": {
+                      "type": "string",
+                      "example": "API Gateway Performance Suite"
+                    },
+                    "description": {
+                      "type": "string",
+                      "example": "Validates load thresholds and throughput"
+                    }
                   }
                 }
               }
@@ -438,7 +747,9 @@
     },
     "/tests/active": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get the currently active test for execution",
         "description": "Finds the unlocked, active test that the authenticated tester/agent should execute next in their testing cycle, along with its steps.",
         "responses": {
@@ -453,16 +764,30 @@
                       "type": "object",
                       "nullable": true,
                       "properties": {
-                        "id": { "type": "integer", "example": 5 },
-                        "name": { "type": "string", "example": "Checkout Flow" },
-                        "description": { "type": "string", "example": "Full checkout test" },
+                        "id": {
+                          "type": "integer",
+                          "example": 5
+                        },
+                        "name": {
+                          "type": "string",
+                          "example": "Checkout Flow"
+                        },
+                        "description": {
+                          "type": "string",
+                          "example": "Full checkout test"
+                        },
                         "steps": {
                           "type": "array",
-                          "items": { "$ref": "#/components/schemas/TestStep" }
+                          "items": {
+                            "$ref": "#/components/schemas/TestStep"
+                          }
                         }
                       }
                     },
-                    "message": { "type": "string", "example": "No active tests available" }
+                    "message": {
+                      "type": "string",
+                      "example": "No active tests available"
+                    }
                   }
                 }
               }
@@ -473,10 +798,19 @@
     },
     "/tests/{id}": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get test details and all steps",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -486,26 +820,48 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "id": { "type": "integer", "example": 5 },
-                    "name": { "type": "string", "example": "Payment Gateway Test" },
-                    "description": { "type": "string", "example": "Payment validation" },
+                    "id": {
+                      "type": "integer",
+                      "example": 5
+                    },
+                    "name": {
+                      "type": "string",
+                      "example": "Payment Gateway Test"
+                    },
+                    "description": {
+                      "type": "string",
+                      "example": "Payment validation"
+                    },
                     "steps": {
                       "type": "array",
-                      "items": { "$ref": "#/components/schemas/TestStep" }
+                      "items": {
+                        "$ref": "#/components/schemas/TestStep"
+                      }
                     }
                   }
                 }
               }
             }
           },
-          "404": { "description": "Test not found" }
+          "404": {
+            "description": "Test not found"
+          }
         }
       },
       "put": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Update test name and description",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -513,37 +869,67 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
-                  "name": { "type": "string", "example": "Updated Test Name" },
-                  "description": { "type": "string", "example": "Updated description" }
+                  "name": {
+                    "type": "string",
+                    "example": "Updated Test Name"
+                  },
+                  "description": {
+                    "type": "string",
+                    "example": "Updated description"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Test updated" }
+          "200": {
+            "description": "Test updated"
+          }
         }
       },
       "delete": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Soft-delete / disable a test",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Test disabled" }
+          "200": {
+            "description": "Test disabled"
+          }
         }
       }
     },
     "/test-results/{testId}/next": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get next unattempted step in a test",
         "description": "Returns the next step that needs to be executed by the authenticated agent in the specified test.",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -553,9 +939,17 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "step": { "$ref": "#/components/schemas/TestStep" },
-                    "test_name": { "type": "string", "example": "Checkout Flow" },
-                    "test_id": { "type": "integer", "example": 5 }
+                    "step": {
+                      "$ref": "#/components/schemas/TestStep"
+                    },
+                    "test_name": {
+                      "type": "string",
+                      "example": "Checkout Flow"
+                    },
+                    "test_id": {
+                      "type": "integer",
+                      "example": 5
+                    }
                   }
                 }
               }
@@ -568,8 +962,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "error": { "type": "string", "example": "No more steps" },
-                    "allDone": { "type": "boolean", "example": true }
+                    "error": {
+                      "type": "string",
+                      "example": "No more steps"
+                    },
+                    "allDone": {
+                      "type": "boolean",
+                      "example": true
+                    }
                   }
                 }
               }
@@ -580,27 +980,63 @@
     },
     "/test-results/{testId}/steps/{stepId}": {
       "post": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Submit step test result (Pass/Fail, Yes/No, and Files)",
         "description": "Submits the test result for a specific step. Accepts result as 'pass', 'fail', 'yes', or 'no'. Supports uploading attachment files via multipart/form-data or JSON (base64). Automatically logs points and checks cross-test failure rules.",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/StepSubmissionRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/StepSubmissionRequest"
+              }
             },
             "multipart/form-data": {
               "schema": {
                 "type": "object",
-                "required": ["result"],
+                "required": [
+                  "result"
+                ],
                 "properties": {
-                  "result": { "type": "string", "enum": ["pass", "fail", "yes", "no"], "example": "pass" },
-                  "comment": { "type": "string", "example": "Test execution passed successfully" },
-                  "configFile": { "type": "string", "format": "binary", "description": "Log or evidence file" }
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "yes",
+                      "no"
+                    ],
+                    "example": "pass"
+                  },
+                  "comment": {
+                    "type": "string",
+                    "example": "Test execution passed successfully"
+                  },
+                  "configFile": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Log or evidence file"
+                  }
                 }
               }
             }
@@ -611,32 +1047,63 @@
             "description": "Step result submitted successfully",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/StepSubmissionResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/StepSubmissionResponse"
+                }
               }
             }
           },
-          "400": { "description": "Validation error" }
+          "400": {
+            "description": "Validation error"
+          }
         }
       },
       "delete": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Revert step result and points",
         "description": "Reverts the result and points earned for a specific step in the current round.",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Result reverted" }
+          "200": {
+            "description": "Result reverted"
+          }
         }
       }
     },
     "/tests/{testId}/complete": {
       "post": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Mark test completed and advance loop",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -646,8 +1113,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "message": { "type": "string", "example": "Test completed" },
-                    "active_test_id": { "type": "integer", "example": 6 }
+                    "message": {
+                      "type": "string",
+                      "example": "Test completed"
+                    },
+                    "active_test_id": {
+                      "type": "integer",
+                      "example": 6
+                    }
                   }
                 }
               }
@@ -658,10 +1131,19 @@
     },
     "/tests/{testId}/end": {
       "post": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "End current test and advance loop",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -671,8 +1153,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "message": { "type": "string", "example": "Test ended" },
-                    "active_test_id": { "type": "integer", "example": 6 }
+                    "message": {
+                      "type": "string",
+                      "example": "Test ended"
+                    },
+                    "active_test_id": {
+                      "type": "integer",
+                      "example": 6
+                    }
                   }
                 }
               }
@@ -683,19 +1171,32 @@
     },
     "/tests/{testId}/activate": {
       "post": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Activate or restart test",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Test activated" }
+          "200": {
+            "description": "Test activated"
+          }
         }
       }
     },
     "/test-results/summary": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get monthly points summary for authenticated user",
         "responses": {
           "200": {
@@ -705,8 +1206,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "monthEarned": { "type": "number", "example": 450 },
-                    "monthStart": { "type": "string", "example": "2026-10-01 00:00:00" }
+                    "monthEarned": {
+                      "type": "number",
+                      "example": 450
+                    },
+                    "monthStart": {
+                      "type": "string",
+                      "example": "2026-10-01 00:00:00"
+                    }
                   }
                 }
               }
@@ -717,7 +1224,9 @@
     },
     "/test-results/warnings": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get active rule warnings for authenticated user",
         "responses": {
           "200": {
@@ -732,10 +1241,22 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "id": { "type": "integer", "example": 1 },
-                          "message": { "type": "string", "example": "Points withheld due to consecutive failure pattern." },
-                          "created_round": { "type": "integer", "example": 1 },
-                          "created_at": { "type": "string", "example": "2026-10-07 10:30:00" }
+                          "id": {
+                            "type": "integer",
+                            "example": 1
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Points withheld due to consecutive failure pattern."
+                          },
+                          "created_round": {
+                            "type": "integer",
+                            "example": 1
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "example": "2026-10-07 10:30:00"
+                          }
                         }
                       }
                     }
@@ -749,7 +1270,9 @@
     },
     "/test-results/history": {
       "get": {
-        "tags": ["Test Execution (Testers & AI Agents)"],
+        "tags": [
+          "Test Execution (Testers & AI Agents)"
+        ],
         "summary": "Get submission history for authenticated user",
         "responses": {
           "200": {
@@ -761,13 +1284,34 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "id": { "type": "integer", "example": 12 },
-                      "test_name": { "type": "string", "example": "Auth Test" },
-                      "step_number": { "type": "integer", "example": 1 },
-                      "step_description": { "type": "string", "example": "POST login" },
-                      "result": { "type": "string", "example": "pass" },
-                      "comment": { "type": "string", "example": "OK" },
-                      "executed_at": { "type": "string", "example": "2026-10-07 11:20:00" }
+                      "id": {
+                        "type": "integer",
+                        "example": 12
+                      },
+                      "test_name": {
+                        "type": "string",
+                        "example": "Auth Test"
+                      },
+                      "step_number": {
+                        "type": "integer",
+                        "example": 1
+                      },
+                      "step_description": {
+                        "type": "string",
+                        "example": "POST login"
+                      },
+                      "result": {
+                        "type": "string",
+                        "example": "pass"
+                      },
+                      "comment": {
+                        "type": "string",
+                        "example": "OK"
+                      },
+                      "executed_at": {
+                        "type": "string",
+                        "example": "2026-10-07 11:20:00"
+                      }
                     }
                   }
                 }
@@ -779,7 +1323,9 @@
     },
     "/upload": {
       "post": {
-        "tags": ["Files & Uploads"],
+        "tags": [
+          "Files & Uploads"
+        ],
         "summary": "Upload a file (multipart or base64 JSON)",
         "description": "Allows testers, developers, and AI agents to upload evidence files, logs, or reference attachments. Returns the stored file path which can be passed to step submissions.",
         "requestBody": {
@@ -789,18 +1335,32 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "file": { "type": "string", "format": "binary" }
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
                 }
               }
             },
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["fileData"],
+                "required": [
+                  "fileData"
+                ],
                 "properties": {
-                  "fileData": { "type": "string", "description": "Base64 encoded file content" },
-                  "fileName": { "type": "string", "example": "evidence.log" },
-                  "mimeType": { "type": "string", "example": "text/plain" }
+                  "fileData": {
+                    "type": "string",
+                    "description": "Base64 encoded file content"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "example": "evidence.log"
+                  },
+                  "mimeType": {
+                    "type": "string",
+                    "example": "text/plain"
+                  }
                 }
               }
             }
@@ -811,7 +1371,9 @@
             "description": "File uploaded successfully",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/FileUploadResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResponse"
+                }
               }
             }
           }
@@ -820,10 +1382,19 @@
     },
     "/tests/{id}/steps": {
       "post": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Add a new step to a test",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -831,15 +1402,43 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["description"],
+                "required": [
+                  "description"
+                ],
                 "properties": {
-                  "step_number": { "type": "integer", "description": "Auto-assigned if omitted", "example": 1 },
-                  "description": { "type": "string", "example": "Verify status code is 200" },
-                  "success_symptom": { "type": "string", "example": "HTTP 200 OK" },
-                  "points": { "type": "number", "example": 10 },
-                  "on_failure": { "type": "string", "enum": ["stop", "continue"], "default": "stop" },
-                  "attachment_path": { "type": "string", "example": null },
-                  "attachment_name": { "type": "string", "example": null }
+                  "step_number": {
+                    "type": "integer",
+                    "description": "Auto-assigned if omitted",
+                    "example": 1
+                  },
+                  "description": {
+                    "type": "string",
+                    "example": "Verify status code is 200"
+                  },
+                  "success_symptom": {
+                    "type": "string",
+                    "example": "HTTP 200 OK"
+                  },
+                  "points": {
+                    "type": "number",
+                    "example": 10
+                  },
+                  "on_failure": {
+                    "type": "string",
+                    "enum": [
+                      "stop",
+                      "continue"
+                    ],
+                    "default": "stop"
+                  },
+                  "attachment_path": {
+                    "type": "string",
+                    "example": null
+                  },
+                  "attachment_name": {
+                    "type": "string",
+                    "example": null
+                  }
                 }
               }
             }
@@ -850,7 +1449,9 @@
             "description": "Step created",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/TestStep" }
+                "schema": {
+                  "$ref": "#/components/schemas/TestStep"
+                }
               }
             }
           }
@@ -859,11 +1460,27 @@
     },
     "/tests/{testId}/steps/{stepId}": {
       "put": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Update a test step",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -872,39 +1489,89 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "step_number": { "type": "integer" },
-                  "description": { "type": "string" },
-                  "success_symptom": { "type": "string" },
-                  "points": { "type": "number" },
-                  "on_failure": { "type": "string", "enum": ["stop", "continue"] }
+                  "step_number": {
+                    "type": "integer"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "success_symptom": {
+                    "type": "string"
+                  },
+                  "points": {
+                    "type": "number"
+                  },
+                  "on_failure": {
+                    "type": "string",
+                    "enum": [
+                      "stop",
+                      "continue"
+                    ]
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Step updated successfully" }
+          "200": {
+            "description": "Step updated successfully"
+          }
         }
       },
       "delete": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Delete a test step",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Step deleted successfully" }
+          "200": {
+            "description": "Step deleted successfully"
+          }
         }
       }
     },
     "/tests/{testId}/steps/{stepId}/points": {
       "patch": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Update points for a step",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -912,26 +1579,49 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["points"],
+                "required": [
+                  "points"
+                ],
                 "properties": {
-                  "points": { "type": "number", "example": 25 }
+                  "points": {
+                    "type": "number",
+                    "example": 25
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Points updated" }
+          "200": {
+            "description": "Points updated"
+          }
         }
       }
     },
     "/tests/{testId}/steps/{stepId}/attachment": {
       "post": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Upload reference attachment for a step",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -940,44 +1630,83 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "file": { "type": "string", "format": "binary" }
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
                 }
               }
             },
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["fileData"],
+                "required": [
+                  "fileData"
+                ],
                 "properties": {
-                  "fileData": { "type": "string" },
-                  "fileName": { "type": "string", "example": "reference.pdf" }
+                  "fileData": {
+                    "type": "string"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "example": "reference.pdf"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Attachment uploaded" }
+          "200": {
+            "description": "Attachment uploaded"
+          }
         }
       },
       "delete": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Delete reference attachment from a step",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } },
-          { "name": "stepId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Attachment removed" }
+          "200": {
+            "description": "Attachment removed"
+          }
         }
       }
     },
     "/tests/{testId}/steps/reorder": {
       "put": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Reorder steps in a test",
         "parameters": [
-          { "name": "testId", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "testId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -985,16 +1714,27 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["stepOrder"],
+                "required": [
+                  "stepOrder"
+                ],
                 "properties": {
                   "stepOrder": {
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "step_number"],
+                      "required": [
+                        "id",
+                        "step_number"
+                      ],
                       "properties": {
-                        "id": { "type": "integer", "example": 10 },
-                        "step_number": { "type": "integer", "example": 1 }
+                        "id": {
+                          "type": "integer",
+                          "example": 10
+                        },
+                        "step_number": {
+                          "type": "integer",
+                          "example": 1
+                        }
                       }
                     }
                   }
@@ -1004,13 +1744,17 @@
           }
         },
         "responses": {
-          "200": { "description": "Steps reordered successfully" }
+          "200": {
+            "description": "Steps reordered successfully"
+          }
         }
       }
     },
     "/tests/import": {
       "post": {
-        "tags": ["Test Authoring & Management (Developers & Admins)"],
+        "tags": [
+          "Test Authoring & Management (Developers & Admins)"
+        ],
         "summary": "Import tests and steps from Excel (.xlsx) or CSV",
         "requestBody": {
           "required": true,
@@ -1019,18 +1763,32 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "file": { "type": "string", "format": "binary" },
-                  "fileName": { "type": "string", "example": "RegressionTests.xlsx" }
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "example": "RegressionTests.xlsx"
+                  }
                 }
               }
             },
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["fileData"],
+                "required": [
+                  "fileData"
+                ],
                 "properties": {
-                  "fileData": { "type": "string", "description": "Base64 encoded Excel/CSV file" },
-                  "fileName": { "type": "string", "example": "RegressionTests.xlsx" }
+                  "fileData": {
+                    "type": "string",
+                    "description": "Base64 encoded Excel/CSV file"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "example": "RegressionTests.xlsx"
+                  }
                 }
               }
             }
@@ -1049,9 +1807,18 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "id": { "type": "integer", "example": 15 },
-                          "name": { "type": "string", "example": "RegressionTests - Sheet1" },
-                          "stepsCount": { "type": "integer", "example": 24 }
+                          "id": {
+                            "type": "integer",
+                            "example": 15
+                          },
+                          "name": {
+                            "type": "string",
+                            "example": "RegressionTests - Sheet1"
+                          },
+                          "stepsCount": {
+                            "type": "integer",
+                            "example": 24
+                          }
                         }
                       }
                     }
@@ -1065,14 +1832,20 @@
     },
     "/versions": {
       "get": {
-        "tags": ["Versions"],
+        "tags": [
+          "Versions"
+        ],
         "summary": "List all versions",
         "responses": {
-          "200": { "description": "List of versions" }
+          "200": {
+            "description": "List of versions"
+          }
         }
       },
       "post": {
-        "tags": ["Versions"],
+        "tags": [
+          "Versions"
+        ],
         "summary": "Create a new version (Admin only)",
         "requestBody": {
           "required": true,
@@ -1080,38 +1853,1078 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
-                  "name": { "type": "string", "example": "v2.5.0-release" },
-                  "note": { "type": "string", "example": "Sprint 32 release" }
+                  "name": {
+                    "type": "string",
+                    "example": "v2.5.0-release"
+                  },
+                  "note": {
+                    "type": "string",
+                    "example": "Sprint 32 release"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Version created" }
+          "200": {
+            "description": "Version created"
+          }
         }
       }
     },
     "/versions/current": {
       "get": {
-        "tags": ["Versions"],
+        "tags": [
+          "Versions"
+        ],
         "summary": "Get the currently active version",
         "responses": {
-          "200": { "description": "Current version info" }
+          "200": {
+            "description": "Current version info"
+          }
         }
       }
     },
     "/versions/{id}/set-current": {
       "post": {
-        "tags": ["Versions"],
+        "tags": [
+          "Versions"
+        ],
         "summary": "Set a version as the active version (Admin only)",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Version set as current" }
+          "200": {
+            "description": "Version set as current"
+          }
+        }
+      }
+    },
+    "/versions/{id}": {
+      "delete": {
+        "tags": [
+          "Admin - Versions"
+        ],
+        "summary": "Delete a release version (Admin only)",
+        "description": "Deletes a version provided no results or points have been logged against it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version deleted successfully"
+          },
+          "400": {
+            "description": "Cannot delete version with logged results"
+          },
+          "404": {
+            "description": "Version not found"
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "List all users (Admin & Developer)",
+        "description": "Returns all registered users with their roles, suspension status, and user groups.",
+        "responses": {
+          "200": {
+            "description": "List of users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "example": 10
+                      },
+                      "username": {
+                        "type": "string",
+                        "example": "tester_alpha"
+                      },
+                      "is_admin": {
+                        "type": "integer",
+                        "example": 0
+                      },
+                      "is_suspended": {
+                        "type": "integer",
+                        "example": 0
+                      },
+                      "user_groups": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "example": [
+                          "testers"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Create / Provision a new user (Admin only)",
+        "description": "Provisions a new user account with designated credentials, admin privileges, and user groups. Non-admin users are automatically assigned all active tests.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "example": "john_tester"
+                  },
+                  "password": {
+                    "type": "string",
+                    "example": "SecurePass123!"
+                  },
+                  "isAdmin": {
+                    "type": "boolean",
+                    "example": false
+                  },
+                  "user_groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": [
+                      "testers"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User created successfully"
+          },
+          "400": {
+            "description": "Username and password required"
+          },
+          "409": {
+            "description": "Username already exists"
+          }
+        }
+      }
+    },
+    "/users/summaries": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Get bulk testing summaries for all users (Admin & Developer)",
+        "description": "Returns aggregate execution statistics (assigned count, completed tests count, hard-stop failure count, completed rounds) across all testers in a single call.",
+        "responses": {
+          "200": {
+            "description": "Map of user ID to summary stats"
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Get user details and statistics (Admin & Developer)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User details and summary stats"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Update user groups and admin role (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "is_admin": {
+                    "type": "boolean",
+                    "example": false
+                  },
+                  "user_groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": [
+                      "testers",
+                      "developers"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User updated successfully"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Delete user and cascade remove all associated data (Admin only)",
+        "description": "Completely removes user, test results, submissions, assignments, loop state, points ledger, API keys, and uploaded evidence files.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User and all data deleted successfully"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
+    "/users/{id}/suspend": {
+      "put": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Suspend or unsuspend a user account (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "is_suspended"
+                ],
+                "properties": {
+                  "is_suspended": {
+                    "type": "integer",
+                    "enum": [
+                      0,
+                      1
+                    ],
+                    "example": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User suspension updated"
+          }
+        }
+      }
+    },
+    "/users/{id}/password": {
+      "put": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Reset user password (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "example": "NewSecurePassword123!"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password updated successfully"
+          }
+        }
+      }
+    },
+    "/users/{id}/pay-points": {
+      "post": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Record points payout for a user (Admin only)",
+        "description": "Records an official points payment/payout in the points payment ledger.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "points"
+                ],
+                "properties": {
+                  "points": {
+                    "type": "number",
+                    "example": 150
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Points paid successfully"
+          }
+        }
+      }
+    },
+    "/reports/user-report": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Generate comprehensive User Report (Admin, Developer & Self)",
+        "description": "Generates complete execution report for one or more users over a date range and optional version filter. Includes points earned, test completions, pass/fail counts, and detailed step failure history with attachments.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": true,
+            "description": "Single user ID or comma-separated list (e.g. `10,11,12`)",
+            "schema": {
+              "type": "string",
+              "example": "10,11,12"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": true,
+            "description": "Start date in YYYY-MM-DD format",
+            "schema": {
+              "type": "string",
+              "example": "2026-10-01"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": true,
+            "description": "End date in YYYY-MM-DD format",
+            "schema": {
+              "type": "string",
+              "example": "2026-10-31"
+            }
+          },
+          {
+            "name": "versionIds",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated version IDs",
+            "schema": {
+              "type": "string",
+              "example": "13"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User report data"
+          }
+        }
+      }
+    },
+    "/reports/test-report": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Generate comprehensive Test Report (Admin, Developer & Self)",
+        "description": "Generates aggregate test status report for one or more test IDs across a date range and optional version IDs.",
+        "parameters": [
+          {
+            "name": "testIds",
+            "in": "query",
+            "required": true,
+            "description": "Comma-separated test IDs or `all`",
+            "schema": {
+              "type": "string",
+              "example": "1,2,3"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-01"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-31"
+            }
+          },
+          {
+            "name": "versionIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "13"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test report data"
+          }
+        }
+      }
+    },
+    "/reports/passed-report": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Generate Passed Tests Report (Admin, Developer & Self)",
+        "parameters": [
+          {
+            "name": "testIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-01"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-31"
+            }
+          },
+          {
+            "name": "versionIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Passed tests report data"
+          }
+        }
+      }
+    },
+    "/reports/failed-report": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Generate Failed Steps Report (Admin, Developer & Self)",
+        "parameters": [
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-01"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-10-31"
+            }
+          },
+          {
+            "name": "versionIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Failed steps report data"
+          }
+        }
+      }
+    },
+    "/reports/points": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Get total points earned over a period (Admin, Developer & Self)",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "testId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Points earned summary"
+          }
+        }
+      }
+    },
+    "/reports/points-payments": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Get points payments ledger history (Admin & Developer)",
+        "responses": {
+          "200": {
+            "description": "Points payments history"
+          }
+        }
+      }
+    },
+    "/reports/monthly": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Get current month financial summary for all users (Admin & Developer)",
+        "responses": {
+          "200": {
+            "description": "Monthly financial breakdown across all users"
+          }
+        }
+      }
+    },
+    "/reports/monthly/{userId}": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Get current month financial summary for a specific user",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Monthly financial breakdown for user"
+          }
+        }
+      }
+    },
+    "/reports/user-progress/{userId}": {
+      "get": {
+        "tags": [
+          "Admin - Reports"
+        ],
+        "summary": "Get live step-by-step progress tracking for a user",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User progress status"
+          }
+        }
+      }
+    },
+    "/tests/assignments/bulk": {
+      "get": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Get bulk list of all user-test assignments (Admin only)",
+        "responses": {
+          "200": {
+            "description": "Array of testId-userId assignment records"
+          }
+        }
+      }
+    },
+    "/tests/{id}/assignments": {
+      "get": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Get assigned users for a test (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of user IDs assigned to the test"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Assign user to a test (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "userId"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "integer",
+                    "example": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test assigned to user"
+          }
+        }
+      }
+    },
+    "/tests/user/{userId}/assignments": {
+      "get": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Get assigned test IDs for a specific user (Admin only)",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of assigned test IDs"
+          }
+        }
+      }
+    },
+    "/tests/{id}/assignments/{userId}": {
+      "delete": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Remove a user assignment from a test (Admin only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignment removed"
+          }
+        }
+      }
+    },
+    "/tests/{id}/disable": {
+      "post": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Disable a test (Admin & Developer)",
+        "description": "Marks a test as disabled so it is hidden from tester execution workflows without deleting history.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test disabled successfully"
+          }
+        }
+      }
+    },
+    "/tests/{id}/enable": {
+      "post": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Enable a disabled test (Admin & Developer)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test enabled successfully"
+          }
+        }
+      }
+    },
+    "/tests/enable-all": {
+      "post": {
+        "tags": [
+          "Admin - Tests"
+        ],
+        "summary": "Bulk enable all disabled tests (Admin & Developer)",
+        "responses": {
+          "200": {
+            "description": "All tests enabled successfully"
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "Admin - Settings"
+        ],
+        "summary": "Get all system settings and storage configuration (Admin & Developer)",
+        "description": "Returns application settings including consecutive failure threshold, max monthly rounds, and Dropbox cloud storage connection status.",
+        "responses": {
+          "200": {
+            "description": "Settings dictionary"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin - Settings"
+        ],
+        "summary": "Update system setting(s) (Admin only)",
+        "description": "Supports single `{ key, value }` or batch `{ settings: { [key]: value } }` update.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "example": "consecutive_failure_threshold_seconds"
+                  },
+                  "value": {
+                    "type": "string",
+                    "example": "180"
+                  },
+                  "settings": {
+                    "type": "object",
+                    "example": {
+                      "consecutive_failure_threshold_seconds": "180",
+                      "max_monthly_rounds": "8"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated successfully"
+          }
+        }
+      }
+    },
+    "/settings/test-dropbox": {
+      "post": {
+        "tags": [
+          "Admin - Settings"
+        ],
+        "summary": "Test Dropbox cloud storage connection (Admin only)",
+        "responses": {
+          "200": {
+            "description": "Dropbox connection verified"
+          },
+          "400": {
+            "description": "Failed to connect or missing credentials"
+          }
+        }
+      }
+    },
+    "/backup/export": {
+      "get": {
+        "tags": [
+          "Admin - Backup & Restore"
+        ],
+        "summary": "Export complete system backup (Admin only)",
+        "description": "Exports full database snapshot as a JSON file or gzipped binary payload, including all tests, steps, users, assignments, points, settings, and base64 evidence files.",
+        "responses": {
+          "200": {
+            "description": "System backup file download",
+            "content": {
+              "application/gzip": {},
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/backup/import": {
+      "post": {
+        "tags": [
+          "Admin - Backup & Restore"
+        ],
+        "summary": "Restore system database from backup file (Admin only)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "QualityCheck backup file (.json or .gz)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backup restored successfully"
+          }
         }
       }
     }

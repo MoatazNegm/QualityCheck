@@ -871,7 +871,7 @@ router.get('/steps', authenticateToken, async (req, res) => {
 });
 
 // Get test with steps
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const test = await testsDb.prepare(
       'SELECT * FROM tests WHERE id = ?'

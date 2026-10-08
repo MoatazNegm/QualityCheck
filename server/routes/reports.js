@@ -4,9 +4,12 @@ const { testsDb, usersDb } = require('../db/db');
 const { authenticateToken, requireAdmin, requireReportAccess } = require('../middleware/auth');
 
 // Get detailed test results for a user
-router.get('/test/:testId/user/:userId', async (req, res) => {
+router.get('/test/:testId/user/:userId', authenticateToken, requireReportAccess, async (req, res) => {
   try {
-    const { testId, userId } = req.params;
+    let { testId, userId } = req.params;
+    if (req.reportScope === 'self') {
+      userId = req.selfUserId;
+    }
     
     const test = await testsDb.prepare(
       'SELECT * FROM tests WHERE id = ?'
@@ -44,10 +47,59 @@ router.get('/test/:testId/user/:userId', async (req, res) => {
   }
 });
 
-// Get monthly financial summary for a user
-router.get('/monthly/:userId', async (req, res) => {
+// Get system-wide monthly financial summary (admin / developer: all users; tester: self)
+router.get('/monthly', authenticateToken, requireReportAccess, async (req, res) => {
   try {
-    const { userId } = req.params;
+    if (req.reportScope === 'self') {
+      const results = await testsDb.prepare(`
+        SELECT 
+          t.name as test_name,
+          SUM(CASE WHEN tr.result = 'pass' THEN ts.value ELSE 0 END) as total_value,
+          COUNT(tr.id) as attempts,
+          SUM(CASE WHEN tr.result = 'pass' THEN 1 ELSE 0 END) as passes,
+          SUM(CASE WHEN tr.result = 'fail' THEN 1 ELSE 0 END) as fails
+        FROM test_results tr
+        JOIN tests t ON tr.test_id = t.id
+        JOIN test_steps ts ON tr.step_id = ts.id
+        WHERE tr.user_id = ?
+          AND strftime('%Y-%m', tr.executed_at) = strftime('%Y-%m', 'now')
+        GROUP BY tr.test_id
+      `).all(req.selfUserId);
+      return res.json(results);
+    }
+
+    const results = await testsDb.prepare(`
+      SELECT 
+        u.id as user_id,
+        u.username,
+        t.name as test_name,
+        SUM(CASE WHEN tr.result = 'pass' THEN ts.value ELSE 0 END) as total_value,
+        COUNT(tr.id) as attempts,
+        SUM(CASE WHEN tr.result = 'pass' THEN 1 ELSE 0 END) as passes,
+        SUM(CASE WHEN tr.result = 'fail' THEN 1 ELSE 0 END) as fails
+      FROM test_results tr
+      JOIN users u ON tr.user_id = u.id
+      JOIN tests t ON tr.test_id = t.id
+      JOIN test_steps ts ON tr.step_id = ts.id
+      WHERE strftime('%Y-%m', tr.executed_at) = strftime('%Y-%m', 'now')
+      GROUP BY tr.user_id, tr.test_id
+      ORDER BY u.username, t.name
+    `).all();
+
+    res.json(results);
+  } catch (error) {
+    console.error('Get all monthly reports error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get monthly financial summary for a specific user
+router.get('/monthly/:userId', authenticateToken, requireReportAccess, async (req, res) => {
+  try {
+    let { userId } = req.params;
+    if (req.reportScope === 'self') {
+      userId = req.selfUserId;
+    }
     
     const results = await testsDb.prepare(`
       SELECT 
