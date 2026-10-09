@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const { usersDb, testsDb } = require('../db/db');
+const { usersDb, testsDb, getRound } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { dataDir } = require('../utils/dataDir');
 const fs = require('fs');
@@ -47,10 +47,14 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
     ).all();
     const roundsMap = Object.fromEntries(roundRows.map(r => [r.user_id, r.round_no]));
 
-    // Batch: done step counts per user+test
-    const doneRows = await testsDb.prepare(
-      'SELECT user_id, test_id, COUNT(*) AS c FROM test_results GROUP BY user_id, test_id'
-    ).all();
+    // Batch: done step counts per user+test for each user's current round
+    const doneRows = await testsDb.prepare(`
+      SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+      FROM test_results tr
+      LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id
+      WHERE COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+      GROUP BY tr.user_id, tr.test_id
+    `).all();
     const doneMap = {};
     for (const r of doneRows) {
       if (!doneMap[r.user_id]) doneMap[r.user_id] = {};
@@ -63,12 +67,13 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
     ).all();
     const stepMap = Object.fromEntries(stepRows.map(r => [r.test_id, r.c]));
 
-    // Batch: hard-stop failure counts per user+test
+    // Batch: hard-stop failure counts per user+test in the current round
     const failRows = await testsDb.prepare(`
       SELECT ts.user_id, ts.test_id, COUNT(*) AS c
       FROM test_submissions ts
       JOIN test_steps tstep ON ts.step_id = tstep.id
-      WHERE ts.result = 'fail' AND tstep.on_failure = 'stop'
+      LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id
+      WHERE ts.result = 'fail' AND tstep.on_failure = 'stop' AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
       GROUP BY ts.user_id, ts.test_id
     `).all();
     const failMap = {};
@@ -135,6 +140,7 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
     const assignedCount = assigned.length;
     let completedCount = 0;
     let failedHardStopCount = 0;
+    const currentRound = await getRound(userId);
 
     for (const row of assigned) {
       const testId = row.test_id;
@@ -142,19 +148,22 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
         'SELECT COUNT(*) as c FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1'
       ).get(testId);
       const doneCountRow = await testsDb.prepare(
-        'SELECT COUNT(*) as c FROM test_results WHERE user_id = ? AND test_id = ?'
-      ).get(userId, testId);
+        'SELECT COUNT(*) as c FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?'
+      ).get(userId, testId, currentRound);
 
-      if (doneCountRow.c >= stepCountRow.c) {
+      const stepCount = stepCountRow ? (stepCountRow.c || 0) : 0;
+      const doneCount = doneCountRow ? (doneCountRow.c || 0) : 0;
+
+      if (stepCount > 0 && doneCount >= stepCount) {
         completedCount++;
       } else {
         const failRow = await testsDb.prepare(`
           SELECT COUNT(*) as c FROM test_submissions ts
           JOIN test_steps tstep ON ts.step_id = tstep.id
-          WHERE ts.user_id = ? AND ts.test_id = ? AND ts.result = 'fail' AND tstep.on_failure = 'stop'
-        `).get(userId, testId);
+          WHERE ts.user_id = ? AND ts.test_id = ? AND ts.result = 'fail' AND tstep.on_failure = 'stop' AND COALESCE(ts.round_id, 0) = ?
+        `).get(userId, testId, currentRound);
 
-        if (failRow.c > 0) {
+        if (failRow && failRow.c > 0) {
           failedHardStopCount++;
         }
       }

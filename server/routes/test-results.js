@@ -61,10 +61,26 @@ router.get('/:testId/next', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Test not found' });
     }
 
+    const currentRound = await getRound(userId);
+
+    // If the test already failed with a hard stop in the current round, no more steps should be run
+    const hardStopFail = await testsDb.prepare(`
+      SELECT tr.step_id
+      FROM test_results tr
+      JOIN test_steps ts ON tr.step_id = ts.id
+      WHERE tr.user_id = ? AND tr.test_id = ? AND COALESCE(tr.round_id, 0) = ?
+        AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
+      LIMIT 1
+    `).get(userId, testId, currentRound);
+
+    if (hardStopFail) {
+      return res.status(404).json({ error: 'No more steps', allDone: true, failed: true });
+    }
+
     const steps = await testsDb.prepare('SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number').all(testId);
     const attemptedRows = await testsDb.prepare(
-      'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ?'
-    ).all(userId, testId);
+      'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?'
+    ).all(userId, testId, currentRound);
     const attemptedStepIds = attemptedRows.map(row => row.step_id);
 
     const nextStep = steps.find(step => {
@@ -98,13 +114,29 @@ router.get('/user/:userId/test/:testId/next', async (req, res) => {
       return res.status(404).json({ error: 'Test not found' });
     }
     
+    const currentRound = await getRound(userId);
+
+    // If the test already failed with a hard stop in the current round, no more steps should be run
+    const hardStopFail = await testsDb.prepare(`
+      SELECT tr.step_id
+      FROM test_results tr
+      JOIN test_steps ts ON tr.step_id = ts.id
+      WHERE tr.user_id = ? AND tr.test_id = ? AND COALESCE(tr.round_id, 0) = ?
+        AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
+      LIMIT 1
+    `).get(userId, testId, currentRound);
+
+    if (hardStopFail) {
+      return res.status(404).json({ error: 'No more steps', allDone: true, failed: true });
+    }
+
     // Get all steps ordered by step_number
     const steps = await testsDb.prepare('SELECT * FROM test_steps WHERE test_id = ? ORDER BY step_number').all(testId);
     
-    // Get attempted step IDs
+    // Get attempted step IDs in the current round
     const attemptedRows = await testsDb.prepare(
-      'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ?'
-    ).all(userId, testId);
+      'SELECT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?'
+    ).all(userId, testId, currentRound);
     const attemptedStepIds = attemptedRows.map(row => row.step_id);
     
     // Find first unattempted step (excluding section headers)

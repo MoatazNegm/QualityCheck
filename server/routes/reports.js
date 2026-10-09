@@ -1137,16 +1137,28 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         const allSteps = await usersDb.prepare(
           'SELECT id, step_number, description, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number'
         ).all(activeTestId);
-        // Get step IDs already submitted in the current round
-        const doneRows = await usersDb.prepare(
-          'SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ?'
-        ).all(userId, activeTestId, currentRound);
-        const doneStepIds = new Set(doneRows.map(r => r.step_id));
-        // First step not done
-        const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
-        if (nextStep) {
-          currentStepNumber = nextStep.step_number;
-          currentStepDescription = nextStep.description;
+        // Check if active test already hard-failed in current round
+        const hardStopFail = await usersDb.prepare(`
+          SELECT tr.step_id
+          FROM test_results tr
+          JOIN test_steps ts ON tr.step_id = ts.id
+          WHERE tr.user_id = ? AND tr.test_id = ? AND COALESCE(tr.round_id, 0) = ?
+            AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
+          LIMIT 1
+        `).get(userId, activeTestId, currentRound);
+
+        if (!hardStopFail) {
+          // Get step IDs already submitted in the current round
+          const doneRows = await usersDb.prepare(
+            'SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?'
+          ).all(userId, activeTestId, currentRound);
+          const doneStepIds = new Set(doneRows.map(r => r.step_id));
+          // First step not done
+          const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
+          if (nextStep) {
+            currentStepNumber = nextStep.step_number;
+            currentStepDescription = nextStep.description;
+          }
         }
       }
     }
