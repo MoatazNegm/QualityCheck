@@ -2347,9 +2347,10 @@ const ReportsView: React.FC = () => {
                                   )}
 
                                   {/* Test Breakdown Table */}
+                                  {/* Test Breakdown Table */}
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
                                     <h5 style={{ margin: 0, fontSize: '0.92rem', color: 'var(--text-color, #e2e8f0)', fontWeight: 600 }}>
-                                      Test Execution History ({progress.tests?.length || 0} tests)
+                                      Test Breakdown ({progress.tests?.length || 0} tests)
                                     </h5>
                                     {progress.tests && progress.tests.some((t: any) => t.rounds > 0) && (() => {
                                       const activeTestIds = progress.tests.filter((t: any) => t.rounds > 0).map((t: any) => t.testId);
@@ -2361,7 +2362,7 @@ const ReportsView: React.FC = () => {
                                           style={{ padding: '0.2rem 0.65rem', fontSize: '0.78rem' }}
                                           onClick={() => toggleAllTestHistoriesForUser(u.userId, activeTestIds)}
                                         >
-                                          {allOpen ? '▲ Collapse All Dates & Times' : '▼ Expand All Dates & Times'}
+                                          {allOpen ? '▲ Collapse Step History' : '▼ Expand Step History'}
                                         </button>
                                       );
                                     })()}
@@ -2374,10 +2375,8 @@ const ReportsView: React.FC = () => {
                                         <th>Status</th>
                                         <th>Rounds</th>
                                         <th>Test Result (Pass/Fail)</th>
-                                        <th>Passed Dates & Times</th>
-                                        <th>Failed Dates & Times</th>
                                         <th>Points</th>
-                                        <th></th>
+                                        <th>Failed Steps</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -2399,13 +2398,19 @@ const ReportsView: React.FC = () => {
                                           }
                                         })();
 
+                                        const failedStepsSummary = t.failedSteps && t.failedSteps.length > 0
+                                          ? t.failedSteps.map((fs: any) =>
+                                              `Step ${fs.stepNumber}${fs.roundId != null ? ` (R${fs.roundId})` : ''}`
+                                            ).join(', ')
+                                          : '—';
+
                                         return (
                                           <React.Fragment key={t.testId}>
                                             <tr
                                               className={`${t.status === 'failed' ? 'report-step-row-failed' : ''} ${isTestHistoryOpen ? 'report-step-row-selected' : ''}`}
                                               style={canExpandTest ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
                                               onClick={canExpandTest ? () => toggleTestHistory(testHistoryKey) : undefined}
-                                              title={canExpandTest ? (isTestHistoryOpen ? 'Click to collapse dates & times' : 'Click to view passed & failed dates and times') : undefined}
+                                              title={canExpandTest ? (isTestHistoryOpen ? 'Click to collapse step history' : 'Click to view step execution history') : undefined}
                                             >
                                               <td style={{ fontWeight: 500 }}>
                                                 {canExpandTest && (
@@ -2428,112 +2433,61 @@ const ReportsView: React.FC = () => {
                                                   <span style={{ color: 'var(--text-muted)' }}>—</span>
                                                 )}
                                               </td>
-                                              <td>
-                                                {t.passedCycles && t.passedCycles.length > 0 ? (
-                                                  <div style={{ fontSize: '0.82rem', lineHeight: 1.35 }}>
-                                                    {t.passedCycles.map((pc: any, idx: number) => (
-                                                      <div key={idx} style={{ color: 'var(--success, #48bb78)' }}>
-                                                        ✓ R{pc.roundId}: {new Date(pc.executedAt).toLocaleString()}
-                                                      </div>
-                                                    ))}
-                                                  </div>
-                                                ) : (
-                                                  <span style={{ color: 'var(--text-muted)' }}>—</span>
-                                                )}
-                                              </td>
-                                              <td>
-                                                {t.failedCycles && t.failedCycles.length > 0 ? (
-                                                  <div style={{ fontSize: '0.82rem', lineHeight: 1.35 }}>
-                                                    {t.failedCycles.map((fc: any, idx: number) => (
-                                                      <div key={idx} style={{ color: 'var(--danger, #fc8181)' }} title={fc.failedSteps?.map((s: any) => `Step ${s.stepNumber}: ${s.description}${s.comment ? ' — ' + s.comment : ''}`).join('\n')}>
-                                                        ✗ R{fc.roundId}: {new Date(fc.executedAt).toLocaleString()}
-                                                        {fc.failedSteps?.[0]?.stepNumber != null && (
-                                                          <span style={{ fontSize: '0.75rem', opacity: 0.9 }}> (Step {fc.failedSteps[0].stepNumber})</span>
-                                                        )}
-                                                      </div>
-                                                    ))}
-                                                  </div>
-                                                ) : (
-                                                  <span style={{ color: 'var(--text-muted)' }}>—</span>
-                                                )}
-                                              </td>
                                               <td><strong>{t.pointsEarned}</strong> pts</td>
-                                              <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'right' }}>
-                                                {canExpandTest ? (isTestHistoryOpen ? 'Collapse ▲' : 'Details ▼') : '—'}
+                                              <td style={{ fontSize: '0.85rem', color: t.failedSteps && t.failedSteps.length > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>
+                                                {failedStepsSummary}
                                               </td>
                                             </tr>
 
                                             {isTestHistoryOpen && (
                                               <tr>
-                                                <td colSpan={8} style={{ padding: '0.75rem 1rem', background: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid var(--border-color)' }}>
-                                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '0.85rem' }}>
-                                                    {/* Passed Cycles Box */}
-                                                    <div style={{ background: 'rgba(72, 187, 120, 0.08)', border: '1px solid rgba(72, 187, 120, 0.35)', borderRadius: '6px', padding: '0.75rem' }}>
-                                                      <h5 style={{ margin: '0 0 0.5rem 0', color: '#48bb78', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem' }}>
-                                                        ✅ Passed Dates & Times ({t.passedCycles?.length || 0})
-                                                      </h5>
-                                                      {t.passedCycles && t.passedCycles.length > 0 ? (
-                                                        <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                          {t.passedCycles.map((pc: any, idx: number) => (
-                                                            <li key={idx} style={{ fontSize: '0.84rem' }}>
-                                                              <strong>Round {pc.roundId}:</strong> {new Date(pc.executedAt).toLocaleString()}
-                                                              {pc.stepsCount != null && (
-                                                                <span style={{ color: 'var(--text-muted)' }}> ({pc.stepsCount} steps completed)</span>
-                                                              )}
-                                                            </li>
+                                                <td colSpan={6} style={{ padding: '0.75rem 1rem', background: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid var(--border-color)' }}>
+                                                  {(!t.submissions || t.submissions.length === 0) ? (
+                                                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                                                      No step execution history recorded in this period.
+                                                    </p>
+                                                  ) : (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                                                        <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                                                          Step Executions ({t.submissions.length}) — sorted by date & time
+                                                        </span>
+                                                      </div>
+                                                      <table className="report-steps-table" style={{ width: '100%', fontSize: '0.84rem', margin: 0 }}>
+                                                        <thead>
+                                                          <tr>
+                                                            <th style={{ width: '180px' }}>Date & Time</th>
+                                                            <th style={{ width: '85px' }}>Step #</th>
+                                                            <th>Step Description</th>
+                                                            <th style={{ width: '100px' }}>Result</th>
+                                                            <th>Comment</th>
+                                                          </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                          {t.submissions.map((sub: any, sIdx: number) => (
+                                                            <tr key={sIdx} className={sub.result === 'fail' ? 'report-step-row-failed' : ''}>
+                                                              <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                                {new Date(sub.executedAt).toLocaleString()}
+                                                                <span style={{ fontSize: '0.75rem', opacity: 0.8, marginLeft: '0.35rem' }}>(R{sub.roundId})</span>
+                                                              </td>
+                                                              <td style={{ fontWeight: 600 }}>Step {sub.stepNumber}</td>
+                                                              <td>{sub.description}</td>
+                                                              <td>
+                                                                {sub.result === 'pass' ? (
+                                                                  <span className="status-badge status-pass" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>✅ Pass</span>
+                                                                ) : (
+                                                                  <span className="status-badge status-fail" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>❌ Fail</span>
+                                                                )}
+                                                              </td>
+                                                              <td style={{ fontSize: '0.8rem', color: sub.result === 'fail' ? 'var(--danger, #fc8181)' : 'var(--text-muted)' }}>
+                                                                {sub.comment || '—'}
+                                                              </td>
+                                                            </tr>
                                                           ))}
-                                                        </ul>
-                                                      ) : (
-                                                        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-muted)' }}>No passed cycles in this period.</p>
-                                                      )}
+                                                        </tbody>
+                                                      </table>
                                                     </div>
-
-                                                    {/* Failed Cycles Box */}
-                                                    <div style={{ background: 'rgba(252, 129, 129, 0.08)', border: '1px solid rgba(252, 129, 129, 0.35)', borderRadius: '6px', padding: '0.75rem' }}>
-                                                      <h5 style={{ margin: '0 0 0.5rem 0', color: '#fc8181', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem' }}>
-                                                        ❌ Failed Dates & Times ({t.failedCycles?.length || 0})
-                                                      </h5>
-                                                      {t.failedCycles && t.failedCycles.length > 0 ? (
-                                                        <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-                                                          {t.failedCycles.map((fc: any, idx: number) => (
-                                                            <li key={idx} style={{ fontSize: '0.84rem' }}>
-                                                              <div>
-                                                                <strong>Round {fc.roundId}:</strong> {new Date(fc.executedAt).toLocaleString()}
-                                                              </div>
-                                                              {fc.failedSteps && fc.failedSteps.length > 0 && (
-                                                                <div style={{ marginTop: '0.2rem', color: 'var(--danger, #fc8181)', fontSize: '0.8rem' }}>
-                                                                  {fc.failedSteps.map((fs: any, sIdx: number) => (
-                                                                    <div key={sIdx} style={{ marginTop: sIdx > 0 ? '0.25rem' : 0 }}>
-                                                                      • Step {fs.stepNumber}: {fs.description}
-                                                                      {fs.comment && (
-                                                                        <div style={{
-                                                                          fontStyle: 'italic',
-                                                                          color: 'var(--text-muted)',
-                                                                          marginLeft: '0.8rem',
-                                                                          marginTop: '0.15rem',
-                                                                          background: 'rgba(0,0,0,0.3)',
-                                                                          padding: '0.35rem 0.55rem',
-                                                                          borderRadius: '4px',
-                                                                          whiteSpace: 'pre-wrap',
-                                                                          wordBreak: 'break-word',
-                                                                          maxHeight: '120px',
-                                                                          overflowY: 'auto'
-                                                                        }}>
-                                                                          "{fs.comment.trim()}"
-                                                                        </div>
-                                                                      )}
-                                                                    </div>
-                                                                  ))}
-                                                                </div>
-                                                              )}
-                                                            </li>
-                                                          ))}
-                                                        </ul>
-                                                      ) : (
-                                                        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-muted)' }}>No failed cycles in this period.</p>
-                                                      )}
-                                                    </div>
-                                                  </div>
+                                                  )}
                                                 </td>
                                               </tr>
                                             )}

@@ -1159,8 +1159,19 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     // Group submissions by test_id and round_id
     const cyclesByTest = {};
     const failedByTest = {};
+    const submissionsByTest = {};
 
     for (const row of subRows) {
+      if (!submissionsByTest[row.test_id]) submissionsByTest[row.test_id] = [];
+      submissionsByTest[row.test_id].push({
+        executedAt: row.executed_at,
+        roundId: row.round_id,
+        stepNumber: row.step_number,
+        description: row.description,
+        result: row.result,
+        comment: row.comment
+      });
+
       if (!cyclesByTest[row.test_id]) cyclesByTest[row.test_id] = {};
       if (!cyclesByTest[row.test_id][row.round_id]) {
         cyclesByTest[row.test_id][row.round_id] = {
@@ -1326,6 +1337,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         failedCycles: stats.failedCycles,
         lastPassedAt: stats.lastPassedAt,
         lastFailedAt: stats.lastFailedAt,
+        submissions: (submissionsByTest[test.id] || []).sort((a, b) => new Date(a.executedAt) - new Date(b.executedAt)),
         pointsEarned,
         status,
         failedSteps,
