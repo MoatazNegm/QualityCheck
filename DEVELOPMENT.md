@@ -1,6 +1,19 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000149**: Reverted Unexpanded Failed Steps to Round/Step Only & Chronological Step History on Row Click:
+  - **Clean Collapsed Row**: Reverted the Points Report "Failed Steps" column to show only the failed step numbers and round tags (e.g., `Step 4 (R1), Step 15 (R2)`), removing date/time clutter from the unexpanded table row.
+  - **Chronological Step Execution List**: Clicking any row expands a clean, simple table of all step executions sorted by date and time, displaying Date & Time (with round), Step #, Step Description, Result badge (`✅ Pass` / `❌ Fail`), and Comment.
+- **v1.0000148**: Passed and Failed Dates & Times Breakdown in Points Report:
+  - Enabled row expansion in the Points Report to inspect cycle completion and step execution dates and times.
+- **v1.0000147**: Test-Level Pass/Fail Cycle Counter in Points Report:
+  - Added a dedicated "Test Result (Pass/Fail)" column to the Points Report displaying total passed and failed cycle counts (e.g., `2/0`, `1/1`, `0/2`) across completed test rounds.
+- **v1.0000146**: Fixed Next-Step Retrieval and User Loop Summaries for Multi-Round Cycles:
+  - Fixed active step retrieval for users operating across multiple test rounds (such as automated API users) where loop pointer evaluations incorrectly reported "no more steps".
+- **v1.0000145**: Complete Admin REST API Endpoints & OpenAPI Documentation:
+  - Added full REST API endpoints for user, test, assignment, and points administration, along with interactive Swagger/OpenAPI documentation.
+- **v1.0000144**: Multi-Channel Authentication, API Keys, and User Report Subquery Alias Fix:
+  - Introduced API key authentication for automated runners and fixed database subquery aliasing in user reporting.
 - **v1.0000143**: Fixed Missing Success Symptom and Reference Attachments in Test Report:
   - **Test Report Success Symptom Population**: Resolved an omission in `server/routes/reports.js` (`GET /api/reports/test-report`) where `ts.success_symptom` was omitted from the `failedSubmissions` SQL query and submission object mapping. This previously caused all failed steps in the Test Report (including tests with populated symptoms like `users_2nodes_OneCluster`) to fall back to `'N/A'`.
   - **Full Step Reference Attachments in Test & Passed Reports**: Added `ts.attachment_path` and `ts.attachment_name` across `user-report`, `test-report`, `passed-report`, and `failed-report` backend queries and mapped them into submission objects.
