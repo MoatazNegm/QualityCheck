@@ -2440,7 +2440,7 @@ const ReportsView: React.FC = () => {
                                             </tr>
 
                                             {isTestHistoryOpen && (() => {
-                                              const executions = (t.testExecutions && t.testExecutions.length > 0)
+                                              const rawExecutions = (t.testExecutions && t.testExecutions.length > 0)
                                                 ? t.testExecutions
                                                 : (() => {
                                                     const list: any[] = [];
@@ -2481,8 +2481,9 @@ const ReportsView: React.FC = () => {
                                                         }
                                                       }
                                                     }
-                                                    return list.sort((a: any, b: any) => new Date(a.executedAt).getTime() - new Date(b.executedAt).getTime());
+                                                    return list;
                                                   })();
+                                              const executions = [...rawExecutions].sort((a: any, b: any) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
 
                                               return (
                                                 <tr>
@@ -2495,7 +2496,7 @@ const ReportsView: React.FC = () => {
                                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                                                           <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                                                            Test History ({executions.length}) — sorted by date & time
+                                                            Test History ({executions.length}) — newest to oldest
                                                           </span>
                                                         </div>
                                                         <table className="report-steps-table" style={{ width: '100%', fontSize: '0.84rem', margin: 0 }}>

@@ -1,6 +1,8 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000151**: Sort Test-Level History Newest to Oldest in Points Report:
+  - **Newest First Sorting**: Updated both the backend (`server/routes/reports.js`) and frontend (`src/components/ReportsView.tsx`) to sort test-level pass/fail outcomes from newest to oldest (`new Date(b.executedAt) - new Date(a.executedAt)`), so testers and admins immediately see the most recent test run outcomes at the top.
 - **v1.0000150**: Expanded Row Shows Test-Level Pass/Fail History (Not Individual Step Executions):
   - **Test-Level Outcomes Only**: In the Points Report expanded test view, replaced individual step execution rows with test-level pass and fail outcomes sorted chronologically by date and time.
   - **Test Pass Representation**: When a user passes all steps of a test, it records a single `Pass` row with the date and time of the last step, `Step #` displayed as `-`, and `Step Description` displayed as `-`.

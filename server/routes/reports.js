@@ -1310,8 +1310,8 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         }
       }
 
-      // Sort test pass and fail events chronologically by date and time
-      testExecutions.sort((a, b) => new Date(a.executedAt).getTime() - new Date(b.executedAt).getTime());
+      // Sort test pass and fail events newest to oldest by date and time
+      testExecutions.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
       passedCycles.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
       failedCycles.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
 
