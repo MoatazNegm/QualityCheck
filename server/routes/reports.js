@@ -1147,47 +1147,98 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
     const pointsByTest = Object.fromEntries(pointsRows.map(r => [r.test_id, r.pointsEarned]));
 
-    // Batch: get submission stats per test (rounds, passed rounds, failed rounds) in date range
-    const subStatsRows = await usersDb.prepare(
-      `SELECT test_id,
-              COUNT(*) as rounds,
-              SUM(CASE WHEN has_fail = 0 THEN 1 ELSE 0 END) as passed_rounds,
-              SUM(CASE WHEN has_fail = 1 THEN 1 ELSE 0 END) as failed_rounds
-       FROM (
-         SELECT s.test_id, s.round_id,
-                MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as has_fail
-         FROM test_submissions s
-         WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
-         GROUP BY s.test_id, s.round_id
-       )
-       GROUP BY test_id`
-    ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
-    const subStatsByTest = Object.fromEntries(subStatsRows.map(r => [r.test_id, r]));
-
-    // Batch: get failed submissions per test (step number, round) for the user
-    const failedSubRows = await usersDb.prepare(
-      `SELECT s.test_id, ts.step_number, ts.description, s.round_id
+    // Batch: get all submissions per test and round with step details in date range
+    const subRows = await usersDb.prepare(
+      `SELECT s.test_id, s.round_id, s.step_id, ts.step_number, ts.description, s.result, s.executed_at, s.comment
        FROM test_submissions s
-       JOIN test_steps ts ON ts.id = s.step_id
-       WHERE s.user_id = ? AND s.result = 'fail'
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
-       ORDER BY s.test_id, ts.step_number, s.round_id`
+       LEFT JOIN test_steps ts ON ts.id = s.step_id
+       WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
+       ORDER BY s.test_id, s.round_id, s.executed_at ASC`
     ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
 
-    // Group failed steps by test, collapsing duplicate step+round pairs
+    // Group submissions by test_id and round_id
+    const cyclesByTest = {};
     const failedByTest = {};
-    for (const row of failedSubRows) {
-      if (!failedByTest[row.test_id]) failedByTest[row.test_id] = {};
-      const key = `${row.step_number}-${row.round_id}`;
-      if (!failedByTest[row.test_id][key]) {
-        failedByTest[row.test_id][key] = {
-          stepNumber: row.step_number,
-          description: row.description,
+
+    for (const row of subRows) {
+      if (!cyclesByTest[row.test_id]) cyclesByTest[row.test_id] = {};
+      if (!cyclesByTest[row.test_id][row.round_id]) {
+        cyclesByTest[row.test_id][row.round_id] = {
           roundId: row.round_id,
-          fails: 0
+          hasFail: false,
+          firstExecutedAt: row.executed_at,
+          lastExecutedAt: row.executed_at,
+          stepsCount: 0,
+          failedSteps: []
         };
       }
-      failedByTest[row.test_id][key].fails += 1;
+      const cycle = cyclesByTest[row.test_id][row.round_id];
+      cycle.stepsCount++;
+      cycle.lastExecutedAt = row.executed_at;
+
+      if (row.result === 'fail') {
+        cycle.hasFail = true;
+        cycle.failedSteps.push({
+          stepNumber: row.step_number,
+          description: row.description,
+          comment: row.comment,
+          executedAt: row.executed_at
+        });
+
+        if (!failedByTest[row.test_id]) failedByTest[row.test_id] = {};
+        const key = `${row.step_number}-${row.round_id}`;
+        if (!failedByTest[row.test_id][key]) {
+          failedByTest[row.test_id][key] = {
+            stepNumber: row.step_number,
+            description: row.description,
+            roundId: row.round_id,
+            fails: 0
+          };
+        }
+        failedByTest[row.test_id][key].fails += 1;
+      }
+    }
+
+    // Process cycles into passedCycles and failedCycles for each test
+    const testStatsMap = {};
+    for (const testIdStr of Object.keys(cyclesByTest)) {
+      const testId = Number(testIdStr);
+      const roundsObj = cyclesByTest[testId];
+      const passedCycles = [];
+      const failedCycles = [];
+
+      for (const roundIdStr of Object.keys(roundsObj)) {
+        const c = roundsObj[roundIdStr];
+        if (c.hasFail) {
+          failedCycles.push({
+            roundId: c.roundId,
+            executedAt: c.failedSteps[0]?.executedAt || c.lastExecutedAt,
+            startedAt: c.firstExecutedAt,
+            failedSteps: c.failedSteps
+          });
+        } else {
+          passedCycles.push({
+            roundId: c.roundId,
+            executedAt: c.lastExecutedAt,
+            startedAt: c.firstExecutedAt,
+            stepsCount: c.stepsCount
+          });
+        }
+      }
+
+      // Sort newest first
+      passedCycles.sort((a, b) => new Date(b.executedAt) - new Date(a.executedAt));
+      failedCycles.sort((a, b) => new Date(b.executedAt) - new Date(a.executedAt));
+
+      testStatsMap[testId] = {
+        rounds: passedCycles.length + failedCycles.length,
+        passed_rounds: passedCycles.length,
+        failed_rounds: failedCycles.length,
+        passedCycles,
+        failedCycles,
+        lastPassedAt: passedCycles[0]?.executedAt || null,
+        lastFailedAt: failedCycles[0]?.executedAt || null
+      };
     }
 
     // Determine active test step: first step not yet submitted in the current round
@@ -1234,13 +1285,21 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 
     // Build per-test result array
     const tests = assignedTests.map(test => {
-      const stats = subStatsByTest[test.id] || { rounds: 0, passed_rounds: 0, failed_rounds: 0 };
+      const stats = testStatsMap[test.id] || {
+        rounds: 0,
+        passed_rounds: 0,
+        failed_rounds: 0,
+        passedCycles: [],
+        failedCycles: [],
+        lastPassedAt: null,
+        lastFailedAt: null
+      };
       const pointsEarned = pointsByTest[test.id] || 0;
       const failedSteps = Object.values(failedByTest[test.id] || {});
 
-      const rounds = Number(stats.rounds || 0);
-      const passedRounds = Number(stats.passed_rounds || 0);
-      const failedRounds = Number(stats.failed_rounds || 0);
+      const rounds = stats.rounds;
+      const passedRounds = stats.passed_rounds;
+      const failedRounds = stats.failed_rounds;
       const testResult = rounds > 0 ? `${passedRounds}/${failedRounds}` : '0/0';
 
       let status;
@@ -1263,6 +1322,10 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         passedRounds,
         failedRounds,
         testResult,
+        passedCycles: stats.passedCycles,
+        failedCycles: stats.failedCycles,
+        lastPassedAt: stats.lastPassedAt,
+        lastFailedAt: stats.lastFailedAt,
         pointsEarned,
         status,
         failedSteps,
