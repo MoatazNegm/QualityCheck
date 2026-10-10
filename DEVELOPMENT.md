@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000150**: Expanded Row Shows Test-Level Pass/Fail History (Not Individual Step Executions):
+  - **Test-Level Outcomes Only**: In the Points Report expanded test view, replaced individual step execution rows with test-level pass and fail outcomes sorted chronologically by date and time.
+  - **Test Pass Representation**: When a user passes all steps of a test, it records a single `Pass` row with the date and time of the last step, `Step #` displayed as `-`, and `Step Description` displayed as `-`.
+  - **Test Fail Representation**: When a test fails on a step, it records a `Fail` row with the date and time that step failed, the failed step number (e.g. `Step 4`), the failed step description, and the failure comment.
 - **v1.0000149**: Reverted Unexpanded Failed Steps to Round/Step Only & Chronological Step History on Row Click:
   - **Clean Collapsed Row**: Reverted the Points Report "Failed Steps" column to show only the failed step numbers and round tags (e.g., `Step 4 (R1), Step 15 (R2)`), removing date/time clutter from the unexpanded table row.
   - **Chronological Step Execution List**: Clicking any row expands a clean, simple table of all step executions sorted by date and time, displaying Date & Time (with round), Step #, Step Description, Result badge (`✅ Pass` / `❌ Fail`), and Comment.

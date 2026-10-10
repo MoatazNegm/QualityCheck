@@ -2362,7 +2362,7 @@ const ReportsView: React.FC = () => {
                                           style={{ padding: '0.2rem 0.65rem', fontSize: '0.78rem' }}
                                           onClick={() => toggleAllTestHistoriesForUser(u.userId, activeTestIds)}
                                         >
-                                          {allOpen ? '▲ Collapse Step History' : '▼ Expand Step History'}
+                                          {allOpen ? '▲ Collapse Test History' : '▼ Expand Test History'}
                                         </button>
                                       );
                                     })()}
@@ -2410,7 +2410,7 @@ const ReportsView: React.FC = () => {
                                               className={`${t.status === 'failed' ? 'report-step-row-failed' : ''} ${isTestHistoryOpen ? 'report-step-row-selected' : ''}`}
                                               style={canExpandTest ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
                                               onClick={canExpandTest ? () => toggleTestHistory(testHistoryKey) : undefined}
-                                              title={canExpandTest ? (isTestHistoryOpen ? 'Click to collapse step history' : 'Click to view step execution history') : undefined}
+                                              title={canExpandTest ? (isTestHistoryOpen ? 'Click to collapse test history' : 'Click to view test history') : undefined}
                                             >
                                               <td style={{ fontWeight: 500 }}>
                                                 {canExpandTest && (
@@ -2439,58 +2439,112 @@ const ReportsView: React.FC = () => {
                                               </td>
                                             </tr>
 
-                                            {isTestHistoryOpen && (
-                                              <tr>
-                                                <td colSpan={6} style={{ padding: '0.75rem 1rem', background: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid var(--border-color)' }}>
-                                                  {(!t.submissions || t.submissions.length === 0) ? (
-                                                    <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-muted)' }}>
-                                                      No step execution history recorded in this period.
-                                                    </p>
-                                                  ) : (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                                                        <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                                                          Step Executions ({t.submissions.length}) — sorted by date & time
-                                                        </span>
-                                                      </div>
-                                                      <table className="report-steps-table" style={{ width: '100%', fontSize: '0.84rem', margin: 0 }}>
-                                                        <thead>
-                                                          <tr>
-                                                            <th style={{ width: '180px' }}>Date & Time</th>
-                                                            <th style={{ width: '85px' }}>Step #</th>
-                                                            <th>Step Description</th>
-                                                            <th style={{ width: '100px' }}>Result</th>
-                                                            <th>Comment</th>
-                                                          </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                          {t.submissions.map((sub: any, sIdx: number) => (
-                                                            <tr key={sIdx} className={sub.result === 'fail' ? 'report-step-row-failed' : ''}>
-                                                              <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                                                                {new Date(sub.executedAt).toLocaleString()}
-                                                                <span style={{ fontSize: '0.75rem', opacity: 0.8, marginLeft: '0.35rem' }}>(R{sub.roundId})</span>
-                                                              </td>
-                                                              <td style={{ fontWeight: 600 }}>Step {sub.stepNumber}</td>
-                                                              <td>{sub.description}</td>
-                                                              <td>
-                                                                {sub.result === 'pass' ? (
-                                                                  <span className="status-badge status-pass" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>✅ Pass</span>
-                                                                ) : (
-                                                                  <span className="status-badge status-fail" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>❌ Fail</span>
-                                                                )}
-                                                              </td>
-                                                              <td style={{ fontSize: '0.8rem', color: sub.result === 'fail' ? 'var(--danger, #fc8181)' : 'var(--text-muted)' }}>
-                                                                {sub.comment || '—'}
-                                                              </td>
+                                            {isTestHistoryOpen && (() => {
+                                              const executions = (t.testExecutions && t.testExecutions.length > 0)
+                                                ? t.testExecutions
+                                                : (() => {
+                                                    const list: any[] = [];
+                                                    if (t.passedCycles) {
+                                                      for (const pc of t.passedCycles) {
+                                                        list.push({
+                                                          executedAt: pc.executedAt,
+                                                          roundId: pc.roundId,
+                                                          result: 'pass',
+                                                          stepNumber: '-',
+                                                          description: '-',
+                                                          comment: '—'
+                                                        });
+                                                      }
+                                                    }
+                                                    if (t.failedCycles) {
+                                                      for (const fc of t.failedCycles) {
+                                                        if (fc.failedSteps && fc.failedSteps.length > 0) {
+                                                          for (const fs of fc.failedSteps) {
+                                                            list.push({
+                                                              executedAt: fs.executedAt || fc.executedAt,
+                                                              roundId: fc.roundId,
+                                                              result: 'fail',
+                                                              stepNumber: fs.stepNumber,
+                                                              description: fs.description || '-',
+                                                              comment: fs.comment || '—'
+                                                            });
+                                                          }
+                                                        } else {
+                                                          list.push({
+                                                            executedAt: fc.executedAt,
+                                                            roundId: fc.roundId,
+                                                            result: 'fail',
+                                                            stepNumber: '-',
+                                                            description: '-',
+                                                            comment: '—'
+                                                          });
+                                                        }
+                                                      }
+                                                    }
+                                                    return list.sort((a: any, b: any) => new Date(a.executedAt).getTime() - new Date(b.executedAt).getTime());
+                                                  })();
+
+                                              return (
+                                                <tr>
+                                                  <td colSpan={6} style={{ padding: '0.75rem 1rem', background: 'rgba(0, 0, 0, 0.25)', borderBottom: '1px solid var(--border-color)' }}>
+                                                    {(!executions || executions.length === 0) ? (
+                                                      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                                                        No completed test cycles recorded in this period.
+                                                      </p>
+                                                    ) : (
+                                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                                                          <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                                                            Test History ({executions.length}) — sorted by date & time
+                                                          </span>
+                                                        </div>
+                                                        <table className="report-steps-table" style={{ width: '100%', fontSize: '0.84rem', margin: 0 }}>
+                                                          <thead>
+                                                            <tr>
+                                                              <th style={{ width: '190px' }}>Date & Time</th>
+                                                              <th style={{ width: '85px' }}>Step #</th>
+                                                              <th>Step Description</th>
+                                                              <th style={{ width: '100px' }}>Result</th>
+                                                              <th>Comment</th>
                                                             </tr>
-                                                          ))}
-                                                        </tbody>
-                                                      </table>
-                                                    </div>
-                                                  )}
-                                                </td>
-                                              </tr>
-                                            )}
+                                                          </thead>
+                                                          <tbody>
+                                                            {executions.map((exec: any, sIdx: number) => {
+                                                              const isPass = exec.result === 'pass';
+                                                              const stepNumDisplay = (isPass || !exec.stepNumber || exec.stepNumber === '-') ? '-' : `Step ${exec.stepNumber}`;
+                                                              const descDisplay = (isPass || !exec.description || exec.description === '-') ? '-' : exec.description;
+                                                              const commentDisplay = (!exec.comment || exec.comment === '-') ? '—' : exec.comment;
+                                                              return (
+                                                                <tr key={sIdx} className={!isPass ? 'report-step-row-failed' : ''}>
+                                                                  <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                                    {new Date(exec.executedAt).toLocaleString()}
+                                                                    {exec.roundId != null && (
+                                                                      <span style={{ fontSize: '0.75rem', opacity: 0.8, marginLeft: '0.35rem' }}>(R{exec.roundId})</span>
+                                                                    )}
+                                                                  </td>
+                                                                  <td style={{ fontWeight: 600 }}>{stepNumDisplay}</td>
+                                                                  <td>{descDisplay}</td>
+                                                                  <td>
+                                                                    {isPass ? (
+                                                                      <span className="status-badge status-pass" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>✅ Pass</span>
+                                                                    ) : (
+                                                                      <span className="status-badge status-fail" style={{ padding: '0.1rem 0.45rem', fontSize: '0.75rem' }}>❌ Fail</span>
+                                                                    )}
+                                                                  </td>
+                                                                  <td style={{ fontSize: '0.8rem', color: !isPass ? 'var(--danger, #fc8181)' : 'var(--text-muted)' }}>
+                                                                    {commentDisplay}
+                                                                  </td>
+                                                                </tr>
+                                                              );
+                                                            })}
+                                                          </tbody>
+                                                        </table>
+                                                      </div>
+                                                    )}
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })()}
                                           </React.Fragment>
                                         );
                                       })}
