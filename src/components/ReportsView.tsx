@@ -2143,6 +2143,16 @@ const ReportsView: React.FC = () => {
                   <span className="report-summary-value">{pointsReportData.totalSteps}</span>
                   <span className="report-summary-label">Total Steps Executed</span>
                 </div>
+                {pointsReportData.totalTestCycles > 0 && (
+                  <div className="report-summary-card">
+                    <span className="report-summary-value" style={{ fontFamily: 'monospace' }}>
+                      <span style={{ color: 'var(--success, #48bb78)' }}>{pointsReportData.totalTestsPassed || 0}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>/</span>
+                      <span style={{ color: pointsReportData.totalTestsFailed > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>{pointsReportData.totalTestsFailed || 0}</span>
+                    </span>
+                    <span className="report-summary-label">Tests (Pass/Fail)</span>
+                  </div>
+                )}
                 {pointsReportData.totalWarnings > 0 && (
                   <div className="report-summary-card" style={{ borderLeft: '4px solid #ed8936', background: 'rgba(235, 130, 60, 0.1)' }}>
                     <span className="report-summary-value" style={{ color: '#ed8936' }}>{pointsReportData.totalWarnings}</span>
@@ -2158,8 +2168,9 @@ const ReportsView: React.FC = () => {
                       {isFullAccess && <th>User</th>}
                       <th>Points Earned</th>
                       <th>Steps Executed</th>
+                      <th>Test Result (Pass/Fail)</th>
                       {isFullAccess && <th>Alerts</th>}
-                      {isFullAccess && <th></th>}
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2167,12 +2178,13 @@ const ReportsView: React.FC = () => {
                       const isExpanded = expandedPointsUser === u.userId;
                       const isLoadingThis = userProgressLoading === u.userId;
                       const progress = userProgressCache[u.userId];
+                      const canExpand = isFullAccess || user?.id === u.userId;
                       return (
                         <React.Fragment key={u.userId}>
                           <tr
-                            style={isFullAccess ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
+                            style={canExpand ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
                             className={isExpanded ? 'report-step-row-selected' : ''}
-                            onClick={isFullAccess ? () => togglePointsUserExpand(u.userId) : undefined}
+                            onClick={canExpand ? () => togglePointsUserExpand(u.userId) : undefined}
                           >
                             {isFullAccess && (
                               <td style={{ fontWeight: 600 }}>
@@ -2181,6 +2193,17 @@ const ReportsView: React.FC = () => {
                             )}
                             <td><strong>{u.pointsEarned}</strong> pts</td>
                             <td>{u.steps} steps</td>
+                            <td>
+                              {(u.testsPassed != null && (u.testsPassed > 0 || u.testsFailed > 0)) ? (
+                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                                  <span style={{ color: u.testsPassed > 0 ? 'var(--success, #48bb78)' : 'inherit' }}>{u.testsPassed}</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>/</span>
+                                  <span style={{ color: u.testsFailed > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>{u.testsFailed}</span>
+                                </span>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)' }}>—</span>
+                              )}
+                            </td>
                             {isFullAccess && (
                               <td>
                                 {u.warningsCount > 0 ? (
@@ -2203,15 +2226,15 @@ const ReportsView: React.FC = () => {
                                 )}
                               </td>
                             )}
-                            {isFullAccess && (
+                            {canExpand && (
                               <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                                 {isExpanded ? 'Collapse' : 'Details'}
                               </td>
                             )}
                           </tr>
-                          {isFullAccess && isExpanded && progress && (
+                          {canExpand && isExpanded && progress && (
                             <tr>
-                              <td colSpan={5} style={{ padding: 0, background: 'transparent' }}>
+                              <td colSpan={isFullAccess ? 6 : 4} style={{ padding: 0, background: 'transparent' }}>
                                 <div style={{
                                   background: 'var(--card-bg, #1e2433)',
                                   border: '1px solid var(--border-color)',
@@ -2307,6 +2330,7 @@ const ReportsView: React.FC = () => {
                                         <th>Test</th>
                                         <th>Status</th>
                                         <th>Rounds</th>
+                                        <th>Test Result (Pass/Fail)</th>
                                         <th>Points</th>
                                         <th>Failed Steps</th>
                                       </tr>
@@ -2340,6 +2364,17 @@ const ReportsView: React.FC = () => {
                                             <td style={{ fontWeight: 500 }}>{t.testName}</td>
                                             <td>{statusBadge}</td>
                                             <td>{t.rounds > 0 ? t.rounds : '—'}</td>
+                                            <td>
+                                              {t.rounds > 0 ? (
+                                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                                                  <span style={{ color: (t.passedRounds ?? 0) > 0 ? 'var(--success, #48bb78)' : 'inherit' }}>{t.passedRounds ?? 0}</span>
+                                                  <span style={{ color: 'var(--text-muted)' }}>/</span>
+                                                  <span style={{ color: (t.failedRounds ?? 0) > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>{t.failedRounds ?? 0}</span>
+                                                </span>
+                                              ) : (
+                                                <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                              )}
+                                            </td>
                                             <td><strong>{t.pointsEarned}</strong> pts</td>
                                             <td style={{ fontSize: '0.85rem', color: t.failedSteps && t.failedSteps.length > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>
                                               {failedStepsSummary}

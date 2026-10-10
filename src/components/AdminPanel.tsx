@@ -3503,6 +3503,7 @@ const AdminPanel: React.FC = () => {
                           <th>User</th>
                           <th>Points Earned</th>
                           <th>Steps Logged</th>
+                          <th>Test Result (Pass/Fail)</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3511,6 +3512,17 @@ const AdminPanel: React.FC = () => {
                             <td>{u.userName}</td>
                             <td><span className="status-badge status-pass">{u.pointsEarned}</span></td>
                             <td>{u.steps}</td>
+                            <td>
+                              {(u.testsPassed != null && (u.testsPassed > 0 || u.testsFailed > 0)) ? (
+                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                                  <span style={{ color: u.testsPassed > 0 ? 'var(--success, #48bb78)' : 'inherit' }}>{u.testsPassed}</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>/</span>
+                                  <span style={{ color: u.testsFailed > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>{u.testsFailed}</span>
+                                </span>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)' }}>—</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

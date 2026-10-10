@@ -578,21 +578,78 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       paymentsByUser[p.user_id] = p.pointsPaid;
     }
 
-    const users = perUserRows.map(r => {
-      const pointsEarned = r.pointsEarned;
-      const pointsPaid = paymentsByUser[r.userId] || 0;
+    // Query test cycle (round) stats per user in the date range (and version/test if filtered)
+    const subUserFilter = hasUserFilter ? ` AND s.user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
+    const subTestFilter = hasTestFilter ? ` AND s.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
+    const subVersionFilter = hasVersionFilter ? ` AND s.version_id IN (${versionIds.map(() => '?').join(',')}) ` : ' ';
+    const subArgs = [
+      start, end,
+      ...(hasUserFilter ? userIds : []),
+      ...(hasTestFilter ? testIds : []),
+      ...(hasVersionFilter ? versionIds : [])
+    ];
+
+    const subRoundsRows = await testsDb.prepare(
+      `SELECT user_id,
+              COUNT(*) as totalRounds,
+              SUM(CASE WHEN has_fail = 0 THEN 1 ELSE 0 END) as passedRounds,
+              SUM(CASE WHEN has_fail = 1 THEN 1 ELSE 0 END) as failedRounds
+       FROM (
+         SELECT s.user_id, s.test_id, s.round_id,
+                MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as has_fail
+         FROM test_submissions s
+         WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+         GROUP BY s.user_id, s.test_id, s.round_id
+       )
+       GROUP BY user_id`
+    ).all(...subArgs);
+
+    const testCyclesByUser = {};
+    let totalTestsPassed = 0;
+    let totalTestsFailed = 0;
+    let totalTestCycles = 0;
+    for (const r of subRoundsRows) {
+      const pRounds = Number(r.passedRounds || 0);
+      const fRounds = Number(r.failedRounds || 0);
+      const tRounds = Number(r.totalRounds || 0);
+      testCyclesByUser[r.user_id] = {
+        totalRounds: tRounds,
+        passedRounds: pRounds,
+        failedRounds: fRounds,
+        testResult: `${pRounds}/${fRounds}`
+      };
+      totalTestsPassed += pRounds;
+      totalTestsFailed += fRounds;
+      totalTestCycles += tRounds;
+    }
+
+    const allUserIdsSet = new Set(perUserRows.map(r => r.userId));
+    for (const r of subRoundsRows) {
+      allUserIdsSet.add(r.user_id);
+    }
+
+    const pointsMap = Object.fromEntries(perUserRows.map(r => [r.userId, r]));
+    const users = Array.from(allUserIdsSet).map(uid => {
+      const pRow = pointsMap[uid] || { pointsEarned: 0, steps: 0 };
+      const pointsEarned = pRow.pointsEarned;
+      const pointsPaid = paymentsByUser[uid] || 0;
       const unpaidPoints = pointsEarned - pointsPaid;
+      const cycles = testCyclesByUser[uid] || { totalRounds: 0, passedRounds: 0, failedRounds: 0, testResult: '0/0' };
       return {
-        userId: r.userId,
-        userName: userNames[r.userId] || ('user ' + r.userId),
+        userId: uid,
+        userName: userNames[uid] || ('user ' + uid),
         pointsEarned,
         pointsPaid,
         unpaidPoints,
-        steps: r.steps,
-        warningsCount: (warningsByUser[r.userId] || []).length,
-        warnings: warningsByUser[r.userId] || []
+        steps: pRow.steps,
+        totalRounds: cycles.totalRounds,
+        testsPassed: cycles.passedRounds,
+        testsFailed: cycles.failedRounds,
+        testResult: cycles.testResult,
+        warningsCount: (warningsByUser[uid] || []).length,
+        warnings: warningsByUser[uid] || []
       };
-    });
+    }).sort((a, b) => b.pointsEarned - a.pointsEarned);
 
     res.json({
       startDate,
@@ -600,6 +657,10 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       versionIds: versionIds.length > 0 ? versionIds : null,
       totalPointsEarned: totalRow[0] ? totalRow[0].totalPointsEarned : 0,
       totalSteps: totalRow[0] ? totalRow[0].totalSteps : 0,
+      totalTestCycles,
+      totalTestsPassed,
+      totalTestsFailed,
+      totalTestResult: `${totalTestsPassed}/${totalTestsFailed}`,
       totalWarnings: warningsRows.length,
       warnings: warningsRows.map(w => ({
         ...w,
@@ -1086,15 +1147,20 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
     const pointsByTest = Object.fromEntries(pointsRows.map(r => [r.test_id, r.pointsEarned]));
 
-    // Batch: get submission stats per test (rounds, pass count, fail count) in date range
+    // Batch: get submission stats per test (rounds, passed rounds, failed rounds) in date range
     const subStatsRows = await usersDb.prepare(
-      `SELECT s.test_id,
-              COUNT(DISTINCT s.round_id) as rounds,
-              SUM(CASE WHEN s.result = 'pass' THEN 1 ELSE 0 END) as passes,
-              SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fails
-       FROM test_submissions s
-       WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
-       GROUP BY s.test_id`
+      `SELECT test_id,
+              COUNT(*) as rounds,
+              SUM(CASE WHEN has_fail = 0 THEN 1 ELSE 0 END) as passed_rounds,
+              SUM(CASE WHEN has_fail = 1 THEN 1 ELSE 0 END) as failed_rounds
+       FROM (
+         SELECT s.test_id, s.round_id,
+                MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as has_fail
+         FROM test_submissions s
+         WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
+         GROUP BY s.test_id, s.round_id
+       )
+       GROUP BY test_id`
     ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
     const subStatsByTest = Object.fromEntries(subStatsRows.map(r => [r.test_id, r]));
 
@@ -1168,19 +1234,23 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 
     // Build per-test result array
     const tests = assignedTests.map(test => {
-      const stats = subStatsByTest[test.id] || { rounds: 0, passes: 0, fails: 0 };
+      const stats = subStatsByTest[test.id] || { rounds: 0, passed_rounds: 0, failed_rounds: 0 };
       const pointsEarned = pointsByTest[test.id] || 0;
       const failedSteps = Object.values(failedByTest[test.id] || {});
-      const stepCount = stepCountsMap[test.id] || 0;
+
+      const rounds = Number(stats.rounds || 0);
+      const passedRounds = Number(stats.passed_rounds || 0);
+      const failedRounds = Number(stats.failed_rounds || 0);
+      const testResult = rounds > 0 ? `${passedRounds}/${failedRounds}` : '0/0';
 
       let status;
       if (test.id === activeTestId && isVersionActive) {
         status = 'in_progress';
-      } else if (stats.rounds === 0) {
+      } else if (rounds === 0) {
         status = 'not_started';
-      } else if (stats.fails === 0 && stats.passes >= stepCount && stepCount > 0) {
+      } else if (failedRounds === 0 && passedRounds > 0) {
         status = 'fully_passed';
-      } else if (stats.fails > 0) {
+      } else if (failedRounds > 0) {
         status = 'failed';
       } else {
         status = 'in_progress';
@@ -1189,7 +1259,10 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       return {
         testId: test.id,
         testName: test.name + (test.is_deleted ? ' (Disabled)' : ''),
-        rounds: stats.rounds,
+        rounds,
+        passedRounds,
+        failedRounds,
+        testResult,
         pointsEarned,
         status,
         failedSteps,
