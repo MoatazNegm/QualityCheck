@@ -1,6 +1,13 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000152**: Generated Key Revocation with User Account Preservation, Web & REST Key Logon, and Direct User Key Management:
+  - **Key Revocation Without Removing User**: Revoking a generated API key (via `DELETE /api/api-keys/:id` or `DELETE /api/users/:id/revoke-key`) deletes only the key record from `api_keys`. The user account, assigned tests, round state, points ledger, and test history remain 100% intact.
+  - **Immediate Logon Block & Session Invalidation**: The user is immediately blocked from logging on with the revoked key (returning `401: Invalid or revoked key`). Active browser sessions and tokens issued via that key are terminated on the next request.
+  - **Logon via Generated Key**: Added direct key login to `POST /api/auth/login` (`{ apiKey: "qc_..." }`) and added a dedicated **"🔑 Generated Key"** tab to the web login screen (`LoginScreen.tsx`), allowing testers with generated keys to log in without needing a password.
+  - **Admin Panel 1-Click Key Management in Users Tab**: In `AdminPanel.tsx` (Users tab), each user row displays their active key badge (`🔑 qc_...`), a direct **"Revoke Key"** button (which revokes their key while explicitly preserving the user account), and a **"New Key" / "+ Key"** button that issues a new key and pops up a modal with a one-click copy button.
+  - **User Key Management REST Endpoints**: Added `GET /api/users/:id/keys` (list user keys), `POST /api/users/:id/generate-key` (issue key for user), and `DELETE /api/users/:id/revoke-key` (revoke user keys). Augmented `GET /api/users` with each user's `api_keys` list.
+  - **Updated API User Guide & OpenAPI Documentation**: Updated both markdown user guides (`API_DOCUMENTATION.md` and `server/docs/API_DOCUMENTATION.md`) and the machine-readable OpenAPI 3.0 specification (`server/docs/openapi.json`) with all new authentication and user key management endpoints.
 - **v1.0000151**: Sort Test-Level History Newest to Oldest in Points Report:
   - **Newest First Sorting**: Updated both the backend (`server/routes/reports.js`) and frontend (`src/components/ReportsView.tsx`) to sort test-level pass/fail outcomes from newest to oldest (`new Date(b.executedAt) - new Date(a.executedAt)`), so testers and admins immediately see the most recent test run outcomes at the top.
 - **v1.0000150**: Expanded Row Shows Test-Level Pass/Fail History (Not Individual Step Executions):

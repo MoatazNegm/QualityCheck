@@ -417,6 +417,81 @@
         }
       }
     },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication & API Keys"
+        ],
+        "summary": "Authenticate and log on via credentials or generated API key",
+        "description": "Authenticates a user and establishes a session. Accepts either standard username/password or a generated API key directly (`{ apiKey: \"qc_...\" }`). Returns a JWT token and sets authentication cookies.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "example": "tester_1"
+                  },
+                  "password": {
+                    "type": "string",
+                    "example": "Password123!"
+                  },
+                  "apiKey": {
+                    "type": "string",
+                    "example": "qc_e1a4f028b17c8d92..."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated successfully, returns token and user payload"
+          },
+          "401": {
+            "description": "Invalid credentials or revoked key"
+          },
+          "403": {
+            "description": "Account suspended or key deactivated"
+          }
+        }
+      }
+    },
+    "/auth/verify": {
+      "get": {
+        "tags": [
+          "Authentication & API Keys"
+        ],
+        "summary": "Verify active session token",
+        "description": "Validates the current session token or cookie. If the session was initiated with a generated key, verifies that the key is still active and has not been revoked.",
+        "responses": {
+          "200": {
+            "description": "Token is valid"
+          },
+          "401": {
+            "description": "Invalid token or key was revoked"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication & API Keys"
+        ],
+        "summary": "Log out and invalidate session",
+        "description": "Terminates the user session, clears server-side records, and wipes auth cookies.",
+        "responses": {
+          "200": {
+            "description": "Logged out successfully"
+          }
+        }
+      }
+    },
     "/api-keys/me": {
       "get": {
         "tags": [
@@ -2288,6 +2363,99 @@
         "responses": {
           "200": {
             "description": "Points paid successfully"
+          }
+        }
+      }
+    },
+    "/users/{id}/generate-key": {
+      "post": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Generate or re-issue an API key for a user (Admin only)",
+        "description": "Generates a cryptographically secure key for the user so they can log on. The key can later be revoked without removing the user account.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "example": "custom-key-name"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": ["tester", "developer", "admin"],
+                    "example": "tester"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key generated successfully"
+          }
+        }
+      }
+    },
+    "/users/{id}/revoke-key": {
+      "delete": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "Revoke generated key(s) for a user without removing the user (Admin only)",
+        "description": "Revokes and deletes all active keys for the user. The user will no longer be able to log on with those keys. The user profile, assignments, and test history are preserved intact.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keys revoked successfully. User account preserved."
+          }
+        }
+      }
+    },
+    "/users/{id}/keys": {
+      "get": {
+        "tags": [
+          "Admin - Users"
+        ],
+        "summary": "List API keys for a specific user (Admin only)",
+        "description": "Returns all generated keys linked to the specified user.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of user API keys"
           }
         }
       }

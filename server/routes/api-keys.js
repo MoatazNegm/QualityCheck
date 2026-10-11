@@ -141,13 +141,27 @@ router.patch('/:id/toggle', authenticateToken, requireAdmin, async (req, res) =>
 router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const key = await testsDb.prepare('SELECT id FROM api_keys WHERE id = ?').get(id);
+    const key = await testsDb.prepare('SELECT id, user_id, name FROM api_keys WHERE id = ?').get(id);
     if (!key) {
       return res.status(404).json({ error: 'API key not found' });
     }
 
+    // Delete the API key from api_keys table - user account is preserved!
     await testsDb.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
-    res.json({ message: 'API key revoked and deleted successfully' });
+
+    // Invalidate active sessions for this user so they cannot remain logged in via the revoked key
+    if (key.user_id) {
+      try {
+        await usersDb.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(key.user_id);
+      } catch (sessErr) {
+        console.warn('Non-fatal: failed to clear user sessions on key revoke:', sessErr.message);
+      }
+    }
+
+    res.json({
+      message: `API key "${key.name}" revoked successfully. The user account has been preserved and can be issued a new key later.`,
+      user_id: key.user_id
+    });
   } catch (error) {
     console.error('Delete API key error:', error);
     res.status(500).json({ error: 'Server error' });

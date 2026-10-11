@@ -11,7 +11,8 @@ interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password?: string) => Promise<void>;
+  loginWithKey: (apiKey: string) => Promise<void>;
   logout: () => void;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -117,16 +118,45 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password?: string) => {
+    // If username is an API key (e.g. starts with qc_ or single parameter) and password is empty, delegate to loginWithKey
+    if ((!password || !password.trim()) && username.trim().startsWith('qc_')) {
+      return loginWithKey(username);
+    }
+
     const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.trim(), password })
+      body: JSON.stringify({ username: username.trim(), password: password || '' })
     });
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error || 'Invalid username or password');
+    }
+
+    const data = await response.json();
+    setToken(data.token);
+    setUser(data.user);
+    localStorage.setItem('token', data.token);
+    syncCookieToken(data.token);
+  };
+
+  const loginWithKey = async (apiKey: string) => {
+    const cleanKey = apiKey.trim();
+    if (!cleanKey) {
+      throw new Error('Please enter a valid API key');
+    }
+
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: cleanKey })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to logon with key');
     }
 
     const data = await response.json();
@@ -161,7 +191,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, changePassword, refreshUser, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, loginWithKey, logout, changePassword, refreshUser, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

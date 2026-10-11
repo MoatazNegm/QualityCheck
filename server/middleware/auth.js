@@ -153,11 +153,23 @@ const authenticateToken = async (req, res, next) => {
     return res.status(401).json({ error: 'Invalid API key' });
   }
   
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
     
+    // If this session was authenticated via an API key, check if key was revoked or deactivated
+    if (user && user.apiKeyId) {
+      try {
+        const activeKey = await testsDb.prepare('SELECT id, is_active FROM api_keys WHERE id = ?').get(user.apiKeyId);
+        if (!activeKey || !activeKey.is_active) {
+          return res.status(401).json({ error: 'The key used for this session has been revoked or deactivated' });
+        }
+      } catch (keyErr) {
+        console.error('Error verifying session key:', keyErr);
+      }
+    }
+
     req.user = user;
     next();
   });

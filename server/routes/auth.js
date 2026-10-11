@@ -5,8 +5,9 @@ const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
 
-const { usersDb } = require('../db/db');
+const { usersDb, testsDb } = require('../db/db');
 const { authenticateToken } = require('../middleware/auth');
+const crypto = require('crypto');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const TOKEN_EXPIRATION = '24h';
@@ -48,14 +49,124 @@ async function ensureAdminUser() {
   }
 }
 
-// Login endpoint
+// Login endpoint - supports both credentials (username + password) and generated API keys
 router.post('/login', async (req, res) => {
   try {
     const { dbReady } = require('../db/db');
     if (dbReady) await dbReady;
 
-    const { username, password } = req.body;
+    const { username, password, apiKey, key } = req.body;
     
+    // Check if the caller provided an API key directly or in one of the fields
+    let candidateApiKey = null;
+    if (apiKey && typeof apiKey === 'string' && apiKey.trim()) {
+      candidateApiKey = apiKey.trim();
+    } else if (key && typeof key === 'string' && key.trim()) {
+      candidateApiKey = key.trim();
+    } else if (password && typeof password === 'string' && password.trim().startsWith('qc_')) {
+      candidateApiKey = password.trim();
+    } else if (username && typeof username === 'string' && username.trim().startsWith('qc_') && (!password || !password.trim())) {
+      candidateApiKey = username.trim();
+    }
+
+    // 1. If an API key was supplied, authenticate via API key
+    if (candidateApiKey) {
+      const keyHash = crypto.createHash('sha256').update(candidateApiKey).digest('hex');
+      const keyRow = await testsDb.prepare(`
+        SELECT ak.id as key_id, ak.name as key_name, ak.role as key_role, ak.is_active,
+               u.id as user_id, u.username, u.is_admin, u.is_suspended, u.user_groups
+        FROM api_keys ak
+        JOIN users u ON ak.user_id = u.id
+        WHERE ak.key_hash = ?
+      `).get(keyHash);
+
+      if (!keyRow) {
+        return res.status(401).json({ error: 'Invalid or revoked key. This key does not exist or has been revoked.' });
+      }
+
+      if (!keyRow.is_active) {
+        return res.status(403).json({ error: 'This key has been deactivated. Please contact an administrator.' });
+      }
+
+      if (keyRow.is_suspended) {
+        return res.status(403).json({ error: 'Account is suspended. Please contact administrator.' });
+      }
+
+      // If a specific username was also provided, ensure it matches the key's owner
+      if (username && typeof username === 'string' && !username.trim().startsWith('qc_')) {
+        if (keyRow.username.toLowerCase() !== username.trim().toLowerCase()) {
+          return res.status(401).json({ error: 'Provided key does not belong to the specified username' });
+        }
+      }
+
+      let groups = [];
+      try {
+        groups = typeof keyRow.user_groups === 'string' ? JSON.parse(keyRow.user_groups) : (keyRow.user_groups || []);
+      } catch {
+        groups = [];
+      }
+      const role = keyRow.key_role || 'tester';
+      if (role === 'admin' && !groups.includes('admins')) groups.push('admins');
+      if (role === 'developer' && !groups.includes('developers')) groups.push('developers');
+      if (role === 'tester' && !groups.includes('testers')) groups.push('testers');
+      if (groups.length === 0) {
+        groups = keyRow.is_admin ? ['admins'] : ['testers'];
+      }
+
+      const token = jwt.sign(
+        {
+          userId: keyRow.user_id,
+          username: keyRow.username,
+          isAdmin: !!keyRow.is_admin || role === 'admin',
+          isSuspended: !!keyRow.is_suspended,
+          userGroups: groups,
+          apiKeyId: keyRow.key_id,
+          role: role,
+          isApiKey: true
+        },
+        JWT_SECRET,
+        { expiresIn: TOKEN_EXPIRATION }
+      );
+
+      // Record last_used_at on api_keys
+      Promise.resolve(
+        testsDb.prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?").run(keyRow.key_id)
+      ).catch(e => console.warn('Non-fatal: failed to update api_keys last_used_at:', e.message));
+
+      // Store session
+      try {
+        await usersDb.prepare(`
+          INSERT INTO user_sessions (user_id, token, expires_at)
+          VALUES (?, ?, datetime('now', '+24 hours'))
+        `).run(keyRow.user_id, token);
+      } catch (sessionErr) {
+        console.warn('Non-fatal session store error:', sessionErr);
+      }
+
+      const cookieOptions = {
+        path: '/',
+        maxAge: 24 * 60 * 60 * 1000,
+        sameSite: 'lax',
+        httpOnly: false
+      };
+      res.cookie('token', token, cookieOptions);
+      res.cookie('auth_token', token, cookieOptions);
+
+      return res.json({
+        token,
+        user: {
+          id: keyRow.user_id,
+          username: keyRow.username,
+          isAdmin: !!keyRow.is_admin || role === 'admin',
+          isSuspended: !!keyRow.is_suspended,
+          userGroups: groups,
+          isApiKey: true,
+          apiKeyId: keyRow.key_id
+        }
+      });
+    }
+
+    // 2. Standard username + password login
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
     }
@@ -74,7 +185,23 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'Account is suspended. Please contact administrator.' });
     }
     
-    const isValid = await bcrypt.compare(String(password).trim(), user.password_hash);
+    let isValid = await bcrypt.compare(String(password).trim(), user.password_hash);
+    let usedApiKeyId = null;
+
+    // Fallback: check if the provided password is an active API key assigned to this user
+    if (!isValid) {
+      const pwHash = crypto.createHash('sha256').update(String(password).trim()).digest('hex');
+      const keyMatch = await testsDb.prepare(
+        'SELECT id, is_active FROM api_keys WHERE user_id = ? AND key_hash = ?'
+      ).get(user.id, pwHash);
+      if (keyMatch) {
+        if (!keyMatch.is_active) {
+          return res.status(403).json({ error: 'The key provided for this account has been deactivated.' });
+        }
+        isValid = true;
+        usedApiKeyId = keyMatch.id;
+      }
+    }
     
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -90,17 +217,19 @@ router.post('/login', async (req, res) => {
       groups = user.is_admin ? ['admins'] : ['testers'];
     }
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        username: user.username,
-        isAdmin: !!user.is_admin,
-        isSuspended: !!user.is_suspended,
-        userGroups: groups
-      },
-      JWT_SECRET,
-      { expiresIn: TOKEN_EXPIRATION }
-    );
+    const payload = {
+      userId: user.id,
+      username: user.username,
+      isAdmin: !!user.is_admin,
+      isSuspended: !!user.is_suspended,
+      userGroups: groups
+    };
+    if (usedApiKeyId) {
+      payload.apiKeyId = usedApiKeyId;
+      payload.isApiKey = true;
+    }
+
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION });
 
     // Store session
     try {
@@ -112,7 +241,6 @@ router.post('/login', async (req, res) => {
       console.warn('Non-fatal session store error:', sessionErr);
     }
 
-    // Set cookies so browser navigations and downloads are automatically authenticated
     const cookieOptions = {
       path: '/',
       maxAge: 24 * 60 * 60 * 1000,
@@ -139,7 +267,7 @@ router.post('/login', async (req, res) => {
 });
 
 // Verify token
-router.get('/verify', (req, res) => {
+router.get('/verify', async (req, res) => {
   let token = req.headers.authorization?.split(' ')[1];
   if (!token && req.headers.authorization && !req.headers.authorization.startsWith('Bearer ')) {
     token = req.headers.authorization.trim();
@@ -167,6 +295,15 @@ router.get('/verify', (req, res) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    // If this session was issued for a generated key, verify the key has not been revoked
+    if (decoded.apiKeyId) {
+      const activeKey = await testsDb.prepare('SELECT id, is_active FROM api_keys WHERE id = ?').get(decoded.apiKeyId);
+      if (!activeKey || !activeKey.is_active) {
+        return res.status(401).json({ error: 'The key used to log in has been revoked or deactivated' });
+      }
+    }
+
     const userGroups = decoded.userGroups || (decoded.isAdmin ? ['admins'] : ['testers']);
     res.json({
       valid: true,
@@ -179,7 +316,7 @@ router.get('/verify', (req, res) => {
       }
     });
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ error: error.message || 'Invalid token' });
   }
 });
 

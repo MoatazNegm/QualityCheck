@@ -16,6 +16,7 @@ interface User {
   is_admin: boolean;
   isSuspended: boolean;
   user_groups?: string[];
+  api_keys?: ApiKeyItem[];
 }
 
 interface ImportedTest {
@@ -225,6 +226,8 @@ const AdminPanel: React.FC = () => {
   const [apiKeySuccess, setApiKeySuccess] = useState('');
   const [apiKeyError, setApiKeyError] = useState('');
   const [copiedKey, setCopiedKey] = useState(false);
+  const [userKeyModalData, setUserKeyModalData] = useState<{ username: string; rawKey: string; keyName: string; role: string } | null>(null);
+  const [copiedUserKey, setCopiedUserKey] = useState(false);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -1733,8 +1736,58 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const handleRevokeUserKey = async (u: User) => {
+    if (!window.confirm(`Are you sure you want to revoke the generated key for user "${u.username}"? The user will immediately be unable to logon through that key, but the user account, test assignments, and history will be preserved. You can generate another key for him later.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${u.id}/revoke-key`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUserSuccess(data.message || `Key revoked for "${u.username}". User account preserved.`);
+        fetchApiKeys();
+        fetchUsers();
+      } else {
+        setUserError(data.error || 'Failed to revoke key');
+      }
+    } catch (err: any) {
+      setUserError(err.message || 'Error revoking key');
+    }
+  };
+
+  const handleGenerateKeyForUser = async (u: User) => {
+    try {
+      const userRole = u.is_admin ? 'admin' : (u.user_groups || []).includes('developers') ? 'developer' : 'tester';
+      const res = await fetch(`${API_BASE}/api/users/${u.id}/generate-key`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: userRole })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUserKeyModalData({
+          username: u.username,
+          rawKey: data.key,
+          keyName: data.apiKey?.name || `${u.username}-key`,
+          role: data.apiKey?.role || userRole
+        });
+        setCopiedUserKey(false);
+        setUserSuccess(`New key generated successfully for user "${u.username}"!`);
+        fetchApiKeys();
+        fetchUsers();
+      } else {
+        alert(data.error || 'Failed to generate key');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error generating key');
+    }
+  };
+
   const handleDeleteApiKey = async (id: number, name: string) => {
-    if (!window.confirm(`Are you sure you want to permanently revoke API key "${name}"? Any agent using this key will immediately lose access.`)) {
+    if (!window.confirm(`Are you sure you want to permanently revoke API key "${name}"? The user will no longer be able to logon through this key, but the user account, assignments, and test history will be preserved. You can generate another key for him later.`)) {
       return;
     }
     try {
@@ -1743,13 +1796,16 @@ const AdminPanel: React.FC = () => {
         headers: authHeaders
       });
       if (res.ok) {
+        const data = await res.json();
+        setApiKeySuccess(data.message || 'API key revoked successfully. User account preserved.');
         fetchApiKeys();
+        fetchUsers();
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to delete API key');
+        alert(data.error || 'Failed to revoke API key');
       }
     } catch (err) {
-      console.error('Failed to delete API key:', err);
+      console.error('Failed to revoke API key:', err);
     }
   };
 
@@ -1933,6 +1989,11 @@ const AdminPanel: React.FC = () => {
               {users.map(u => {
                 const summary = userSummaries[u.id];
                 const currentGroups = u.user_groups || (u.is_admin ? ['admins'] : ['testers']);
+                const userActiveKeys = (u.api_keys && u.api_keys.length > 0)
+                  ? u.api_keys.filter(k => k.is_active)
+                  : apiKeys.filter(k => k.user_id === u.id && k.is_active);
+                const hasActiveKey = userActiveKeys.length > 0;
+
                 return (
                   <div key={u.id} className="user-row" style={{ flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
@@ -1970,6 +2031,23 @@ const AdminPanel: React.FC = () => {
                       </div>
                     </div>
                     <div className="user-row-summary">
+                      {hasActiveKey ? (
+                        <span
+                          className="user-summary-badge"
+                          style={{ background: 'rgba(72, 187, 120, 0.15)', color: '#48bb78', border: '1px solid rgba(72, 187, 120, 0.4)' }}
+                          title={`Active Key: ${userActiveKeys[0].key_prefix} (Role: ${userActiveKeys[0].role})`}
+                        >
+                          🔑 {userActiveKeys[0].key_prefix}
+                        </span>
+                      ) : (
+                        <span
+                          className="user-summary-badge"
+                          style={{ background: 'rgba(160, 174, 192, 0.08)', color: 'var(--text-muted, #a0aec0)' }}
+                          title="No active key issued"
+                        >
+                          No Key
+                        </span>
+                      )}
                       {summary ? (
                         <>
                           <span className="user-summary-badge" title="Assigned tests">{summary.assignedCount} assigned</span>
@@ -1982,6 +2060,26 @@ const AdminPanel: React.FC = () => {
                       ) : null}
                     </div>
                     <div className="user-row-actions">
+                      {hasActiveKey && (
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                          title="Revoke generated key (preserves user account and all test records)"
+                          onClick={() => handleRevokeUserKey(u)}
+                        >
+                          Revoke Key
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                        title={hasActiveKey ? "Generate another key for this user" : "Generate a new key for this user"}
+                        onClick={() => handleGenerateKeyForUser(u)}
+                      >
+                        {hasActiveKey ? "New Key" : "+ Key"}
+                      </button>
                       <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
                         <input
                           type="checkbox"
@@ -2028,6 +2126,56 @@ const AdminPanel: React.FC = () => {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* User Key Modal */}
+          {userKeyModalData && (
+            <div className="modal-backdrop" style={{ zIndex: 1000 }}>
+              <div className="modal" style={{ maxWidth: '520px', width: '90%' }}>
+                <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🔑</span> Generated Key for {userKeyModalData.username}
+                </h3>
+                <p style={{ fontSize: '0.88rem', color: 'var(--text-muted, #a0aec0)', lineHeight: '1.4' }}>
+                  A new key was generated for <strong>{userKeyModalData.username}</strong> ({userKeyModalData.role} role).
+                  Copy and share it now so the user can log on. You can revoke it anytime later without removing their account.
+                </p>
+                <div style={{
+                  background: 'rgba(0, 0, 0, 0.35)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  wordBreak: 'break-all',
+                  fontSize: '0.92rem',
+                  color: '#63b3ed',
+                  margin: '1rem 0',
+                  userSelect: 'all'
+                }}>
+                  {userKeyModalData.rawKey}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ background: copiedUserKey ? '#48bb78' : undefined }}
+                    onClick={() => {
+                      navigator.clipboard.writeText(userKeyModalData.rawKey);
+                      setCopiedUserKey(true);
+                      setTimeout(() => setCopiedUserKey(false), 3000);
+                    }}
+                  >
+                    {copiedUserKey ? '✓ Copied!' : '📋 Copy Key'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setUserKeyModalData(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

@@ -32,6 +32,17 @@ When calling any API endpoint, pass your API key in **one** of the following way
    ```http
    GET /api/tests?api_key=qc_your_api_key_here
    ```
+4. **Log On via API Key to Obtain Web / JWT Session (`POST /api/auth/login`)**:
+   Users and automated clients can log on directly using their generated key to obtain a standard authenticated web session and cookies:
+   ```http
+   POST /api/auth/login
+   Content-Type: application/json
+
+   {
+     "apiKey": "qc_your_api_key_here"
+   }
+   ```
+   *Note: In the QualityCheck web UI, testers can switch to the **"🔑 Generated Key"** tab on the login screen to log on directly using their key without needing a password.*
 
 ### User Attribution & Valid Names
 When generating an API key, the admin assigns a valid name (or selects an existing user). Every action performed with this key (submitting results, uploading evidence, creating tests, earning points) is attributed to this user across the entire system (reports, test submissions, audit trails, and points ledger).
@@ -59,6 +70,11 @@ curl -X GET http://localhost:4006/api/api-keys/me \
   }
 }
 ```
+
+### Key Revocation & Re-issuance Policy
+- **Revoking a key does NOT delete the user**: When an administrator revokes a key, only the key is invalidated. The user account, assignments, historical results, and earned points remain fully preserved.
+- **Immediate session termination**: The user will immediately be blocked from logging on with the revoked key, and any existing active sessions will be terminated on their next request.
+- **Re-issuance**: Administrators can generate a new key for the user at any time (from the Admin Panel Users tab or API Keys tab). The user can then immediately log on with their new key.
 
 ---
 
@@ -415,9 +431,44 @@ curl -X PATCH http://localhost:4006/api/api-keys/4/toggle \
   -H "Authorization: Bearer <admin_token>"
 ```
 
-### 5.4 Revoke / Delete API Key (`DELETE /api/api-keys/{id}`)
+### 5.4 Revoke an API Key (`DELETE /api/api-keys/{id}`)
+Revokes and deletes the generated API key. **The associated user account, test assignments, and testing records are preserved.** The user will immediately be unable to logon or authenticate with the revoked key, and any active browser sessions are terminated.
 ```bash
 curl -X DELETE http://localhost:4006/api/api-keys/4 \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "API key \"Automated AI Regression Bot\" revoked successfully. The user account has been preserved and can be issued a new key later.",
+  "user_id": 8
+}
+```
+
+### 5.5 Revoke All Keys for a User (`DELETE /api/users/{id}/revoke-key`)
+Revokes all active keys for a specific user without removing their account:
+```bash
+curl -X DELETE http://localhost:4006/api/users/8/revoke-key \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+### 5.6 Generate / Re-issue a Key for a User (`POST /api/users/{id}/generate-key`)
+Issues a new generated key for an existing user:
+```bash
+curl -X POST http://localhost:4006/api/users/8/generate-key \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated-Tester-Key",
+    "role": "tester"
+  }'
+```
+
+### 5.7 List Keys for a Specific User (`GET /api/users/{id}/keys`)
+Lists all API keys associated with a specific user:
+```bash
+curl -X GET http://localhost:4006/api/users/8/keys \
   -H "Authorization: Bearer <admin_token>"
 ```
 
@@ -433,7 +484,7 @@ When authenticated with an admin API key (`X-API-Key: qc_...` with role `admin`)
 ```http
 GET /api/users
 ```
-Returns a list of all registered users, their roles, suspension status, and assigned groups (`testers`, `developers`, `admins`).
+Returns a list of all registered users, their roles, suspension status, assigned groups (`testers`, `developers`, `admins`), and their active generated keys (`api_keys`).
 
 #### Bulk User Summaries
 ```http
@@ -494,6 +545,30 @@ Content-Type: application/json
 }
 ```
 
+#### List User Keys
+```http
+GET /api/users/{id}/keys
+```
+Returns all API keys linked to user `{id}`, including key prefix, role, active status, creation date, and last used timestamp.
+
+#### Generate / Re-issue User Key
+```http
+POST /api/users/{id}/generate-key
+Content-Type: application/json
+
+{
+  "name": "QA-Runner-Key",
+  "role": "tester"
+}
+```
+Generates a new secure key for user `{id}`. Returns the raw key (`qc_...`) to share with the user or automated runner.
+
+#### Revoke User Key(s) (Preserves User Account)
+```http
+DELETE /api/users/{id}/revoke-key
+```
+Revokes all active keys for user `{id}` and terminates any active sessions. **The user profile, assigned tests, round state, and test history remain intact.** The admin can generate another key for this user later.
+
 #### Payout / Deduct Points
 ```http
 POST /api/users/{id}/pay-points
@@ -505,7 +580,7 @@ Content-Type: application/json
 }
 ```
 
-#### Delete User (Cascade)
+#### Delete User (Cascade Wipe)
 ```http
 DELETE /api/users/{id}
 ```

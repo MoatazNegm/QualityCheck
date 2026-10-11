@@ -14,9 +14,24 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
       'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
     ).all();
     
+    // Batch query active keys for all users
+    let keysByUser = {};
+    try {
+      const allKeys = await testsDb.prepare(
+        'SELECT id, name, key_prefix, role, is_active, user_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC'
+      ).all();
+      for (const k of allKeys) {
+        if (!keysByUser[k.user_id]) keysByUser[k.user_id] = [];
+        keysByUser[k.user_id].push(k);
+      }
+    } catch (kErr) {
+      console.warn('Non-fatal: could not query api_keys for users list:', kErr.message);
+    }
+
     const formatted = users.map(u => ({
       ...u,
-      user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers']))
+      user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers'])),
+      api_keys: keysByUser[u.id] || []
     }));
     
     res.json(formatted);
@@ -437,6 +452,103 @@ router.post('/:id/pay-points', authenticateToken, requireAdmin, async (req, res)
     res.json({ message: 'Points paid successfully' });
   } catch (error) {
     console.error('Pay points error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// List keys for a user (admin or developer only)
+router.get('/:id/keys', authenticateToken, requireDeveloper, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const keys = await testsDb.prepare(`
+      SELECT id, name, key_prefix, role, is_active, created_at, last_used_at, user_id
+      FROM api_keys
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `).all(userId);
+    res.json(keys);
+  } catch (error) {
+    console.error('List user keys error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Generate a new key for this user (admin only)
+router.post('/:id/generate-key', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const userId = parseInt(req.params.id, 10);
+    const user = await usersDb.prepare('SELECT id, username, is_admin, user_groups FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { name, role } = req.body || {};
+    const validRoles = ['tester', 'developer', 'admin'];
+    let defaultRole = user.is_admin ? 'admin' : 'tester';
+    try {
+      const groups = typeof user.user_groups === 'string' ? JSON.parse(user.user_groups) : (user.user_groups || []);
+      if (groups.includes('admins')) defaultRole = 'admin';
+      else if (groups.includes('developers')) defaultRole = 'developer';
+    } catch {}
+    const chosenRole = validRoles.includes(role) ? role : defaultRole;
+    const keyName = (name && String(name).trim()) || `${user.username}-key`;
+
+    const randomHex = crypto.randomBytes(24).toString('hex');
+    const rawApiKey = `qc_${randomHex}`;
+    const keyPrefix = `qc_${randomHex.substring(0, 8)}...`;
+    const keyHash = crypto.createHash('sha256').update(rawApiKey).digest('hex');
+
+    const result = await testsDb.prepare(`
+      INSERT INTO api_keys (name, key_hash, key_prefix, user_id, role, is_active)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `).run(keyName, keyHash, keyPrefix, user.id, chosenRole);
+
+    res.status(201).json({
+      message: `API key generated successfully for user "${user.username}".`,
+      key: rawApiKey,
+      apiKey: {
+        id: result.lastInsertRowid,
+        name: keyName,
+        key_prefix: keyPrefix,
+        role: chosenRole,
+        user_id: user.id,
+        username: user.username,
+        is_active: 1,
+        created_at: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Generate user key error:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+});
+
+// Revoke all generated keys for this user without deleting the user (admin only)
+router.delete('/:id/revoke-key', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const user = await usersDb.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete keys for this user from api_keys - preserving the user in users table
+    await testsDb.prepare('DELETE FROM api_keys WHERE user_id = ?').run(userId);
+
+    // Invalidate sessions so user cannot remain logged in via the revoked key
+    try {
+      await usersDb.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+    } catch (sessErr) {
+      console.warn('Non-fatal: session cleanup failed:', sessErr.message);
+    }
+
+    res.json({
+      message: `Generated key(s) revoked successfully for user "${user.username}". The user account has been preserved and can be issued a new key later.`,
+      userId: user.id
+    });
+  } catch (error) {
+    console.error('Revoke user key error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
