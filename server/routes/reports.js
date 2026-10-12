@@ -589,20 +589,51 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       ...(hasVersionFilter ? versionIds : [])
     ];
 
-    const subRoundsRows = await testsDb.prepare(
-      `SELECT user_id,
-              COUNT(*) as totalRounds,
-              SUM(CASE WHEN has_fail = 0 THEN 1 ELSE 0 END) as passedRounds,
-              SUM(CASE WHEN has_fail = 1 THEN 1 ELSE 0 END) as failedRounds
-       FROM (
-         SELECT s.user_id, s.test_id, s.round_id,
-                MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as has_fail
-         FROM test_submissions s
-         WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
-         GROUP BY s.user_id, s.test_id, s.round_id
-       )
-       GROUP BY user_id`
-    ).all(...subArgs);
+    // Query actual steps executed in the date range (and version/test if filtered)
+    const subStepsRows = await testsDb.prepare(`
+      SELECT s.user_id, COUNT(*) as steps
+      FROM test_submissions s
+      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+      GROUP BY s.user_id
+    `).all(...subArgs);
+    const subStepsByUser = Object.fromEntries(subStepsRows.map(r => [r.user_id, r.steps]));
+
+    const totalStepsRow = await testsDb.prepare(`
+      SELECT COUNT(*) as totalSteps
+      FROM test_submissions s
+      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+    `).get(...subArgs);
+
+    // Query test cycle (round) stats per user in the date range (and version/test if filtered)
+    // A test round only passes if ALL countable steps of the test were passed (and no fails).
+    // An unfinished round is neither passed nor failed.
+    const subRoundsRows = await testsDb.prepare(`
+      SELECT r.user_id,
+             SUM(r.is_passed) as passedRounds,
+             SUM(r.is_failed) as failedRounds,
+             COUNT(CASE WHEN r.is_passed = 1 OR r.is_failed = 1 THEN 1 END) as totalRounds
+      FROM (
+        SELECT s.user_id, s.test_id, s.round_id,
+               MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as has_fail,
+               COUNT(DISTINCT CASE WHEN s.result = 'pass' THEN s.step_id END) as passed_steps,
+               ts_count.countable_steps,
+               CASE WHEN MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END as is_failed,
+               CASE WHEN MAX(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) = 0
+                         AND ts_count.countable_steps > 0
+                         AND COUNT(DISTINCT CASE WHEN s.result = 'pass' THEN s.step_id END) >= ts_count.countable_steps
+                    THEN 1 ELSE 0 END as is_passed
+        FROM test_submissions s
+        JOIN (
+          SELECT test_id, COUNT(*) as countable_steps
+          FROM test_steps
+          WHERE COALESCE(points, value, 0) != -1
+          GROUP BY test_id
+        ) ts_count ON ts_count.test_id = s.test_id
+        WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+        GROUP BY s.user_id, s.test_id, s.round_id
+      ) r
+      GROUP BY r.user_id
+    `).all(...subArgs);
 
     const testCyclesByUser = {};
     let totalTestsPassed = 0;
@@ -623,10 +654,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       totalTestCycles += tRounds;
     }
 
-    const allUserIdsSet = new Set(perUserRows.map(r => r.userId));
-    for (const r of subRoundsRows) {
-      allUserIdsSet.add(r.user_id);
-    }
+    const allUserIdsSet = new Set([...perUserRows.map(r => r.userId), ...subRoundsRows.map(r => r.user_id), ...subStepsRows.map(r => r.user_id)]);
 
     const pointsMap = Object.fromEntries(perUserRows.map(r => [r.userId, r]));
     const users = Array.from(allUserIdsSet).map(uid => {
@@ -635,13 +663,14 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       const pointsPaid = paymentsByUser[uid] || 0;
       const unpaidPoints = pointsEarned - pointsPaid;
       const cycles = testCyclesByUser[uid] || { totalRounds: 0, passedRounds: 0, failedRounds: 0, testResult: '0/0' };
+      const steps = subStepsByUser[uid] ?? pRow.steps ?? 0;
       return {
         userId: uid,
         userName: userNames[uid] || ('user ' + uid),
         pointsEarned,
         pointsPaid,
         unpaidPoints,
-        steps: pRow.steps,
+        steps,
         totalRounds: cycles.totalRounds,
         testsPassed: cycles.passedRounds,
         testsFailed: cycles.failedRounds,
@@ -656,7 +685,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
       totalPointsEarned: totalRow[0] ? totalRow[0].totalPointsEarned : 0,
-      totalSteps: totalRow[0] ? totalRow[0].totalSteps : 0,
+      totalSteps: totalStepsRow?.totalSteps ?? (totalRow[0] ? totalRow[0].totalSteps : 0),
       totalTestCycles,
       totalTestsPassed,
       totalTestsFailed,
@@ -1196,7 +1225,8 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
           lastExecutedAt: row.executed_at,
           stepsCount: 0,
           failedSteps: [],
-          submissions: []
+          submissions: [],
+          passedStepIds: new Set()
         };
       }
       const cycle = cyclesByTest[row.test_id][row.round_id];
@@ -1231,6 +1261,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
           };
         }
         failedByTest[row.test_id][key].fails += 1;
+      } else if (row.result === 'pass') {
+        if (!cycle.passedStepIds) cycle.passedStepIds = new Set();
+        cycle.passedStepIds.add(row.step_id);
       }
     }
 
@@ -1276,16 +1309,14 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
             });
           }
         } else {
-          // Test Pass event — determined if user passed all steps of the test
+          // A test round only passes if ALL countable steps of the test were executed and passed in this period
           const totalCountable = stepCountsMap[testId] || 0;
-          const lastStep = lastStepByTest[testId];
-          const hasLastStepPass = lastStep ? c.submissions?.some(s => s.stepId === lastStep.id && s.result === 'pass') : false;
-          const isAllPassed = (totalCountable > 0 && c.stepsCount >= totalCountable) ||
-                              hasLastStepPass ||
-                              (totalCountable === 0 && c.stepsCount > 0);
+          const passedCount = c.passedStepIds ? c.passedStepIds.size : 0;
+          const isAllPassed = totalCountable > 0 && passedCount >= totalCountable;
 
           if (isAllPassed) {
             // Date and time is the pass of the last step:
+            const lastStep = lastStepByTest[testId];
             const lastPassedSub = (lastStep ? c.submissions?.find(s => s.stepId === lastStep.id && s.result === 'pass') : null) ||
                                   (c.submissions && c.submissions.length > 0 ? c.submissions[c.submissions.length - 1] : null);
             const passTime = lastPassedSub?.executedAt || c.lastExecutedAt;
