@@ -1386,18 +1386,18 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       const failedRounds = stats.failed_rounds;
       const testResult = rounds > 0 ? `${passedRounds}/${failedRounds}` : '0/0';
 
-      let status;
-      if (test.id === activeTestId && isVersionActive) {
-        status = 'in_progress';
-      } else if (rounds === 0) {
-        status = 'not_started';
-      } else if (failedRounds === 0 && passedRounds > 0) {
-        status = 'fully_passed';
-      } else if (failedRounds > 0) {
-        status = 'failed';
-      } else {
-        status = 'in_progress';
+      // Determine the result of the last completed test (not the current in-progress test)
+      let lastTestResult = null;
+      if (stats.testExecutions && stats.testExecutions.length > 0) {
+        lastTestResult = stats.testExecutions[0].result; // 'pass' or 'fail'
+      } else if ((stats.passedCycles && stats.passedCycles.length > 0) || (stats.failedCycles && stats.failedCycles.length > 0)) {
+        const lastPassTime = stats.passedCycles?.[0]?.executedAt ? new Date(stats.passedCycles[0].executedAt).getTime() : 0;
+        const lastFailTime = stats.failedCycles?.[0]?.executedAt ? new Date(stats.failedCycles[0].executedAt).getTime() : 0;
+        lastTestResult = lastPassTime >= lastFailTime ? 'pass' : 'fail';
       }
+
+      // Status of the last completed test: 'pass' | 'fail' | null
+      const status = lastTestResult;
 
       return {
         testId: test.id,
@@ -1414,6 +1414,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         submissions: (submissionsByTest[test.id] || []).sort((a, b) => new Date(a.executedAt) - new Date(b.executedAt)),
         pointsEarned,
         status,
+        lastTestResult,
         failedSteps,
         is_deleted: test.is_deleted ? 1 : 0
       };

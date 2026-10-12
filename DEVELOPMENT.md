@@ -1,6 +1,9 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000154**: Last Test Result Column in Points Report:
+  - **Renamed Status to Last Test Result**: In the Points Report user progress drill-down (`ReportsView.tsx`), renamed the table column header from **"Status"** to **"Last Test Result"**.
+  - **Status of Last Completed Test (Not Current In-Progress Test)**: Updated backend calculation in `server/routes/reports.js` (`GET /api/reports/user-progress/:userId`) and badge rendering in `ReportsView.tsx` to display the actual outcome of the user's last completed test execution (`✅ Pass` or `❌ Fail`), rather than reflecting the current in-progress round (`🔄 In Progress`) or aggregate multi-round failure state (`⚠️ Has Failures`). Tests with no completed executions in the period display `—`.
 - **v1.0000153**: Hardened Web Login Interface by Removing Generated Key Button:
   - **Removed Key Login from Logon Screen**: Removed the "🔑 Generated Key" mode button and key entry input from `LoginScreen.tsx` to eliminate security risks and confusion. Web dashboard access remains strictly protected by username and password credentials.
   - **Maintained Programmatic Key Access**: API keys remain exclusively dedicated for automated test agents, CLI pipelines, and script runners via HTTP headers (`X-API-Key`) and the programmatic REST logon endpoint.

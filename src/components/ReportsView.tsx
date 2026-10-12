@@ -2372,7 +2372,7 @@ const ReportsView: React.FC = () => {
                                     <thead>
                                       <tr>
                                         <th>Test</th>
-                                        <th>Status</th>
+                                        <th>Last Test Result</th>
                                         <th>Rounds</th>
                                         <th>Test Result (Pass/Fail)</th>
                                         <th>Points</th>
@@ -2385,17 +2385,15 @@ const ReportsView: React.FC = () => {
                                         const isTestHistoryOpen = expandedTestHistory.has(testHistoryKey);
                                         const canExpandTest = t.rounds > 0;
 
-                                        const statusBadge = (() => {
-                                          switch (t.status) {
-                                            case 'fully_passed':
-                                              return <span className="status-badge status-pass">✅ Fully Passed</span>;
-                                            case 'failed':
-                                              return <span className="status-badge status-fail">⚠️ Has Failures</span>;
-                                            case 'in_progress':
-                                              return <span className="status-badge" style={{ background: 'rgba(99,179,237,0.2)', color: '#63b3ed', borderColor: '#63b3ed' }}>🔄 In Progress</span>;
-                                            default:
-                                              return <span style={{ color: 'var(--text-muted)' }}>— Not Started</span>;
+                                        const lastTestResultBadge = (() => {
+                                          const result = t.lastTestResult || (t.status === 'pass' || t.status === 'fully_passed' ? 'pass' : (t.status === 'fail' || t.status === 'failed' ? 'fail' : null));
+                                          if (result === 'pass') {
+                                            return <span className="status-badge status-pass">✅ Pass</span>;
                                           }
+                                          if (result === 'fail') {
+                                            return <span className="status-badge status-fail">❌ Fail</span>;
+                                          }
+                                          return <span style={{ color: 'var(--text-muted)' }}>—</span>;
                                         })();
 
                                         const failedStepsSummary = t.failedSteps && t.failedSteps.length > 0
@@ -2404,10 +2402,12 @@ const ReportsView: React.FC = () => {
                                             ).join(', ')
                                           : '—';
 
+                                        const isLastTestFailed = (t.lastTestResult === 'fail' || t.status === 'fail' || t.status === 'failed');
+
                                         return (
                                           <React.Fragment key={t.testId}>
                                             <tr
-                                              className={`${t.status === 'failed' ? 'report-step-row-failed' : ''} ${isTestHistoryOpen ? 'report-step-row-selected' : ''}`}
+                                              className={`${isLastTestFailed ? 'report-step-row-failed' : ''} ${isTestHistoryOpen ? 'report-step-row-selected' : ''}`}
                                               style={canExpandTest ? { cursor: 'pointer', transition: 'background 0.15s' } : {}}
                                               onClick={canExpandTest ? () => toggleTestHistory(testHistoryKey) : undefined}
                                               title={canExpandTest ? (isTestHistoryOpen ? 'Click to collapse test history' : 'Click to view test history') : undefined}
@@ -2420,7 +2420,7 @@ const ReportsView: React.FC = () => {
                                                 )}
                                                 {t.testName}
                                               </td>
-                                              <td>{statusBadge}</td>
+                                              <td>{lastTestResultBadge}</td>
                                               <td>{t.rounds > 0 ? t.rounds : '—'}</td>
                                               <td>
                                                 {t.rounds > 0 ? (
