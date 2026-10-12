@@ -42,7 +42,7 @@ When calling any API endpoint, pass your API key in **one** of the following way
      "apiKey": "qc_your_api_key_here"
    }
    ```
-   *Note: In the QualityCheck web UI, testers can switch to the **"🔑 Generated Key"** tab on the login screen to log on directly using their key without needing a password.*
+   *Note: Generated keys are designed for automated test agents, CLI tools, and REST clients using the `X-API-Key` header or REST login endpoint. The web dashboard login screen is reserved for username/password authentication.*
 
 ### User Attribution & Valid Names
 When generating an API key, the admin assigns a valid name (or selects an existing user). Every action performed with this key (submitting results, uploading evidence, creating tests, earning points) is attributed to this user across the entire system (reports, test submissions, audit trails, and points ledger).

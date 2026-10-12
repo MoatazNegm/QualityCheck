@@ -1,6 +1,10 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000153**: Hardened Web Login Interface by Removing Generated Key Button:
+  - **Removed Key Login from Logon Screen**: Removed the "🔑 Generated Key" mode button and key entry input from `LoginScreen.tsx` to eliminate security risks and confusion. Web dashboard access remains strictly protected by username and password credentials.
+  - **Maintained Programmatic Key Access**: API keys remain exclusively dedicated for automated test agents, CLI pipelines, and script runners via HTTP headers (`X-API-Key`) and the programmatic REST logon endpoint.
+  - **Documentation Alignment**: Updated `API_DOCUMENTATION.md` and `server/docs/API_DOCUMENTATION.md` to reflect that web dashboard logon uses username/password credentials.
 - **v1.0000152**: Generated Key Revocation with User Account Preservation, Web & REST Key Logon, and Direct User Key Management:
   - **Key Revocation Without Removing User**: Revoking a generated API key (via `DELETE /api/api-keys/:id` or `DELETE /api/users/:id/revoke-key`) deletes only the key record from `api_keys`. The user account, assigned tests, round state, points ledger, and test history remain 100% intact.
   - **Immediate Logon Block & Session Invalidation**: The user is immediately blocked from logging on with the revoked key (returning `401: Invalid or revoked key`). Active browser sessions and tokens issued via that key are terminated on the next request.
