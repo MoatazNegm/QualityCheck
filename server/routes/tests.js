@@ -95,9 +95,20 @@ async function getBatchMonthlyRounds(userId, testIds) {
   return map;
 }
 
+// Helper to determine if the caller is authenticating via an API key (automated process)
+function isApiKeyUser(req) {
+  if (!req || !req.user) return false;
+  return Boolean(
+    req.user.isApiKey ||
+    req.user.apiKeyId ||
+    Boolean(req.headers && (req.headers['x-api-key'] || req.headers['api-key'] || req.headers['x-api-token']))
+  );
+}
+
 // Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests, 
 // and automatically skipping tests that were already completed or hard-failed in the current round.
-async function getActiveTestId(userId) {
+// Automated test processes using an API key are exempt from maximum monthly round limitations.
+async function getActiveTestId(userId, isApiKey = false) {
   const assigned = await getAssignedTestsOrdered(userId);
   if (assigned.length === 0) return null;
 
@@ -120,8 +131,8 @@ async function getActiveTestId(userId) {
   for (const r of failRows) hardStopMap[r.test_id] = true;
   
   const availableAssigned = assigned.filter(t => {
-    // 1. Skip if they reached the monthly limit
-    if ((monthlyRoundsMap[t.id] || 0) >= maxRounds) return false;
+    // 1. Skip if they reached the monthly limit (only for regular users logged in with username/password, NOT API key users)
+    if (!isApiKey && (monthlyRoundsMap[t.id] || 0) >= maxRounds) return false;
     // 2. Skip if they hard-failed this test in the current round
     if (hardStopMap[t.id]) return false;
     // 3. Skip if they fully completed this test in the current round
@@ -132,9 +143,11 @@ async function getActiveTestId(userId) {
   
   if (availableAssigned.length === 0) {
     // Check if they are completely locked out due to monthly limits
-    const allTestsMonthlyLocked = assigned.every(t => (monthlyRoundsMap[t.id] || 0) >= maxRounds);
-    if (allTestsMonthlyLocked) {
-      return null; // Truly locked out for the month
+    if (!isApiKey) {
+      const allTestsMonthlyLocked = assigned.every(t => (monthlyRoundsMap[t.id] || 0) >= maxRounds);
+      if (allTestsMonthlyLocked) {
+        return null; // Truly locked out for the month
+      }
     }
 
     // Otherwise, they finished or failed ALL tests in the CURRENT round, but the round was never bumped!
@@ -283,6 +296,7 @@ router.get('/', authenticateToken, async (req, res) => {
         isMonthlyLocked: false
       })));
     } else {
+      const isApiUser = isApiKeyUser(req);
       const maxRounds = await getMaxMonthlyTestRounds();
       const assigned = await getAssignedTestsOrdered(req.user.userId);
       const testIds = assigned.map(t => t.id);
@@ -293,17 +307,19 @@ router.get('/', authenticateToken, async (req, res) => {
       const completionMap = await getBatchCompletionCounts(req.user.userId, testIds, currentRound);
       const stepCountsMap = await getBatchStepCounts(testIds);
 
-      // Determine active test using pre-fetched monthly rounds
-      const availableAssigned = assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
+      // Determine active test using pre-fetched monthly rounds (bypassed for API key users)
+      const availableAssigned = isApiUser
+        ? assigned
+        : assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
       let activeTestId = null;
       if (availableAssigned.length > 0) {
         // Use getActiveTestId which now also uses batch internally
-        activeTestId = await getActiveTestId(req.user.userId);
+        activeTestId = await getActiveTestId(req.user.userId, isApiUser);
       }
 
       tests = await Promise.all(assigned.map(async t => {
         const mRounds = monthlyRoundsMap[t.id] || 0;
-        const isMonthlyLocked = mRounds >= maxRounds;
+        const isMonthlyLocked = isApiUser ? false : (mRounds >= maxRounds);
         const isLocked = isMonthlyLocked || (t.id !== activeTestId);
         const isActive = !isMonthlyLocked && (t.id === activeTestId);
         const stepCount = stepCountsMap[t.id] || 0;
@@ -316,7 +332,7 @@ router.get('/', authenticateToken, async (req, res) => {
           completed: stepCount > 0 && doneCount >= stepCount,
           totalPoints: await getTestTotalPoints(t.id),
           monthlyRounds: mRounds,
-          maxMonthlyRounds: maxRounds,
+          maxMonthlyRounds: isApiUser ? null : maxRounds,
           isMonthlyLocked: isMonthlyLocked
         };
       }));
@@ -332,7 +348,8 @@ router.get('/', authenticateToken, async (req, res) => {
 router.get('/active', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const activeTestId = await getActiveTestId(userId);
+    const isApiUser = isApiKeyUser(req);
+    const activeTestId = await getActiveTestId(userId, isApiUser);
     if (!activeTestId) {
       return res.json({ activeTest: null, message: 'No active tests available for the current round or limit reached' });
     }
@@ -374,6 +391,7 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
     const userId = req.user.userId;
+    const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
     const assigned = await getAssignedTestsOrdered(userId);
@@ -381,7 +399,7 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'No tests assigned' });
     }
 
-    const activeTestId = await getActiveTestId(userId);
+    const activeTestId = await getActiveTestId(userId, isApiUser);
     if (activeTestId !== testId) {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
@@ -402,8 +420,8 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
       await bumpRound(userId);
     }
 
-    // Evaluate active test ID considering monthly round limits
-    const nextActiveId = await getActiveTestId(userId);
+    // Evaluate active test ID considering monthly round limits (bypassed for API key)
+    const nextActiveId = await getActiveTestId(userId, isApiUser);
 
     res.json({ message: 'Test completed', active_test_id: nextActiveId });
   } catch (error) {
@@ -421,6 +439,7 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
     const userId = req.user.userId;
+    const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
     const assigned = await getAssignedTestsOrdered(userId);
@@ -428,13 +447,15 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Test is not assigned to this user' });
     }
 
-    const maxRounds = await getMaxMonthlyTestRounds();
-    const mRounds = await getTestMonthlyRounds(userId, testId);
-    if (mRounds >= maxRounds) {
-      return res.status(400).json({ error: 'This test has reached its maximum monthly round limit.' });
+    if (!isApiUser) {
+      const maxRounds = await getMaxMonthlyTestRounds();
+      const mRounds = await getTestMonthlyRounds(userId, testId);
+      if (mRounds >= maxRounds) {
+        return res.status(400).json({ error: 'This test has reached its maximum monthly round limit.' });
+      }
     }
 
-    const activeTestId = await getActiveTestId(userId);
+    const activeTestId = await getActiveTestId(userId, isApiUser);
     const currentRound = await getRound(userId);
     if (activeTestId !== testId && !(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
@@ -460,6 +481,7 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
     const userId = req.user.userId;
+    const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
     const assigned = await getAssignedTestsOrdered(userId);
@@ -467,7 +489,7 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'No tests assigned' });
     }
 
-    const activeTestId = await getActiveTestId(userId);
+    const activeTestId = await getActiveTestId(userId, isApiUser);
     if (activeTestId !== testId) {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
@@ -481,7 +503,7 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
       await bumpRound(userId);
     }
 
-    const nextActiveId = await getActiveTestId(userId);
+    const nextActiveId = await getActiveTestId(userId, isApiUser);
 
     res.json({ message: 'Test ended', active_test_id: nextActiveId });
   } catch (error) {

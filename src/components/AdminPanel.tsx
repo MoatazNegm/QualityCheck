@@ -4143,6 +4143,9 @@ const AdminPanel: React.FC = () => {
                         <li>
                           <strong>Global User Lock:</strong> If all assigned tests for a user reach this monthly limit, all tests become locked and a clear message is displayed to the tester: <em>"You have consumed all your allowed test rounds for this month. Please refer to management."</em>
                         </li>
+                        <li>
+                          <strong>Automated Process & API Key Exemption:</strong> Automated processes and scripts connecting via an API Key are completely exempt from this limit. Since API key usage indicates an automated, accurate workflow, no round limitations are applied.
+                        </li>
                       </ul>
                     </div>
 

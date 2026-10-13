@@ -11,7 +11,7 @@ interface Test {
   completed: boolean;
   totalPoints: number;
   monthlyRounds?: number;
-  maxMonthlyRounds?: number;
+  maxMonthlyRounds?: number | null;
   isMonthlyLocked?: boolean;
 }
 
@@ -147,7 +147,7 @@ const Dashboard: React.FC = () => {
     );
   }
 
-  const allMonthlyTestsLocked = !user?.isAdmin && tests.length > 0 && tests.every(t => t.isMonthlyLocked);
+  const allMonthlyTestsLocked = !user?.isAdmin && !user?.isApiKey && tests.length > 0 && tests.every(t => t.isMonthlyLocked);
 
   const handleCardClick = (test: Test) => {
     if (test.locked) return;
@@ -266,13 +266,17 @@ const Dashboard: React.FC = () => {
             <div className='test-card-footer'>
               {test.isActive && <span className='badge badge-current'>Current</span>}
               {test.completed && !test.isActive && <span className='badge badge-done'>Completed</span>}
-              {typeof test.monthlyRounds === 'number' && typeof test.maxMonthlyRounds === 'number' && (
+              {typeof test.monthlyRounds === 'number' && (
                 <span className={`badge ${test.isMonthlyLocked ? 'badge-monthly-locked' : 'badge-rounds'}`} style={{
                   background: test.isMonthlyLocked ? 'rgba(245, 101, 101, 0.2)' : 'rgba(255, 255, 255, 0.08)',
                   color: test.isMonthlyLocked ? '#feb2b2' : 'inherit',
                   border: test.isMonthlyLocked ? '1px solid #f56565' : '1px solid rgba(255, 255, 255, 0.15)'
                 }}>
-                  {test.isMonthlyLocked ? `🔒 Monthly Limit (${test.monthlyRounds}/${test.maxMonthlyRounds})` : `🔄 Rounds: ${test.monthlyRounds}/${test.maxMonthlyRounds}`}
+                  {test.isMonthlyLocked
+                    ? `🔒 Monthly Limit (${test.monthlyRounds}/${test.maxMonthlyRounds})`
+                    : (typeof test.maxMonthlyRounds === 'number'
+                        ? `🔄 Rounds: ${test.monthlyRounds}/${test.maxMonthlyRounds}`
+                        : `🔄 Rounds: ${test.monthlyRounds}`)}
                 </span>
               )}
               <span className='badge badge-points'>★ {test.totalPoints} pts</span>

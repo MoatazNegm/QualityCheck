@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000156**: Exemption of API Key Automated Processes from Maximum Test Rounds Limitation:
+  - **Unrestricted Automated Execution**: Automated testing processes and AI agents connecting via an API Key (`X-API-Key`, `api-key`, `Authorization: Bearer qc_...`, etc.) are now completely exempt from the maximum monthly rounds limitation (`max_monthly_test_rounds`). Tests will never be locked or skipped due to monthly round attempt counts when using an API Key.
+  - **Loop and Active Test Continuity**: In `server/routes/tests.js`, `getActiveTestId`, `GET /api/tests`, `GET /api/tests/active`, `POST /api/tests/:testId/complete`, and `POST /api/tests/:testId/end` now evaluate and preserve test availability and uninterrupted looping for API key users.
+  - **Test Activation Protection**: `POST /api/tests/:testId/activate` bypasses monthly round limits when called by an API key user, enabling on-demand test re-opening across any number of rounds.
+  - **Dashboard & Documentation Alignment**: Updated dashboard test cards and the all-tests-locked banner to ensure API key sessions never show false limit locks. Documented the exemption in the Admin Panel settings and REST API guides.
 - **v1.0000155**: Strict Version and Date Filtering for Steps Executed, Test Results, and Last Test Result:
   - **Eliminated False Successes on Incomplete Tests**: In `server/routes/reports.js` (`GET /api/reports/points`), replaced naive `has_fail = 0` round counting with a strict check joining countable test steps (`ts_count.countable_steps > 0`). A test round is only counted as passed when all countable steps of the test were passed (`COUNT(DISTINCT s.step_id) >= countable_steps` with no failures). In-progress or incomplete test rounds with 0 fails are no longer falsely tallied as passed rounds (`1/0` / "1 success").
   - **Synchronized User Progress Drill-Down Pass Criteria**: In `GET /api/reports/user-progress/:userId`, tracked distinct passed step IDs (`c.passedStepIds`) and required all countable steps to be executed and passed in the filtered version and date range before adding to `passedCycles` or `testExecutions`. Unfinished tests correctly report `—` in the `Last Test Result` column and `0/0` in `Test Result (Pass/Fail)`.

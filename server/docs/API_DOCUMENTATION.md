@@ -103,7 +103,9 @@ An AI testing agent typically executes the following workflow:
 curl -X GET http://localhost:4006/api/tests \
   -H "X-API-Key: qc_your_api_key_here"
 ```
-Returns assigned tests with execution and lock status (`isActive`, `locked`, `completed`, `monthlyRounds`, `totalPoints`).
+Returns assigned tests with execution and loop status (`isActive`, `locked`, `completed`, `monthlyRounds`, `totalPoints`).
+
+> **Note on Maximum Rounds per Test:** Automated processes and AI test runners calling the API with an API key are **completely exempt** from monthly maximum round limitations (`max_monthly_test_rounds`). Tests will never be locked due to monthly attempt counts when executing via API key.
 
 ---
 

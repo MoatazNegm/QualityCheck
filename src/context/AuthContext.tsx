@@ -6,6 +6,8 @@ interface User {
   isAdmin: boolean;
   isSuspended: boolean;
   userGroups: string[];
+  isApiKey?: boolean;
+  apiKeyId?: number | null;
 }
 
 interface AuthContextType {

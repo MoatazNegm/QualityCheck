@@ -30,7 +30,7 @@ const authenticateToken = async (req, res, next) => {
   const cookies = parseCookies(req);
 
   // 1. Check for API key in X-API-Key header, Authorization header, query, or cookies
-  const apiKeyHeader = req.headers['x-api-key'];
+  const apiKeyHeader = req.headers['x-api-key'] || req.headers['api-key'] || req.headers['x-api-token'];
   const authHeader = req.headers['authorization'];
   const queryApiKey = req.query && (req.query.api_key || req.query.apiKey || req.query.key);
   const cookieApiKey = cookies['api_key'] || cookies['apiKey'] || cookies['qc_key'];
@@ -38,7 +38,7 @@ const authenticateToken = async (req, res, next) => {
   let candidateApiKey = null;
   if (apiKeyHeader && typeof apiKeyHeader === 'string' && apiKeyHeader.trim()) {
     candidateApiKey = apiKeyHeader.trim();
-  } else if (authHeader && (authHeader.startsWith('Bearer qc_') || authHeader.startsWith('ApiKey ') || authHeader.startsWith('apikey '))) {
+  } else if (authHeader && (authHeader.startsWith('Bearer qc_') || authHeader.startsWith('ApiKey ') || authHeader.startsWith('apikey ') || authHeader.startsWith('Token qc_'))) {
     candidateApiKey = authHeader.split(' ')[1]?.trim();
   } else if (authHeader && authHeader.trim().startsWith('qc_')) {
     candidateApiKey = authHeader.trim();

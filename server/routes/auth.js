@@ -312,6 +312,8 @@ router.get('/verify', async (req, res) => {
         id: decoded.userId,
         isAdmin: !!decoded.isAdmin,
         isSuspended: !!decoded.isSuspended,
+        isApiKey: !!decoded.isApiKey,
+        apiKeyId: decoded.apiKeyId || null,
         userGroups
       }
     });
