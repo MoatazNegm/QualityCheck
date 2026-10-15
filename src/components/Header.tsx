@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 
 const API_BASE = '';
 
 const Header: React.FC = () => {
   const { user, token, logout, changePassword } = useAuth();
+  const { currentApp, isAdminPanelMode } = useApp();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -21,9 +23,11 @@ const Header: React.FC = () => {
     let mounted = true;
     const fetchVersion = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/versions/current`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+        const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+        if (currentApp) {
+          headers['x-app-id'] = String(currentApp.id);
+        }
+        const res = await fetch(`${API_BASE}/api/versions/current`, { headers });
         if (res.ok && mounted) {
           const data = await res.json();
           setCurrentVersion(data.version ? data.version.name : null);
@@ -35,7 +39,7 @@ const Header: React.FC = () => {
     fetchVersion();
     const interval = setInterval(fetchVersion, 5000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [token, currentApp]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -84,7 +88,47 @@ const Header: React.FC = () => {
               QualityCheck
             </NavLink>
           </div>
-          <div className='header-center'>
+          <div className='header-center' style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {isAdminPanelMode ? (
+              <span
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  color: '#c084fc',
+                  background: 'rgba(168, 85, 247, 0.15)',
+                  border: '1px solid rgba(168, 85, 247, 0.35)',
+                  padding: '0.4rem 0.9rem',
+                  borderRadius: '999px',
+                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <span>⚙️</span>
+                <span>Admin Panel (Global)</span>
+              </span>
+            ) : currentApp ? (
+              <span
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  color: '#93c5fd',
+                  background: 'rgba(59, 130, 246, 0.15)',
+                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  padding: '0.4rem 0.9rem',
+                  borderRadius: '999px',
+                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+                title={`Currently working on ${currentApp.name}`}
+              >
+                <span>📱</span>
+                <span>{currentApp.name}</span>
+              </span>
+            ) : null}
             <span className='current-version-badge' title='The version users are currently testing'>
               {currentVersion ? `Version: ${currentVersion}` : 'No version set'}
             </span>

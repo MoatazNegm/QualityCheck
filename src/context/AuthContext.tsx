@@ -13,7 +13,9 @@ interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password?: string) => Promise<void>;
+  assignedApps: any[];
+  allApps: any[];
+  login: (username: string, password?: string) => Promise<any>;
   loginWithKey: (apiKey: string) => Promise<void>;
   logout: () => void;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
@@ -36,6 +38,8 @@ const API_BASE = '';
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [assignedApps, setAssignedApps] = useState<any[]>([]);
+  const [allApps, setAllApps] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Sync token to document.cookie helper
@@ -81,6 +85,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+        if (data.assignedApps) setAssignedApps(data.assignedApps);
+        if (data.allApps) setAllApps(data.allApps);
         syncCookieToken(tok);
       } else {
         localStorage.removeItem('token');
@@ -108,6 +114,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
+        if (data.assignedApps) setAssignedApps(data.assignedApps);
+        if (data.allApps) setAllApps(data.allApps);
         syncCookieToken(token);
       } else {
         localStorage.removeItem('token');
@@ -126,10 +134,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return loginWithKey(username);
     }
 
+    const savedAppId = localStorage.getItem('qc_current_app_id');
+    const savedAdminMode = localStorage.getItem('qc_admin_panel_mode');
+
     const response = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.trim(), password: password || '' })
+      body: JSON.stringify({
+        username: username.trim(),
+        password: password || '',
+        selectedApp: savedAdminMode === 'true' ? 'admin' : (savedAppId || undefined)
+      })
     });
 
     if (!response.ok) {
@@ -140,8 +155,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const data = await response.json();
     setToken(data.token);
     setUser(data.user);
+    if (data.assignedApps) setAssignedApps(data.assignedApps);
+    if (data.allApps) setAllApps(data.allApps);
+
+    // If user is non-admin, ensure admin panel mode is false and current app is one of their assigned apps
+    if (!data.user.isAdmin) {
+      localStorage.setItem('qc_admin_panel_mode', 'false');
+      const assigned = data.assignedApps || [];
+      const hasSaved = assigned.some((a: any) => String(a.id) === String(savedAppId));
+      if (!hasSaved && assigned.length > 0) {
+        localStorage.setItem('qc_current_app_id', String(assigned[0].id));
+      }
+    } else {
+      // If admin and no mode saved yet, default to admin panel mode
+      if (!savedAdminMode) {
+        localStorage.setItem('qc_admin_panel_mode', 'true');
+      }
+    }
+
     localStorage.setItem('token', data.token);
     syncCookieToken(data.token);
+    return data;
   };
 
   const loginWithKey = async (apiKey: string) => {
@@ -164,6 +198,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const data = await response.json();
     setToken(data.token);
     setUser(data.user);
+    if (data.assignedApps) setAssignedApps(data.assignedApps);
+    if (data.allApps) setAllApps(data.allApps);
     localStorage.setItem('token', data.token);
     syncCookieToken(data.token);
   };
@@ -171,7 +207,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const logout = () => {
     setToken(null);
     setUser(null);
+    setAssignedApps([]);
+    setAllApps([]);
     localStorage.removeItem('token');
+    localStorage.removeItem('qc_admin_panel_mode');
+    localStorage.removeItem('qc_current_app_id');
+    sessionStorage.clear();
     syncCookieToken(null);
     fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' }).catch(() => {});
   };
@@ -193,7 +234,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, loginWithKey, logout, changePassword, refreshUser, isLoading }}>
+    <AuthContext.Provider value={{ user, token, assignedApps, allApps, login, loginWithKey, logout, changePassword, refreshUser, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

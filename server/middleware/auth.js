@@ -58,6 +58,7 @@ const authenticateToken = async (req, res, next) => {
       const keyHash = crypto.createHash('sha256').update(candidateApiKey).digest('hex');
       const keyRow = await testsDb.prepare(`
         SELECT ak.id as key_id, ak.name as key_name, ak.key_prefix, ak.role as key_role, ak.is_active,
+               COALESCE(ak.app_id, 1) as app_id,
                u.id as user_id, u.username, u.is_admin, u.is_suspended, u.user_groups
         FROM api_keys ak
         JOIN users u ON ak.user_id = u.id
@@ -101,8 +102,14 @@ const authenticateToken = async (req, res, next) => {
         apiKeyId: keyRow.key_id,
         apiKeyName: keyRow.key_name,
         role: role,
-        isApiKey: true
+        isApiKey: true,
+        appId: keyRow.app_id || 1,
+        assignedApps: [keyRow.app_id || 1]
       };
+
+      if (!req.headers['x-app-id'] && keyRow.app_id) {
+        req.headers['x-app-id'] = String(keyRow.app_id);
+      }
 
       // Asynchronously record last_used_at without awaiting
       Promise.resolve(

@@ -100,10 +100,24 @@ An AI testing agent typically executes the following workflow:
 
 ### 3.1 List Assigned Tests
 ```bash
-curl -X GET http://localhost:4006/api/tests \
+curl -X GET "http://localhost:4006/api/tests?appId=all" \
   -H "X-API-Key: qc_your_api_key_here"
 ```
-Returns assigned tests with execution and loop status (`isActive`, `locked`, `completed`, `monthlyRounds`, `totalPoints`).
+Or specify a specific application via query param or header:
+```bash
+curl -X GET "http://localhost:4006/api/tests?appId=1" \
+  -H "X-API-Key: qc_your_api_key_here"
+# or
+curl -X GET http://localhost:4006/api/tests \
+  -H "X-API-Key: qc_your_api_key_here" \
+  -H "X-App-Id: all"
+```
+Returns assigned tests with execution and loop status (`isActive`, `locked`, `completed`, `monthlyRounds`, `totalPoints`) along with application identity (`app_id`, `app_name`).
+
+- **Multi-App Scope**: Passing `?appId=all` or `X-App-Id: all` returns all tests across all applications assigned to the user (or all applications for administrators).
+- **Role Permissions**:
+  - **Testers**: Automatically assigned to their current loop-active test; non-active tests are locked (`locked: true`).
+  - **Developers & Admins**: Can start and execute any assigned test at any time (`locked: false`).
 
 > **Note on Maximum Rounds per Test:** Automated processes and AI test runners calling the API with an API key are **completely exempt** from monthly maximum round limitations (`max_monthly_test_rounds`). Tests will never be locked due to monthly attempt counts when executing via API key.
 
@@ -514,7 +528,7 @@ Content-Type: application/json
 ```
 *Note: Newly created testers are automatically assigned all active system tests.*
 
-#### Update User
+#### Update User Details & App Assignments
 ```http
 PUT /api/users/{id}
 Content-Type: application/json
@@ -522,9 +536,11 @@ Content-Type: application/json
 {
   "username": "john_tester_updated",
   "isAdmin": false,
-  "user_groups": ["testers", "developers"]
+  "user_groups": ["testers", "developers"],
+  "appIds": [1, 2]
 }
 ```
+`appIds` assigns or reassigns the application suites the user has permission to test and view.
 
 #### Suspend or Reactivate User
 ```http
@@ -770,6 +786,62 @@ Activates the version as the default system version for incoming test runs.
 DELETE /api/versions/{id}
 ```
 Deletes a release version (only permitted if no test results or points are attached to it).
+
+---
+
+### 6.7 Application Management
+
+#### List Applications
+```http
+GET /api/apps
+```
+Query parameters:
+- `include_archived=true`: Include soft-deleted/archived applications.
+
+#### Create Application
+```http
+POST /api/apps
+Content-Type: application/json
+
+{
+  "name": "BillingPortal",
+  "description": "Billing and invoicing microservices"
+}
+```
+
+#### Update Application
+```http
+PUT /api/apps/{id}
+Content-Type: application/json
+
+{
+  "name": "BillingPortal v2",
+  "description": "Updated billing portal suite"
+}
+```
+
+#### Suspend / Reactivate Application
+```http
+PATCH /api/apps/{id}/suspend
+Content-Type: application/json
+
+{
+  "is_suspended": 1
+}
+```
+*(Set `0` to reactivate. Suspended apps remain visible in administrative reports, but users cannot log in to work on them).*
+
+#### Archive Application (Soft-Delete)
+```http
+DELETE /api/apps/{id}
+```
+Safely archives the application without deleting historical test results, rounds, points, or audit records. The application is moved to the archive and excluded from active user sessions.
+
+#### Restore Archived Application
+```http
+POST /api/apps/{id}/restore
+```
+Restores an archived application back to active status.
 
 ---
 

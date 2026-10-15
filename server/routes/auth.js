@@ -49,6 +49,65 @@ async function ensureAdminUser() {
   }
 }
 
+// Query apps assigned to a user by username (used by logon screen to determine available apps)
+router.get('/user-apps', async (req, res) => {
+  try {
+    const { dbReady } = require('../db/db');
+    if (dbReady) await dbReady;
+
+    const username = req.query.username;
+    if (!username || !String(username).trim()) {
+      return res.json({ exists: false, apps: [] });
+    }
+    const cleanUsername = String(username).trim();
+    const user = await usersDb.prepare('SELECT id, username, is_admin, user_groups, is_suspended FROM users WHERE LOWER(username) = LOWER(?)').get(cleanUsername);
+
+    if (!user) {
+      return res.json({ exists: false, apps: [] });
+    }
+
+    let groups = [];
+    try {
+      groups = typeof user.user_groups === 'string' ? JSON.parse(user.user_groups) : (user.user_groups || []);
+    } catch {
+      groups = [];
+    }
+    const isAdmin = Boolean(user.is_admin || groups.includes('admins'));
+
+    const allApps = await testsDb.prepare(`
+      SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
+      FROM apps
+      WHERE COALESCE(is_deleted, 0) = 0
+      ORDER BY id
+    `).all();
+
+    if (isAdmin) {
+      return res.json({
+        exists: true,
+        isAdmin: true,
+        apps: allApps
+      });
+    }
+
+    const userApps = await testsDb.prepare(`
+      SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+      FROM apps a
+      JOIN user_apps ua ON a.id = ua.app_id
+      WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
+      ORDER BY a.id
+    `).all(user.id);
+
+    return res.json({
+      exists: true,
+      isAdmin: false,
+      apps: userApps
+    });
+  } catch (error) {
+    console.error('user-apps error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Login endpoint - supports both credentials (username + password) and generated API keys
 router.post('/login', async (req, res) => {
   try {
@@ -113,11 +172,50 @@ router.post('/login', async (req, res) => {
         groups = keyRow.is_admin ? ['admins'] : ['testers'];
       }
 
+      const isAdmin = !!keyRow.is_admin || role === 'admin';
+      const allApps = await testsDb.prepare(`
+        SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
+        FROM apps
+        WHERE COALESCE(is_deleted, 0) = 0
+        ORDER BY id
+      `).all();
+
+      let userApps = isAdmin ? allApps : await testsDb.prepare(`
+        SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+        FROM apps a
+        JOIN user_apps ua ON a.id = ua.app_id
+        WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
+        ORDER BY a.id
+      `).all(keyRow.user_id);
+
+      if (!isAdmin && userApps.length === 0) {
+        const defaultApp = await testsDb.prepare('SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended FROM apps WHERE id = 1 AND COALESCE(is_deleted, 0) = 0').get();
+        if (defaultApp) userApps = [defaultApp];
+      }
+
+      const reqSelectedApp = (req.body && req.body.selectedApp !== undefined && req.body.selectedApp !== '') ? req.body.selectedApp : (req.body && req.body.appId !== undefined ? req.body.appId : undefined);
+      const resolvedSelectedApp = reqSelectedApp !== undefined ? reqSelectedApp : (isAdmin ? 'admin' : (userApps[0]?.id || 1));
+
+      if (resolvedSelectedApp !== 'admin') {
+        const targetAppId = parseInt(resolvedSelectedApp, 10);
+        if (!isNaN(targetAppId)) {
+          const targetApp = await testsDb.prepare('SELECT id, name, is_suspended, is_deleted FROM apps WHERE id = ?').get(targetAppId);
+          if (targetApp) {
+            if (targetApp.is_deleted) {
+              return res.status(403).json({ error: 'The selected application is archived or does not exist.' });
+            }
+            if (targetApp.is_suspended && !isAdmin) {
+              return res.status(403).json({ error: `Application "${targetApp.name}" is currently suspended. Access is restricted to administrators.` });
+            }
+          }
+        }
+      }
+
       const token = jwt.sign(
         {
           userId: keyRow.user_id,
           username: keyRow.username,
-          isAdmin: !!keyRow.is_admin || role === 'admin',
+          isAdmin: isAdmin,
           isSuspended: !!keyRow.is_suspended,
           userGroups: groups,
           apiKeyId: keyRow.key_id,
@@ -157,16 +255,19 @@ router.post('/login', async (req, res) => {
         user: {
           id: keyRow.user_id,
           username: keyRow.username,
-          isAdmin: !!keyRow.is_admin || role === 'admin',
+          isAdmin: isAdmin,
           isSuspended: !!keyRow.is_suspended,
           userGroups: groups,
           isApiKey: true,
           apiKeyId: keyRow.key_id
-        }
+        },
+        assignedApps: userApps,
+        selectedApp: resolvedSelectedApp
       });
     }
 
     // 2. Standard username + password login
+    const { selectedApp, appId } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
     }
@@ -250,15 +351,56 @@ router.post('/login', async (req, res) => {
     res.cookie('token', token, cookieOptions);
     res.cookie('auth_token', token, cookieOptions);
 
+    const isAdmin = !!user.is_admin || groups.includes('admins');
+    const allApps = await testsDb.prepare(`
+      SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
+      FROM apps
+      WHERE COALESCE(is_deleted, 0) = 0
+      ORDER BY id
+    `).all();
+
+    let userApps = isAdmin ? allApps : await testsDb.prepare(`
+      SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+      FROM apps a
+      JOIN user_apps ua ON a.id = ua.app_id
+      WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
+      ORDER BY a.id
+    `).all(user.id);
+
+    if (!isAdmin && userApps.length === 0) {
+      const defaultApp = await testsDb.prepare('SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended FROM apps WHERE id = 1 AND COALESCE(is_deleted, 0) = 0').get();
+      if (defaultApp) userApps = [defaultApp];
+    }
+
+    const reqSelectedApp = (req.body && req.body.selectedApp !== undefined && req.body.selectedApp !== '') ? req.body.selectedApp : (req.body && req.body.appId !== undefined ? req.body.appId : undefined);
+    const resolvedSelectedApp = reqSelectedApp !== undefined ? reqSelectedApp : (isAdmin ? 'admin' : (userApps[0]?.id || 1));
+
+    if (resolvedSelectedApp !== 'admin') {
+      const targetAppId = parseInt(resolvedSelectedApp, 10);
+      if (!isNaN(targetAppId)) {
+        const targetApp = await testsDb.prepare('SELECT id, name, is_suspended, is_deleted FROM apps WHERE id = ?').get(targetAppId);
+        if (targetApp) {
+          if (targetApp.is_deleted) {
+            return res.status(403).json({ error: 'The selected application is archived or does not exist.' });
+          }
+          if (targetApp.is_suspended && !isAdmin) {
+            return res.status(403).json({ error: `Application "${targetApp.name}" is currently suspended. Access is restricted to administrators.` });
+          }
+        }
+      }
+    }
+
     res.json({
       token,
       user: {
         id: user.id,
         username: user.username,
-        isAdmin: !!user.is_admin,
+        isAdmin: isAdmin,
         isSuspended: !!user.is_suspended,
         userGroups: groups
-      }
+      },
+      assignedApps: userApps,
+      selectedApp: resolvedSelectedApp
     });
   } catch (error) {
     console.error('Login route error:', error);
@@ -305,17 +447,35 @@ router.get('/verify', async (req, res) => {
     }
 
     const userGroups = decoded.userGroups || (decoded.isAdmin ? ['admins'] : ['testers']);
+    const isAdmin = Boolean(decoded.isAdmin || userGroups.includes('admins'));
+    const allApps = await testsDb.prepare(`
+      SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
+      FROM apps
+      WHERE COALESCE(is_deleted, 0) = 0
+      ORDER BY id
+    `).all();
+
+    const userApps = isAdmin ? allApps : await testsDb.prepare(`
+      SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+      FROM apps a
+      JOIN user_apps ua ON a.id = ua.app_id
+      WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
+      ORDER BY a.id
+    `).all(decoded.userId);
+
     res.json({
       valid: true,
       user: {
         ...decoded,
         id: decoded.userId,
-        isAdmin: !!decoded.isAdmin,
+        isAdmin: isAdmin,
         isSuspended: !!decoded.isSuspended,
         isApiKey: !!decoded.isApiKey,
         apiKeyId: decoded.apiKeyId || null,
         userGroups
-      }
+      },
+      assignedApps: userApps,
+      allApps: isAdmin ? allApps : undefined
     });
   } catch (error) {
     res.status(401).json({ error: error.message || 'Invalid token' });

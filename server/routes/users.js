@@ -28,10 +28,48 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
       console.warn('Non-fatal: could not query api_keys for users list:', kErr.message);
     }
 
+    // Batch query assigned apps for all users
+    let appsByUser = {};
+    try {
+      const allUserApps = await testsDb.prepare(`
+        SELECT ua.user_id, a.id, a.name, a.description
+        FROM user_apps ua
+        JOIN apps a ON ua.app_id = a.id
+        ORDER BY a.id
+      `).all();
+      for (const ua of allUserApps) {
+        if (!appsByUser[ua.user_id]) appsByUser[ua.user_id] = [];
+        appsByUser[ua.user_id].push({ id: ua.id, name: ua.name, description: ua.description });
+      }
+    } catch (appErr) {
+      console.warn('Non-fatal: could not query user_apps:', appErr.message);
+    }
+
+    // Batch query test assignments by app for all users
+    let testsByUserAndApp = {};
+    try {
+      const allAssignments = await testsDb.prepare(`
+        SELECT ta.user_id, ta.test_id, COALESCE(t.app_id, 1) as app_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE COALESCE(t.is_deleted, 0) = 0
+      `).all();
+      for (const ta of allAssignments) {
+        if (!testsByUserAndApp[ta.user_id]) testsByUserAndApp[ta.user_id] = {};
+        if (!testsByUserAndApp[ta.user_id][ta.app_id]) testsByUserAndApp[ta.user_id][ta.app_id] = [];
+        testsByUserAndApp[ta.user_id][ta.app_id].push(ta.test_id);
+      }
+    } catch (testErr) {
+      console.warn('Non-fatal: could not query assignments by app:', testErr.message);
+    }
+
     const formatted = users.map(u => ({
       ...u,
       user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers'])),
-      api_keys: keysByUser[u.id] || []
+      api_keys: keysByUser[u.id] || [],
+      assigned_apps: (appsByUser[u.id] || []).map(a => a.id),
+      assigned_app_objects: appsByUser[u.id] || [],
+      assigned_tests_by_app: testsByUserAndApp[u.id] || {}
     }));
     
     res.json(formatted);
@@ -262,7 +300,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // Create user (admin only)
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { username, password, isAdmin, user_groups } = req.body;
+    const { username, password, isAdmin, user_groups, appIds, testAssignmentsByApp } = req.body;
     
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
@@ -283,17 +321,28 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 
     const newUserId = result.lastInsertRowid;
 
-    // Auto-assign all existing tests to new non-admin users (testers or developers)
-    if (!isAdmin) {
-      const allTests = await testsDb.prepare('SELECT id FROM tests').all();
-      const batch = allTests.map(test => ({
-        sql: 'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)',
-        args: [test.id, newUserId]
-      }));
-      await testsDb.client.batch(batch, 'write');
+    // Assign apps (default to App 1 if none specified)
+    let selectedAppIds = Array.isArray(appIds) && appIds.length > 0 ? appIds.map(id => parseInt(id, 10)) : [1];
+
+    for (const appId of selectedAppIds) {
+      await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(newUserId, appId);
+
+      // Determine tests to assign for this app
+      let testsToAssign = [];
+      if (testAssignmentsByApp && Array.isArray(testAssignmentsByApp[appId])) {
+        testsToAssign = testAssignmentsByApp[appId];
+      } else {
+        // By default, assign all non-deleted tests of this app
+        const appTests = await testsDb.prepare('SELECT id FROM tests WHERE (app_id = ? OR app_id IS NULL) AND COALESCE(is_deleted, 0) = 0').all(appId);
+        testsToAssign = appTests.map(t => t.id);
+      }
+
+      for (const tId of testsToAssign) {
+        await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(tId, newUserId);
+      }
     }
 
-    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0, user_groups: groups });
+    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0, user_groups: groups, appIds: selectedAppIds });
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Username already exists' });
@@ -304,10 +353,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 
 const uploadDir = path.join(dataDir, 'uploads');
 
-// Delete user (admin only) — cascades every piece of data tied to the user so it
-// is as if they were never added: their results, assignments, loop state, points
-// ledger, sessions, the user row itself, and every uploaded config file they
-// submitted (so the failure attachments are removed too).
+// Delete user (admin only) — cascades every piece of data tied to the user
 router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -334,6 +380,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
     await testsDb.client.batch([
       { sql: 'DELETE FROM user_sessions WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM api_keys WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM user_apps WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM test_results WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM test_submissions WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM points_log WHERE user_id = ?', args: [userId] },
@@ -370,11 +417,11 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Update user role and groups (admin only)
+// Update user role, groups, assigned apps and tests (admin only)
 router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_admin, user_groups } = req.body;
+    const { is_admin, user_groups, appIds, testAssignmentsByApp } = req.body;
     
     let groups = user_groups;
     if (!groups || !Array.isArray(groups)) {
@@ -386,6 +433,39 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
     await usersDb.prepare(
       'UPDATE users SET is_admin = ?, user_groups = ? WHERE id = ?'
     ).run(isAdminCalc ? 1 : 0, groupsJson, id);
+
+    // If appIds provided, update user_apps and test assignments
+    if (Array.isArray(appIds)) {
+      const targetAppIds = appIds.map(a => typeof a === 'object' && a !== null ? parseInt(a.id, 10) : parseInt(a, 10)).filter(n => !isNaN(n));
+      if (targetAppIds.length > 0) {
+        const placeholders = targetAppIds.map(() => '?').join(',');
+        await testsDb.prepare(`DELETE FROM user_apps WHERE user_id = ? AND app_id NOT IN (${placeholders})`).run(id, ...targetAppIds);
+        await testsDb.prepare(`
+          DELETE FROM test_assignments WHERE user_id = ? AND test_id IN (
+            SELECT id FROM tests WHERE app_id NOT IN (${placeholders})
+          )
+        `).run(id, ...targetAppIds);
+      } else {
+        await testsDb.prepare('DELETE FROM user_apps WHERE user_id = ?').run(id);
+        await testsDb.prepare('DELETE FROM test_assignments WHERE user_id = ?').run(id);
+      }
+
+      for (const appId of targetAppIds) {
+        await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(id, appId);
+
+        if (testAssignmentsByApp && Array.isArray(testAssignmentsByApp[appId])) {
+          await testsDb.prepare(`
+            DELETE FROM test_assignments WHERE user_id = ? AND test_id IN (
+              SELECT id FROM tests WHERE (app_id = ? OR app_id IS NULL)
+            )
+          `).run(id, appId);
+
+          for (const tId of testAssignmentsByApp[appId]) {
+            await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(tId, id);
+          }
+        }
+      }
+    }
     
     res.json({ message: 'User updated successfully', user_groups: groups, is_admin: isAdminCalc ? 1 : 0 });
   } catch (error) {
@@ -483,7 +563,12 @@ router.post('/:id/generate-key', authenticateToken, requireAdmin, async (req, re
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { name, role } = req.body || {};
+    const { name, role, appId } = req.body || {};
+    const targetAppId = parseInt(appId || req.headers['x-app-id'], 10) || 1;
+
+    // Ensure user has access to target application
+    await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(user.id, targetAppId);
+
     const validRoles = ['tester', 'developer', 'admin'];
     let defaultRole = user.is_admin ? 'admin' : 'tester';
     try {
@@ -500,9 +585,9 @@ router.post('/:id/generate-key', authenticateToken, requireAdmin, async (req, re
     const keyHash = crypto.createHash('sha256').update(rawApiKey).digest('hex');
 
     const result = await testsDb.prepare(`
-      INSERT INTO api_keys (name, key_hash, key_prefix, user_id, role, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(keyName, keyHash, keyPrefix, user.id, chosenRole);
+      INSERT INTO api_keys (name, key_hash, key_prefix, user_id, role, is_active, app_id)
+      VALUES (?, ?, ?, ?, ?, 1, ?)
+    `).run(keyName, keyHash, keyPrefix, user.id, chosenRole, targetAppId);
 
     res.status(201).json({
       message: `API key generated successfully for user "${user.username}".`,
@@ -514,6 +599,7 @@ router.post('/:id/generate-key', authenticateToken, requireAdmin, async (req, re
         role: chosenRole,
         user_id: user.id,
         username: user.username,
+        app_id: targetAppId,
         is_active: 1,
         created_at: new Date().toISOString()
       }

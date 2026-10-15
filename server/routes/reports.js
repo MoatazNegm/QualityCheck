@@ -163,6 +163,21 @@ function getDateRange(preset) {
   };
 }
 
+function parseAppIds(req) {
+  const raw = req.query.appIds || req.query.appId || req.headers['x-app-id'];
+  if (!raw || raw === 'all') return [];
+  return String(raw).split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+}
+
+async function getAppNamesMap() {
+  try {
+    const apps = await testsDb.prepare('SELECT id, name FROM apps WHERE COALESCE(is_deleted, 0) = 0').all();
+    return Object.fromEntries(apps.map(a => [a.id, a.name]));
+  } catch (e) {
+    return { 1: 'TopStor' };
+  }
+}
+
 // Get admin user report for a date range (admin, developer, or tester self-scoped)
 router.get('/user-report', authenticateToken, requireReportAccess, async (req, res) => {
   try {
@@ -173,6 +188,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const versionIds = versionIdsRaw
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate, and endDate are required' });
@@ -207,33 +224,47 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const versionFilter = versionIds.length > 0 ? ' AND pl.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
     const versionFilterSub = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
 
+    const appFilterPl = appIds.length > 0 ? ' AND pl.app_id IN (' + appIds.map(() => '?').join(',') + ') ' : ' ';
+    const appFilterSub = appIds.length > 0 ? ' AND s.app_id IN (' + appIds.map(() => '?').join(',') + ') ' : ' ';
+    const appFilterT = appIds.length > 0 ? ' AND t.app_id IN (' + appIds.map(() => '?').join(',') + ') ' : ' ';
+
     const totalsRow = await testsDb.prepare(
       `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
        FROM points_log pl
-       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter}`
-    ).all(...userIds, start, end, ...versionIds);
+       WHERE pl.user_id IN (${placeholders}) AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilter} ${appFilterPl}`
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
     const totals = totalsRow[0];
 
     const rawAssignedTests = await testsDb.prepare(
-      `SELECT DISTINCT t.id, t.name
+      `SELECT DISTINCT t.id, t.name, COALESCE(t.app_id, 1) as app_id
        FROM tests t
        WHERE COALESCE(t.is_deleted, 0) = 0
+         ${appFilterT}
          AND t.id IN (
            SELECT test_id FROM test_assignments WHERE user_id IN (${placeholders})
            UNION
-           SELECT s.test_id FROM test_submissions s WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+           SELECT s.test_id FROM test_submissions s WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}
          )
        ORDER BY t.name, t.id`
-    ).all(...userIds, ...userIds, start, end, ...versionIds);
+    ).all(
+      ...(appIds.length > 0 ? appIds : []),
+      ...userIds,
+      ...userIds,
+      start,
+      end,
+      ...versionIds,
+      ...(appIds.length > 0 ? appIds : [])
+    );
 
     const nameToTestIdsMap = {};
     const uniqueTests = [];
     for (const t of rawAssignedTests) {
-      if (!nameToTestIdsMap[t.name]) {
-        nameToTestIdsMap[t.name] = [];
+      const key = `${t.app_id || 1}:${t.name}`;
+      if (!nameToTestIdsMap[key]) {
+        nameToTestIdsMap[key] = [];
         uniqueTests.push(t);
       }
-      nameToTestIdsMap[t.name].push(t.id);
+      nameToTestIdsMap[key].push(t.id);
     }
 
     const allUsersRows = await usersDb.prepare('SELECT id, username FROM users').all();
@@ -242,9 +273,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     const roundsMapRows = await testsDb.prepare(
       `SELECT s.test_id, COUNT(DISTINCT s.user_id || '-' || s.round_id) as rounds
        FROM test_submissions s
-       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}
        GROUP BY s.test_id`
-    ).all(...userIds, start, end, ...versionIds);
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
     const roundsMap = Object.fromEntries(roundsMapRows.map(r => [r.test_id, r.rounds]));
 
     const failedSubmissions = await testsDb.prepare(
@@ -266,9 +297,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
        JOIN test_steps ts ON ts.id = s.step_id
        LEFT JOIN users u ON u.id = s.user_id
        WHERE s.user_id IN (${placeholders}) AND s.result = 'fail'
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}
        ORDER BY s.test_id, ts.step_number, s.executed_at DESC`
-    ).all(...userIds, start, end, ...versionIds);
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
 
     const failedSubmissionsByTest = {};
     for (const row of failedSubmissions) {
@@ -303,9 +334,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
          SUM(CASE WHEN s.result = 'fail' THEN 1 ELSE 0 END) as fails
        FROM test_submissions s
        JOIN test_steps ts ON ts.id = s.step_id
-       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+       WHERE s.user_id IN (${placeholders}) AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}
        GROUP BY s.test_id`
-    ).all(...userIds, start, end, ...versionIds);
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
     const testLevelStats = {};
     for (const row of stepData) {
       testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
@@ -319,9 +350,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       `SELECT s.user_id, s.test_id, s.round_id, COUNT(DISTINCT s.step_id) as passed_steps
        FROM test_submissions s
        WHERE s.user_id IN (${placeholders}) AND s.result = 'pass'
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}
        GROUP BY s.user_id, s.test_id, s.round_id`
-    ).all(...userIds, start, end, ...versionIds);
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
 
     const usersFullyPassedByTest = {};
     for (const r of passedPerUserRounds) {
@@ -343,8 +374,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       `SELECT s.test_id, s.user_id, s.step_id, s.executed_at
        FROM test_submissions s
        WHERE s.user_id IN (${placeholders}) AND s.result = 'pass'
-         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub}`
-    ).all(...userIds, start, end, ...versionIds);
+         AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${appFilterSub}`
+    ).all(...userIds, start, end, ...versionIds, ...(appIds.length > 0 ? appIds : []));
 
     const lastStepCandidates = lastStepSubmissions.filter(
       sub => lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]
@@ -378,7 +409,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     }
 
     const tests = uniqueTests.map(uniqueTest => {
-      const testIds = nameToTestIdsMap[uniqueTest.name] || [uniqueTest.id];
+      const key = `${uniqueTest.app_id || 1}:${uniqueTest.name}`;
+      const testIds = nameToTestIdsMap[key] || [uniqueTest.id];
       
       let passes = 0;
       let fails = 0;
@@ -443,6 +475,8 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       return {
         testId: uniqueTest.id,
         testName: uniqueTest.name,
+        appId: uniqueTest.app_id || 1,
+        appName: appNamesMap[uniqueTest.app_id] || 'TopStor',
         totalSubmissions,
         rounds,
         passes,
@@ -459,6 +493,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       totalPointsEarned: totals ? totals.totalPointsEarned : 0,
       totalSteps: totals ? totals.totalSteps : 0,
       summary: {
@@ -486,6 +521,9 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
     const versionIds = versionIdsRaw
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
+
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -521,22 +559,26 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
     const hasVersionFilter = versionIds.length > 0;
     const versionPlaceholders = hasVersionFilter ? ` AND pl.version_id IN (${versionIds.map(() => '?').join(',')}) ` : ' ';
 
+    const hasAppFilter = appIds.length > 0;
+    const appPlaceholders = hasAppFilter ? ` AND pl.app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+
     const extraArgs = [
       ...(hasUserFilter ? userIds : []),
       ...(hasTestFilter ? testIds : []),
-      ...(hasVersionFilter ? versionIds : [])
+      ...(hasVersionFilter ? versionIds : []),
+      ...(hasAppFilter ? appIds : [])
     ];
 
     const totalRow = await testsDb.prepare(
       `SELECT COALESCE(SUM(points), 0) as totalPointsEarned, COUNT(*) as totalSteps
        FROM points_log pl
-       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders}`
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders} ${appPlaceholders}`
     ).all(start, end, ...extraArgs);
 
     const perUserRows = await testsDb.prepare(
       `SELECT pl.user_id as userId, COALESCE(SUM(pl.points), 0) as pointsEarned, COUNT(*) as steps
        FROM points_log pl
-       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders}
+       WHERE pl.earned_at >= ? AND pl.earned_at <= ? ${userPlaceholders} ${testPlaceholders} ${versionPlaceholders} ${appPlaceholders}
        GROUP BY pl.user_id
        ORDER BY pointsEarned DESC`
     ).all(start, end, ...extraArgs);
@@ -544,14 +586,20 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
-    // Fetch cross-test consecutive failure warnings logged in the date range (filtered by version if specified)
+    // Fetch cross-test consecutive failure warnings logged in the date range (filtered by version and app if specified)
     const userWarnFilter = hasUserFilter ? ` AND user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
     const versionWarnFilter = hasVersionFilter ? ` AND (version_id IN (${versionIds.map(() => '?').join(',')}) OR version_id IS NULL) ` : ' ';
-    const warnArgs = [start, end, ...(hasUserFilter ? userIds : []), ...(hasVersionFilter ? versionIds : [])];
+    const appWarnFilter = hasAppFilter ? ` AND (app_id IN (${appIds.map(() => '?').join(',')}) OR app_id IS NULL) ` : ' ';
+    const warnArgs = [
+      start, end,
+      ...(hasUserFilter ? userIds : []),
+      ...(hasVersionFilter ? versionIds : []),
+      ...(hasAppFilter ? appIds : [])
+    ];
     const warningsRows = await testsDb.prepare(
-      `SELECT id, user_id, message, created_round, version_id, created_at
+      `SELECT id, user_id, message, created_round, version_id, app_id, created_at
        FROM user_warnings
-       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter} ${versionWarnFilter}
+       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter} ${versionWarnFilter} ${appWarnFilter}
        ORDER BY id DESC`
     ).all(...warnArgs);
 
@@ -562,38 +610,43 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
         id: w.id,
         message: w.message,
         created_round: w.created_round,
-        created_at: w.created_at
+        created_at: w.created_at,
+        appId: w.app_id || 1,
+        appName: appNamesMap[w.app_id] || 'TopStor'
       });
     }
 
+    const payAppFilter = hasAppFilter ? ` AND (app_id IN (${appIds.map(() => '?').join(',')}) OR app_id IS NULL) ` : ' ';
     const paymentsRows = await testsDb.prepare(
       `SELECT user_id, COALESCE(SUM(points_paid), 0) as pointsPaid
        FROM point_payments
-       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter}
+       WHERE created_at >= ? AND created_at <= ? ${userWarnFilter} ${payAppFilter}
        GROUP BY user_id`
-    ).all(start, end, ...(hasUserFilter ? userIds : []));
+    ).all(start, end, ...(hasUserFilter ? userIds : []), ...(hasAppFilter ? appIds : []));
 
     const paymentsByUser = {};
     for (const p of paymentsRows) {
       paymentsByUser[p.user_id] = p.pointsPaid;
     }
 
-    // Query test cycle (round) stats per user in the date range (and version/test if filtered)
+    // Query test cycle (round) stats per user in the date range (and version/test/app if filtered)
     const subUserFilter = hasUserFilter ? ` AND s.user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
     const subTestFilter = hasTestFilter ? ` AND s.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
     const subVersionFilter = hasVersionFilter ? ` AND s.version_id IN (${versionIds.map(() => '?').join(',')}) ` : ' ';
+    const subAppFilter = hasAppFilter ? ` AND s.app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
     const subArgs = [
       start, end,
       ...(hasUserFilter ? userIds : []),
       ...(hasTestFilter ? testIds : []),
-      ...(hasVersionFilter ? versionIds : [])
+      ...(hasVersionFilter ? versionIds : []),
+      ...(hasAppFilter ? appIds : [])
     ];
 
-    // Query actual steps executed in the date range (and version/test if filtered)
+    // Query actual steps executed in the date range (and version/test/app if filtered)
     const subStepsRows = await testsDb.prepare(`
       SELECT s.user_id, COUNT(*) as steps
       FROM test_submissions s
-      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter} ${subAppFilter}
       GROUP BY s.user_id
     `).all(...subArgs);
     const subStepsByUser = Object.fromEntries(subStepsRows.map(r => [r.user_id, r.steps]));
@@ -601,10 +654,10 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
     const totalStepsRow = await testsDb.prepare(`
       SELECT COUNT(*) as totalSteps
       FROM test_submissions s
-      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+      WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter} ${subAppFilter}
     `).get(...subArgs);
 
-    // Query test cycle (round) stats per user in the date range (and version/test if filtered)
+    // Query test cycle (round) stats per user in the date range (and version/test/app if filtered)
     // A test round only passes if ALL countable steps of the test were passed (and no fails).
     // An unfinished round is neither passed nor failed.
     const subRoundsRows = await testsDb.prepare(`
@@ -629,7 +682,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
           WHERE COALESCE(points, value, 0) != -1
           GROUP BY test_id
         ) ts_count ON ts_count.test_id = s.test_id
-        WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter}
+        WHERE s.executed_at >= ? AND s.executed_at <= ? ${subUserFilter} ${subTestFilter} ${subVersionFilter} ${subAppFilter}
         GROUP BY s.user_id, s.test_id, s.round_id
       ) r
       GROUP BY r.user_id
@@ -684,6 +737,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       totalPointsEarned: totalRow[0] ? totalRow[0].totalPointsEarned : 0,
       totalSteps: totalStepsRow?.totalSteps ?? (totalRow[0] ? totalRow[0].totalSteps : 0),
       totalTestCycles,
@@ -693,7 +747,8 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       totalWarnings: warningsRows.length,
       warnings: warningsRows.map(w => ({
         ...w,
-        userName: userNames[w.user_id] || ('user ' + w.user_id)
+        userName: userNames[w.user_id] || ('user ' + w.user_id),
+        appName: appNamesMap[w.app_id] || 'TopStor'
       })),
       users
     });
@@ -714,6 +769,8 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
     const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -722,11 +779,14 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
     const start = startDate.length === 10 ? startDate : startDate.slice(0, 10);
     const end = (endDate.length === 10 ? endDate : endDate.slice(0, 10)) + 'T23:59:59.999Z';
 
+    const hasAppFilter = appIds.length > 0;
+    const appFilterTests = hasAppFilter ? ` AND app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+
     let testIds = [];
     let tests;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id').all();
+      tests = await testsDb.prepare(`SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE COALESCE(is_deleted, 0) = 0 ${appFilterTests} ORDER BY id`).all(...(hasAppFilter ? appIds : []));
       testIds = tests.map(t => t.id);
     } else {
       testIds = String(testIdsRaw)
@@ -739,7 +799,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0`).all(...testIds);
+      tests = await testsDb.prepare(`SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0 ${appFilterTests}`).all(...testIds, ...(hasAppFilter ? appIds : []));
     }
 
     if (tests.length === 0) {
@@ -824,6 +884,8 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       return {
         testId: test.id,
         testName: test.name,
+        appId: test.app_id || 1,
+        appName: appNamesMap[test.app_id] || 'TopStor',
         rounds: stats.rounds || 0,
         passes: stats.passes || 0,
         fails: stats.fails || 0,
@@ -835,6 +897,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       stepId: stepId || null,
       tests: testsReport
     });
@@ -855,6 +918,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
     const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -873,11 +938,14 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
         .filter(id => !isNaN(id));
     }
 
+    const hasAppFilter = appIds.length > 0;
+    const appFilterTests = hasAppFilter ? ` AND app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+
     let testIds = [];
     let tests;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id').all();
+      tests = await testsDb.prepare(`SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE COALESCE(is_deleted, 0) = 0 ${appFilterTests} ORDER BY id`).all(...(hasAppFilter ? appIds : []));
       testIds = tests.map(t => t.id);
     } else {
       testIds = String(testIdsRaw)
@@ -890,7 +958,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0`).all(...testIds);
+      tests = await testsDb.prepare(`SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0 ${appFilterTests}`).all(...testIds, ...(hasAppFilter ? appIds : []));
     }
 
     if (tests.length === 0) {
@@ -1069,6 +1137,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       return {
         testId: test.id,
         testName: test.name,
+        appId: test.app_id || 1,
+        appName: appNamesMap[test.app_id] || 'TopStor',
         rounds: stats.rounds || 0,
         completelyPassedRounds: completelyPassed,
         fullyPassedRounds: completelyPassed,
@@ -1087,6 +1157,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       stepId: stepId || null,
       totalCompletelyPassedRounds,
       totalRounds,
@@ -1122,6 +1193,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         .filter(id => !isNaN(id));
     }
 
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
+
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
@@ -1138,6 +1212,11 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     const testFilterPl = hasTestFilter ? ` AND pl.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
     const testFilterSub = hasTestFilter ? ` AND s.test_id IN (${testIds.map(() => '?').join(',')}) ` : ' ';
 
+    const hasAppFilter = appIds.length > 0;
+    const testFilterApp = hasAppFilter ? ` AND t.app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+    const plFilterApp = hasAppFilter ? ` AND pl.app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+    const subFilterApp = hasAppFilter ? ` AND s.app_id IN (${appIds.map(() => '?').join(',')}) ` : ' ';
+
     const versionFilterPl = versionIds.length > 0
       ? ' AND pl.version_id IN (' + versionIds.map(() => '?').join(',') + ') '
       : ' ';
@@ -1147,12 +1226,21 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 
     // Fetch user's assigned tests or tests where points were earned (including disabled tests so deserved points are always shown)
     const assignedTests = await usersDb.prepare(
-      `SELECT DISTINCT t.id, t.name, COALESCE(t.is_deleted, 0) as is_deleted FROM tests t
+      `SELECT DISTINCT t.id, t.name, COALESCE(t.app_id, 1) as app_id, COALESCE(t.is_deleted, 0) as is_deleted FROM tests t
        WHERE (t.id IN (SELECT test_id FROM test_assignments WHERE user_id = ?)
-          OR t.id IN (SELECT pl.test_id FROM points_log pl WHERE pl.user_id = ? AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilterPl}))
-          ${testFilterAssigned}
+          OR t.id IN (SELECT pl.test_id FROM points_log pl WHERE pl.user_id = ? AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilterPl} ${plFilterApp}))
+          ${testFilterAssigned} ${testFilterApp}
        ORDER BY t.id`
-    ).all(userId, userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
+    ).all(
+      userId,
+      userId,
+      start,
+      end,
+      ...versionIds,
+      ...(hasAppFilter ? appIds : []),
+      ...(hasTestFilter ? testIds : []),
+      ...(hasAppFilter ? appIds : [])
+    );
 
     // Fetch user's active test from loop state
     const loopState = await usersDb.prepare(
@@ -1171,9 +1259,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     const pointsRows = await usersDb.prepare(
       `SELECT pl.test_id, COALESCE(SUM(pl.points), 0) as pointsEarned
        FROM points_log pl
-       WHERE pl.user_id = ? AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilterPl} ${testFilterPl}
+       WHERE pl.user_id = ? AND pl.earned_at >= ? AND pl.earned_at <= ? ${versionFilterPl} ${testFilterPl} ${plFilterApp}
        GROUP BY pl.test_id`
-    ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
+    ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []), ...(hasAppFilter ? appIds : []));
     const pointsByTest = Object.fromEntries(pointsRows.map(r => [r.test_id, r.pointsEarned]));
 
     // Batch: get all test countable steps and last step per test
@@ -1195,9 +1283,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       `SELECT s.test_id, s.round_id, s.step_id, ts.step_number, ts.description, s.result, s.executed_at, s.comment
        FROM test_submissions s
        LEFT JOIN test_steps ts ON ts.id = s.step_id
-       WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub}
+       WHERE s.user_id = ? AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${testFilterSub} ${subFilterApp}
        ORDER BY s.test_id, s.round_id, s.executed_at ASC`
-    ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []));
+    ).all(userId, start, end, ...versionIds, ...(hasTestFilter ? testIds : []), ...(hasAppFilter ? appIds : []));
 
     // Group submissions by test_id and round_id
     const cyclesByTest = {};
@@ -1433,6 +1521,8 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       return {
         testId: test.id,
         testName: test.name + (test.is_deleted ? ' (Disabled)' : ''),
+        appId: test.app_id || 1,
+        appName: appNamesMap[test.app_id] || 'TopStor',
         rounds,
         passedRounds,
         failedRounds,
@@ -1453,22 +1543,27 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 
     // Fetch cross-test consecutive failure warnings logged for this user in date range
     const versionWarnFilter = versionIds.length > 0 ? ' AND (version_id IN (' + versionIds.map(() => '?').join(',') + ') OR version_id IS NULL) ' : ' ';
+    const appWarnFilter = hasAppFilter ? ` AND (app_id IN (${appIds.map(() => '?').join(',')}) OR app_id IS NULL) ` : ' ';
     const userWarnings = await usersDb.prepare(
-      `SELECT id, message, created_round, version_id, created_at
+      `SELECT id, message, created_round, version_id, app_id, created_at
        FROM user_warnings
-       WHERE user_id = ? AND created_at >= ? AND created_at <= ? ${versionWarnFilter}
+       WHERE user_id = ? AND created_at >= ? AND created_at <= ? ${versionWarnFilter} ${appWarnFilter}
        ORDER BY id DESC`
-    ).all(userId, start, end, ...versionIds);
+    ).all(userId, start, end, ...versionIds, ...(hasAppFilter ? appIds : []));
 
     res.json({
       userId,
       userName: userRow.username,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       activeTestId,
       activeTestName,
       currentStepNumber,
       currentStepDescription,
-      warnings: userWarnings,
+      warnings: userWarnings.map(w => ({
+        ...w,
+        appName: appNamesMap[w.app_id] || 'TopStor'
+      })),
       tests
     });
   } catch (error) {
@@ -1481,6 +1576,9 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
 router.get('/points-payments', authenticateToken, requireReportAccess, async (req, res) => {
   try {
     const userIdsRaw = req.query.userId;
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
+
     let userIds = [];
     if (req.reportScope === 'self') {
       userIds = [req.selfUserId];
@@ -1492,18 +1590,37 @@ router.get('/points-payments', authenticateToken, requireReportAccess, async (re
     }
 
     const hasUserFilter = userIds.length > 0;
-    const userFilterSql = hasUserFilter ? ` WHERE p.user_id IN (${userIds.map(() => '?').join(',')}) ` : '';
+    const hasAppFilter = appIds.length > 0;
+    const appFilterSql = hasAppFilter ? ` (p.app_id IN (${appIds.map(() => '?').join(',')}) OR p.app_id IS NULL) ` : '';
+    const userFilterPart = hasUserFilter ? ` p.user_id IN (${userIds.map(() => '?').join(',')}) ` : '';
+
+    let whereClause = '';
+    const conditions = [userFilterPart, appFilterSql].filter(Boolean);
+    if (conditions.length > 0) {
+      whereClause = ' WHERE ' + conditions.join(' AND ');
+    }
+
+    const queryArgs = [
+      ...(hasUserFilter ? userIds : []),
+      ...(hasAppFilter ? appIds : [])
+    ];
 
     const payments = await testsDb.prepare(
-      `SELECT p.id, p.user_id as userId, p.points_paid as pointsPaid, p.admin_id as adminId, p.created_at as createdAt, u.username as userName, a.username as adminName
+      `SELECT p.id, p.user_id as userId, p.points_paid as pointsPaid, p.admin_id as adminId, p.app_id as appId, p.created_at as createdAt, u.username as userName, a.username as adminName
        FROM point_payments p
        LEFT JOIN users u ON p.user_id = u.id
        LEFT JOIN users a ON p.admin_id = a.id
-       ${userFilterSql}
+       ${whereClause}
        ORDER BY p.created_at DESC`
-    ).all(...(hasUserFilter ? userIds : []));
+    ).all(...queryArgs);
 
-    res.json({ payments });
+    res.json({
+      appIds: appIds.length > 0 ? appIds : null,
+      payments: payments.map(p => ({
+        ...p,
+        appName: appNamesMap[p.appId] || 'TopStor'
+      }))
+    });
   } catch (error) {
     console.error('Points payments report error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -1521,6 +1638,8 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
     const versionIds = versionIdsRaw
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
+    const appIds = parseAppIds(req);
+    const appNamesMap = await getAppNamesMap();
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -1547,21 +1666,24 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
         .filter(id => !isNaN(id));
     }
 
+    const hasAppFilter = appIds.length > 0;
     const userFilter = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
     const testFilter = testIds.length > 0 ? ' AND s.test_id IN (' + testIds.map(() => '?').join(',') + ') ' : ' ';
     const versionFilter = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
+    const appFilterT = hasAppFilter ? ' AND t.app_id IN (' + appIds.map(() => '?').join(',') + ') ' : ' ';
 
     const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
     const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
 
-    const testsRows = await testsDb.prepare('SELECT id, name FROM tests WHERE COALESCE(is_deleted, 0) = 0').all();
-    const testNames = Object.fromEntries(testsRows.map(t => [t.id, t.name]));
+    const testsRows = await testsDb.prepare('SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE COALESCE(is_deleted, 0) = 0').all();
+    const testMap = Object.fromEntries(testsRows.map(t => [t.id, t]));
 
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
          s.test_id,
          s.user_id,
          s.step_id,
+         COALESCE(t.app_id, 1) as app_id,
          ts.step_number,
          ts.description,
          ts.success_symptom,
@@ -1577,23 +1699,27 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
        WHERE s.result = 'fail'
          AND COALESCE(t.is_deleted, 0) = 0
          AND s.executed_at >= ? AND s.executed_at <= ? 
-         ${versionFilter} ${testFilter} ${userFilter}
+         ${versionFilter} ${testFilter} ${userFilter} ${appFilterT}
        ORDER BY s.executed_at DESC`
     ).all(
       start, 
       end, 
       ...versionIds, 
       ...testIds, 
-      ...userIds
+      ...userIds,
+      ...(hasAppFilter ? appIds : [])
     );
 
     const stepsMap = {};
     for (const row of failedSubmissions) {
       if (!stepsMap[row.step_id]) {
+        const testObj = testMap[row.test_id];
         stepsMap[row.step_id] = {
           stepId: row.step_id,
           testId: row.test_id,
-          testName: testNames[row.test_id] || ('Test ' + row.test_id),
+          testName: testObj?.name || ('Test ' + row.test_id),
+          appId: row.app_id || 1,
+          appName: appNamesMap[row.app_id] || 'TopStor',
           stepNumber: row.step_number,
           description: row.description,
           successSymptom: row.success_symptom || 'N/A',
@@ -1623,6 +1749,7 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
       startDate,
       endDate,
       versionIds: versionIds.length > 0 ? versionIds : null,
+      appIds: appIds.length > 0 ? appIds : null,
       steps
     });
   } catch (error) {

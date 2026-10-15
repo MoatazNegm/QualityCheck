@@ -7,21 +7,30 @@ const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const { saveUploadedFile } = require('../utils/fileStorage');
 
-async function getAssignedTestsOrdered(userId) {
+function getAppId(req) {
+  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId) || 1;
+  const num = parseInt(raw, 10);
+  return isNaN(num) ? 1 : num;
+}
+
+async function getAssignedTestsOrdered(userId, appId = 1) {
+  const cleanAppId = parseInt(appId, 10) || 1;
   return await testsDb.prepare(`
     SELECT t.* FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
-    WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
+    WHERE ta.user_id = ? AND (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
     ORDER BY t.id
-  `).all(userId);
+  `).all(userId, cleanAppId);
 }
 
-async function getCurrentVersionId() {
-  const cached = cache.get('currentVersionId');
+async function getCurrentVersionId(appId = 1) {
+  const cleanAppId = parseInt(appId, 10) || 1;
+  const cacheKey = `currentVersionId:${cleanAppId}`;
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+  const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(cleanAppId);
   const val = row ? row.id : null;
-  cache.set('currentVersionId', val);
+  cache.set(cacheKey, val);
   return val;
 }
 
@@ -243,13 +252,15 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       }
     }
 
-    // The version the user is currently running. Every submission is tagged with
-    // it so pass/fail, points, and "# tests done" can later be reported per version.
-    const currentVersion = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+    // The app, version, and round this submission belongs to
+    const testRow = await testsDb.prepare('SELECT app_id FROM tests WHERE id = ?').get(testId);
+    const appId = testRow ? (testRow.app_id || 1) : 1;
+
+    const currentVersion = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(appId);
     const currentVersionId = currentVersion ? currentVersion.id : null;
 
-    // The unique loop-round this submission belongs to (per user cycle).
-    const roundNo = await getRound(userId);
+    // The unique loop-round this submission belongs to (per user per app cycle).
+    const roundNo = await getRound(userId, appId);
 
     // Query preceding failed step submission before inserting the new submission
     const prevFailed = await testsDb.prepare(`
@@ -259,18 +270,18 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       FROM test_submissions ts
       JOIN tests t ON ts.test_id = t.id
       JOIN test_steps st ON ts.step_id = st.id
-      WHERE ts.user_id = ? AND ts.result = 'fail'
+      WHERE ts.user_id = ? AND ts.result = 'fail' AND (ts.app_id = ? OR ts.app_id IS NULL)
       ORDER BY ts.id DESC
       LIMIT 1
-    `).get(userId);
+    `).get(userId, appId);
 
     // Append-only audit ledger: every submission gets its own row with a unique
     // id, so a re-failure of the same step in a later round is a distinct,
-    // traceable record (result + comment + uploaded file + round_id).
+    // traceable record (result + comment + uploaded file + round_id + app_id).
     const subId = await testsDb.prepare(`
-      INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(roundNo, userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, nowIso);
+      INSERT INTO test_submissions (round_id, user_id, test_id, step_id, result, comment, config_file_path, version_id, executed_at, app_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(roundNo, userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, nowIso, appId);
 
     // Upsert: keep exactly ONE result row per (user, test, step) so the loop/next-step
     // logic and the per-step current view work. The full history lives in test_submissions.
@@ -283,9 +294,9 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     ).run(userId, testId, stepId);
 
     const resultId = await testsDb.prepare(`
-      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, roundNo, nowIso);
+      INSERT INTO test_results (user_id, test_id, step_id, result, comment, config_file_path, version_id, round_id, executed_at, app_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, testId, stepId, normalizedResult, comment || null, configFilePath, currentVersionId, roundNo, nowIso, appId);
 
     // Append to the points ledger on every submission so points accumulate
     // across loop iterations (and for both pass and fail results). The loop's
@@ -326,15 +337,15 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
         warningCreated = `The points for Step ${curStepNum} (${curStepDesc}) in test '${curTestName}' are not counted due to the user seems he depended on the preceding Step ${prevStepNum} (${prevStepDesc}) in test '${prevTestName}'.`;
 
         await testsDb.prepare(`
-          INSERT INTO user_warnings (user_id, message, created_round, version_id, created_at)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(userId, warningCreated, roundNo, currentVersionId, nowIso);
+          INSERT INTO user_warnings (user_id, message, created_round, version_id, created_at, app_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(userId, warningCreated, roundNo, currentVersionId, nowIso, appId);
       }
     }
 
     await testsDb.prepare(
-      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id, earned_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(userId, testId, stepId, pointsAwarded, currentVersionId, roundNo, nowIso);
+      'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id, earned_at, app_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(userId, testId, stepId, pointsAwarded, currentVersionId, roundNo, nowIso, appId);
 
     // Auto-end the test and advance the loop if:
     // 1. A hard-stop failure is submitted (on_failure === 'stop' or default 'stop')
@@ -343,18 +354,18 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     const stepOnFailure = stepRow ? (stepRow.on_failure || 'stop') : 'stop';
     const isHardStopFail = (normalizedResult === 'fail' && stepOnFailure === 'stop');
 
-    const loopState = await testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+    const loopState = await testsDb.prepare('SELECT version_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)').get(userId, appId);
     const versionMismatch = loopState && loopState.version_id && currentVersionId && loopState.version_id !== currentVersionId;
 
     if (isHardStopFail || versionMismatch) {
-      const assigned = await getAssignedTestsOrdered(userId);
+      const assigned = await getAssignedTestsOrdered(userId, appId);
       if (assigned.length > 0) {
         const idx = assigned.findIndex(t => t.id === parseInt(testId, 10));
         const nextTest = assigned[(idx + 1) % assigned.length];
-        await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-          .run(userId, nextTest.id, currentVersionId);
+        await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+          .run(userId, appId, nextTest.id, currentVersionId);
         if (nextTest.id === assigned[0].id) {
-          await bumpRound(userId);
+          await bumpRound(userId, appId);
         }
         autoEnded = true;
       }
@@ -380,14 +391,15 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
 // Get active rule warnings for the logged-in user (visible for 2 rounds)
 router.get('/warnings', authenticateToken, async (req, res) => {
   try {
+    const appId = getAppId(req);
     const userId = req.user.userId;
-    const currentRound = await getRound(userId);
+    const currentRound = await getRound(userId, appId);
     const warnings = await testsDb.prepare(`
       SELECT id, message, created_round, created_at
       FROM user_warnings
-      WHERE user_id = ? AND (? - created_round) >= 0 AND (? - created_round) < 2
+      WHERE user_id = ? AND (app_id = ? OR app_id IS NULL) AND (? - created_round) >= 0 AND (? - created_round) < 2
       ORDER BY id DESC
-    `).all(userId, currentRound, currentRound);
+    `).all(userId, appId, currentRound, currentRound);
     res.json({ warnings });
   } catch (error) {
     console.error('Error fetching warnings:', error);
@@ -399,8 +411,10 @@ router.get('/warnings', authenticateToken, async (req, res) => {
 router.delete('/:testId/steps/:stepId', authenticateToken, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
+    const testRow = await testsDb.prepare('SELECT app_id FROM tests WHERE id = ?').get(testId);
+    const appId = testRow ? (testRow.app_id || 1) : 1;
     const userId = req.user.userId;
-    const roundNo = await getRound(userId);
+    const roundNo = await getRound(userId, appId);
 
     const prevResult = await testsDb.prepare(
       'SELECT config_file_path FROM test_results WHERE user_id = ? AND test_id = ? AND step_id = ?'
@@ -436,12 +450,10 @@ router.delete('/user/:userId/test/:testId', authenticateToken, async (req, res) 
   }
 });
 
-// Points summary for the logged-in user: total points earned this month
-// (sum of the points ledger for every step submitted since the 1st of the
-// current month). The ledger grows on every submission — including re-runs of
-// the loop and failed steps — so points accumulate rather than freeze.
+// Points summary for the logged-in user: total points earned this month for active app
 router.get('/summary', authenticateToken, async (req, res) => {
   try {
+    const appId = getAppId(req);
     const userId = req.user.userId;
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
@@ -449,10 +461,11 @@ router.get('/summary', authenticateToken, async (req, res) => {
     const monthStartStr = `${monthStart.getFullYear()}-${pad(monthStart.getMonth() + 1)}-${pad(monthStart.getDate())} ${pad(monthStart.getHours())}:${pad(monthStart.getMinutes())}:${pad(monthStart.getSeconds())}`;
 
     const row = await testsDb.prepare(`
-      SELECT COALESCE(SUM(points), 0) AS earned
-      FROM points_log
-      WHERE user_id = ? AND earned_at >= ?
-    `).get(userId, monthStartStr);
+      SELECT COALESCE(SUM(pl.points), 0) AS earned
+      FROM points_log pl
+      JOIN tests t ON pl.test_id = t.id
+      WHERE pl.user_id = ? AND pl.earned_at >= ? AND (t.app_id = ? OR t.app_id IS NULL)
+    `).get(userId, monthStartStr, appId);
 
     res.json({ monthEarned: row ? row.earned : 0, monthStart: monthStartStr });
   } catch (error) {

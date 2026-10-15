@@ -1,61 +1,86 @@
 const express = require('express');
 const router = express.Router();
 const { testsDb, cache } = require('../db/db');
-const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
-// Returns the currently active version (the one users should run tests for).
+function getAppId(req) {
+  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId);
+  if (raw === 'all') return 'all';
+  const num = parseInt(raw, 10);
+  return isNaN(num) ? 1 : num;
+}
+
+// Returns the currently active version for an app (the one users should run tests for).
 // Returns { version: <row> | null }.
 router.get('/current', authenticateToken, async (req, res) => {
   try {
+    const appId = getAppId(req);
+    const cleanAppId = appId === 'all' ? 1 : appId;
     let version = null;
-    const cachedId = cache.get('currentVersionId');
+    const cacheKey = `currentVersionId:${cleanAppId}`;
+    const cachedId = cache.get(cacheKey);
+
     if (cachedId) {
-      version = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(cachedId);
+      version = await testsDb.prepare('SELECT * FROM versions WHERE id = ? AND app_id = ?').get(cachedId, cleanAppId);
     } else {
-      version = await testsDb.prepare('SELECT * FROM versions WHERE is_current = 1 LIMIT 1').get();
+      version = await testsDb.prepare('SELECT * FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(cleanAppId);
+      if (!version) {
+        version = await testsDb.prepare('SELECT * FROM versions WHERE app_id = ? ORDER BY id DESC LIMIT 1').get(cleanAppId);
+      }
       if (version) {
-        cache.set('currentVersionId', version.id);
+        cache.set(cacheKey, version.id);
       }
     }
     res.json({ version: version || null });
   } catch (error) {
+    console.error('Get current version error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// List all versions (authenticated users). Current one is flagged.
+// List all versions for an app (authenticated users). Current one is flagged.
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const versions = await testsDb.prepare('SELECT * FROM versions ORDER BY created_at DESC, id DESC').all();
+    const appId = getAppId(req);
+    let versions;
+    if (appId === 'all') {
+      versions = await testsDb.prepare('SELECT * FROM versions ORDER BY created_at DESC, id DESC').all();
+    } else {
+      versions = await testsDb.prepare('SELECT * FROM versions WHERE (app_id = ? OR app_id IS NULL) ORDER BY created_at DESC, id DESC').all(appId);
+    }
     res.json(versions);
   } catch (error) {
+    console.error('List versions error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Create a new version (admin only). The first created version becomes current
+// Create a new version for an app (admin only). The first created version becomes current
 // automatically if none is set yet.
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    const appId = getAppId(req);
     const { name, note } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Version name is required' });
     }
 
-    const hasCurrent = await testsDb.prepare('SELECT 1 FROM versions WHERE is_current = 1 LIMIT 1').get();
+    const hasCurrent = await testsDb.prepare('SELECT 1 FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(appId);
     const result = await testsDb.prepare(
-      'INSERT INTO versions (name, note, is_current) VALUES (?, ?, ?)'
-    ).run(String(name).trim(), note || null, hasCurrent ? 0 : 1);
+      'INSERT INTO versions (name, note, is_current, app_id) VALUES (?, ?, ?, ?)'
+    ).run(String(name).trim(), note || null, hasCurrent ? 0 : 1, appId);
 
     const version = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(result.lastInsertRowid);
+    cache.invalidate(`currentVersionId:${appId}`);
     cache.invalidate('currentVersionId');
     res.json({ version, message: hasCurrent ? 'Version created' : 'Version created and set as current' });
   } catch (error) {
+    console.error('Create version error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Set a version as the current one (admin only). Unsets any previously current version.
+// Set a version as the current one for an app (admin only). Unsets any previously current version for that app.
 router.post('/:id/set-current', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -64,15 +89,18 @@ router.post('/:id/set-current', authenticateToken, requireAdmin, async (req, res
       return res.status(404).json({ error: 'Version not found' });
     }
 
+    const appId = version.app_id || 1;
     await testsDb.client.batch([
-      { sql: 'UPDATE versions SET is_current = 0', args: [] },
-      { sql: 'UPDATE versions SET is_current = 1 WHERE id = ?', args: [id] }
+      { sql: 'UPDATE versions SET is_current = 0 WHERE app_id = ?', args: [appId] },
+      { sql: 'UPDATE versions SET is_current = 1 WHERE id = ? AND app_id = ?', args: [id, appId] }
     ], 'write');
 
     const updated = await testsDb.prepare('SELECT * FROM versions WHERE id = ?').get(id);
+    cache.invalidate(`currentVersionId:${appId}`);
     cache.invalidate('currentVersionId');
     res.json({ version: updated, message: 'Current version updated' });
   } catch (error) {
+    console.error('Set current version error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -87,6 +115,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Version not found' });
     }
 
+    const appId = version.app_id || 1;
     const used = (await testsDb.prepare('SELECT 1 FROM test_results WHERE version_id = ? LIMIT 1').get(id)) ||
                  (await testsDb.prepare('SELECT 1 FROM points_log WHERE version_id = ? LIMIT 1').get(id));
     if (used) {
@@ -94,9 +123,11 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     await testsDb.prepare('DELETE FROM versions WHERE id = ?').run(id);
+    cache.invalidate(`currentVersionId:${appId}`);
     cache.invalidate('currentVersionId');
     res.json({ message: 'Version deleted' });
   } catch (error) {
+    console.error('Delete version error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

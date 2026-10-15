@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 
 interface Test {
   id: number;
@@ -13,6 +14,8 @@ interface Test {
   monthlyRounds?: number;
   maxMonthlyRounds?: number | null;
   isMonthlyLocked?: boolean;
+  app_name?: string;
+  app_id?: number | null;
 }
 
 interface UserWarning {
@@ -24,6 +27,7 @@ interface UserWarning {
 
 const Dashboard: React.FC = () => {
   const { token, user } = useAuth();
+  const { currentApp } = useApp();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,14 +37,22 @@ const Dashboard: React.FC = () => {
   const [isWarningsExpanded, setIsWarningsExpanded] = useState(false);
 
   const API_BASE = '';
-  const authHeaders = { Authorization: `Bearer ${token}` };
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    'x-app-id': 'all'
+  };
 
   useEffect(() => {
     // Check sessionStorage cache to avoid refetching on rapid tab toggles
-    const cachedTests = sessionStorage.getItem('qc_dashboard_tests');
-    const cachedSummary = sessionStorage.getItem('qc_dashboard_summary');
-    const cachedWarnings = sessionStorage.getItem('qc_dashboard_warnings');
-    const cachedTime = sessionStorage.getItem('qc_dashboard_time');
+    const cacheKeyTests = `qc_dashboard_tests_all`;
+    const cacheKeySummary = `qc_dashboard_summary_all`;
+    const cacheKeyWarnings = `qc_dashboard_warnings_all`;
+    const cacheKeyTime = `qc_dashboard_time_all`;
+
+    const cachedTests = sessionStorage.getItem(cacheKeyTests);
+    const cachedSummary = sessionStorage.getItem(cacheKeySummary);
+    const cachedWarnings = sessionStorage.getItem(cacheKeyWarnings);
+    const cachedTime = sessionStorage.getItem(cacheKeyTime);
     const now = Date.now();
 
     if (cachedTests && cachedTime && (now - Number(cachedTime) < 30000)) {
@@ -67,7 +79,7 @@ const Dashboard: React.FC = () => {
     let mounted = true;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/versions/current`, { headers: authHeaders });
+        const res = await fetch(`${API_BASE}/api/versions/current?appId=all`, { headers: authHeaders });
         if (res.ok && mounted) {
           const data = await res.json();
           const vid = data.version ? data.version.id : null;
@@ -75,12 +87,12 @@ const Dashboard: React.FC = () => {
             setCurrentVersionId(vid);
           }
         }
-        const testsRes = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
+        const testsRes = await fetch(`${API_BASE}/api/tests?appId=all`, { headers: authHeaders });
         if (testsRes.ok && mounted) {
           const testsData = await testsRes.json();
           setTests(testsData);
-          sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(testsData));
-          sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
+          sessionStorage.setItem(`qc_dashboard_tests_all`, JSON.stringify(testsData));
+          sessionStorage.setItem(`qc_dashboard_time_all`, String(Date.now()));
         }
       } catch (err) {
         console.error('Failed to poll current version and tests:', err);
@@ -92,15 +104,15 @@ const Dashboard: React.FC = () => {
 
   const fetchTests = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/tests`, {
+      const response = await fetch(`${API_BASE}/api/tests?appId=all`, {
         headers: authHeaders
       });
 
       if (response.ok) {
         const data = await response.json();
         setTests(data);
-        sessionStorage.setItem('qc_dashboard_tests', JSON.stringify(data));
-        sessionStorage.setItem('qc_dashboard_time', String(Date.now()));
+        sessionStorage.setItem(`qc_dashboard_tests_all`, JSON.stringify(data));
+        sessionStorage.setItem(`qc_dashboard_time_all`, String(Date.now()));
       }
     } catch (error) {
       console.error('Error fetching tests:', error);
@@ -111,11 +123,11 @@ const Dashboard: React.FC = () => {
 
   const fetchSummary = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/test-results/summary`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/test-results/summary?appId=all`, { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
         setMonthEarned(data.monthEarned);
-        sessionStorage.setItem('qc_dashboard_summary', JSON.stringify(data.monthEarned));
+        sessionStorage.setItem(`qc_dashboard_summary_all`, JSON.stringify(data.monthEarned));
       }
     } catch (error) {
       console.error('Error fetching points summary:', error);
@@ -124,11 +136,11 @@ const Dashboard: React.FC = () => {
 
   const fetchWarnings = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/test-results/warnings`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/test-results/warnings?appId=all`, { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
         setWarnings(data.warnings || []);
-        sessionStorage.setItem('qc_dashboard_warnings', JSON.stringify(data.warnings || []));
+        sessionStorage.setItem(`qc_dashboard_warnings_all`, JSON.stringify(data.warnings || []));
       }
     } catch (error) {
       console.error('Error fetching warnings:', error);
@@ -240,7 +252,7 @@ const Dashboard: React.FC = () => {
         if (!activeTest || activeTest.locked || user?.isSuspended) return null;
         return (
           <button className='btn btn-continue' onClick={handleContinue} style={{ marginBottom: '1rem' }}>
-            Continue {activeTest.name} →
+            Continue {activeTest.name} {activeTest.app_name ? `(${activeTest.app_name})` : ''} →
           </button>
         );
       })()}
@@ -260,6 +272,22 @@ const Dashboard: React.FC = () => {
               </div>
             )}
             <div className='test-card-body'>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.45rem' }}>
+                <span style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  background: 'rgba(59, 130, 246, 0.15)',
+                  color: '#60a5fa',
+                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  borderRadius: '4px',
+                  padding: '0.12rem 0.45rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}>
+                  <span>📱</span> {test.app_name || 'TopStor'}
+                </span>
+              </div>
               <h3>{test.name}</h3>
               <p>{test.description}</p>
             </div>

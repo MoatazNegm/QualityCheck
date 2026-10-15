@@ -8,7 +8,7 @@ const LoginScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e: any) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
@@ -48,15 +48,17 @@ const LoginScreen: React.FC = () => {
             onChange={e => { setUsername(e.target.value); setError(''); }}
             autoFocus
             required
+            placeholder='Enter username or API key'
           />
         </div>
+
         <div>
           <label>Password:</label>
           <input
             type='password'
             value={password}
             onChange={e => { setPassword(e.target.value); setError(''); }}
-            required
+            required={!username.trim().startsWith('qc_')}
           />
         </div>
         <button type='submit' disabled={loading}>

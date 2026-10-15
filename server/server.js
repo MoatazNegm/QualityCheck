@@ -147,6 +147,7 @@ const settingsRoutes = require('./routes/settings');
 const apiKeyRoutes = require('./routes/api-keys');
 const uploadRoutes = require('./routes/upload');
 const docsRoutes = require('./routes/docs');
+const appsRoutes = require('./routes/apps');
 
 (async () => {
   try {
@@ -159,6 +160,7 @@ const docsRoutes = require('./routes/docs');
 const { authenticateToken } = require('./middleware/auth');
 
 app.use('/api/auth', authRoutes.router || authRoutes);
+app.use('/api/apps', appsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/test-results', testResultRoutes);

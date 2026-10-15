@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 
 interface TestStep {
   id: number;
@@ -28,6 +29,7 @@ const TestExecution: React.FC = () => {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
   const { token, user, refreshUser } = useAuth();
+  const { currentApp } = useApp();
 
   const [testName, setTestName] = useState('');
   const [steps, setSteps] = useState<TestStep[]>([]);
@@ -43,7 +45,10 @@ const TestExecution: React.FC = () => {
   const [warnings, setWarnings] = useState<UserWarning[]>([]);
   const [isWarningsExpanded, setIsWarningsExpanded] = useState(false);
 
-  const authHeaders = { Authorization: `Bearer ${token}` };
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    'x-app-id': String(currentApp?.id || 1)
+  };
 
   const isSectionStep = (step: TestStep | null | undefined): boolean => {
     if (!step) return false;

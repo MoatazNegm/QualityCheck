@@ -24,22 +24,47 @@ const uploadStepAttachment = (req, res, next) => {
   });
 };
 
-// Ordered list of tests assigned to a user (loop order = test id ascending)
-async function getAssignedTestsOrdered(userId) {
-  return await testsDb.prepare(`
-    SELECT t.* FROM tests t
-    INNER JOIN test_assignments ta ON ta.test_id = t.id
-    WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
-    ORDER BY t.id
-  `).all(userId);
+// Helper to get active app ID from headers, query, or body
+function getAppId(req) {
+  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId);
+  if (raw === 'all') return 'all';
+  const num = parseInt(raw, 10);
+  return isNaN(num) ? 1 : num;
 }
 
-async function getCurrentVersionId() {
-  const cached = cache.get('currentVersionId');
+// Ordered list of tests assigned to a user (loop order = test id ascending)
+async function getAssignedTestsOrdered(userId, appId = 1) {
+  if (appId === 'all') {
+    return await testsDb.prepare(`
+      SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+      FROM tests t
+      INNER JOIN test_assignments ta ON ta.test_id = t.id
+      LEFT JOIN apps a ON t.app_id = a.id
+      WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
+        AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
+        AND (a.is_archived IS NULL OR a.is_archived = 0)
+      ORDER BY COALESCE(t.app_id, 1), t.id
+    `).all(userId, userId);
+  }
+  const cleanAppId = parseInt(appId, 10) || 1;
+  return await testsDb.prepare(`
+    SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+    FROM tests t
+    INNER JOIN test_assignments ta ON ta.test_id = t.id
+    LEFT JOIN apps a ON t.app_id = a.id
+    WHERE ta.user_id = ? AND (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
+    ORDER BY t.id
+  `).all(userId, cleanAppId);
+}
+
+async function getCurrentVersionId(appId = 1) {
+  const cleanAppId = parseInt(appId, 10) || 1;
+  const cacheKey = `currentVersionId:${cleanAppId}`;
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 LIMIT 1').get();
+  const row = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(cleanAppId);
   const val = row ? row.id : null;
-  cache.set('currentVersionId', val);
+  cache.set(cacheKey, val);
   return val;
 }
 
@@ -108,15 +133,16 @@ function isApiKeyUser(req) {
 // Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests, 
 // and automatically skipping tests that were already completed or hard-failed in the current round.
 // Automated test processes using an API key are exempt from maximum monthly round limitations.
-async function getActiveTestId(userId, isApiKey = false) {
-  const assigned = await getAssignedTestsOrdered(userId);
+async function getActiveTestId(userId, appId = 1, isApiKey = false) {
+  const cleanAppId = parseInt(appId, 10) || 1;
+  const assigned = await getAssignedTestsOrdered(userId, cleanAppId);
   if (assigned.length === 0) return null;
 
   const maxRounds = await getMaxMonthlyTestRounds();
   const testIds = assigned.map(t => t.id);
   
   const monthlyRoundsMap = await getBatchMonthlyRounds(userId, testIds);
-  const currentRound = await getRound(userId);
+  const currentRound = await getRound(userId, cleanAppId);
   const completionMap = await getBatchCompletionCounts(userId, testIds, currentRound);
   const stepCountsMap = await getBatchStepCounts(testIds);
 
@@ -150,21 +176,19 @@ async function getActiveTestId(userId, isApiKey = false) {
       }
     }
 
-    // Otherwise, they finished or failed ALL tests in the CURRENT round, but the round was never bumped!
-    // (e.g. they closed the browser on the last test before it could auto-advance).
-    // We auto-bump the round for them and restart the loop!
-    await bumpRound(userId);
+    // Auto-bump round for this app and restart loop
+    await bumpRound(userId, cleanAppId);
     
-    const currentVersionId = await getCurrentVersionId();
+    const currentVersionId = await getCurrentVersionId(cleanAppId);
     const firstCandidate = assigned[0];
-    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, firstCandidate.id, currentVersionId);
+    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+      .run(userId, cleanAppId, firstCandidate.id, currentVersionId);
     
     return firstCandidate.id;
   }
 
-  const currentVersionId = await getCurrentVersionId();
-  const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?').get(userId);
+  const currentVersionId = await getCurrentVersionId(cleanAppId);
+  const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)').get(userId, cleanAppId);
 
   if (row) {
     const isValidAndAvailable = availableAssigned.some(t => t.id === row.active_test_id);
@@ -176,16 +200,16 @@ async function getActiveTestId(userId, isApiKey = false) {
         const after = availableAssigned.find(t => t.id > row.active_test_id);
         if (after) candidate = after;
       }
-      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-        .run(userId, candidate.id, currentVersionId);
+      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+        .run(userId, cleanAppId, candidate.id, currentVersionId);
       return candidate.id;
     }
 
     if (row.version_id && currentVersionId && row.version_id !== currentVersionId) {
       const idx = availableAssigned.findIndex(t => t.id === row.active_test_id);
       const nextTest = availableAssigned[(idx + 1) % availableAssigned.length];
-      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-        .run(userId, nextTest.id, currentVersionId);
+      await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+        .run(userId, cleanAppId, nextTest.id, currentVersionId);
       return nextTest.id;
     }
 
@@ -193,8 +217,8 @@ async function getActiveTestId(userId, isApiKey = false) {
   }
 
   const firstCandidate = availableAssigned[0];
-  await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-    .run(userId, firstCandidate.id, currentVersionId);
+  await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+    .run(userId, cleanAppId, firstCandidate.id, currentVersionId);
   return firstCandidate.id;
 }
 
@@ -279,11 +303,42 @@ async function getTestTotalPoints(testId) {
 // Get all tests (filtered by assignment for non-admins without developer access, with loop lock status)
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    const appId = getAppId(req);
     const groups = req.user.userGroups || [];
     const isFullAccess = req.user.isAdmin || groups.includes('developers') || groups.includes('admins');
     let tests;
     if (isFullAccess) {
-      const allTests = await testsDb.prepare('SELECT * FROM tests ORDER BY id').all();
+      let allTests;
+      if (appId === 'all') {
+        if (req.user.isAdmin) {
+          allTests = await testsDb.prepare(`
+            SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+            FROM tests t
+            LEFT JOIN apps a ON t.app_id = a.id
+            WHERE COALESCE(t.is_deleted, 0) = 0
+              AND (a.is_archived IS NULL OR a.is_archived = 0)
+            ORDER BY COALESCE(t.app_id, 1), t.id
+          `).all();
+        } else {
+          allTests = await testsDb.prepare(`
+            SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+            FROM tests t
+            LEFT JOIN apps a ON t.app_id = a.id
+            WHERE COALESCE(t.is_deleted, 0) = 0
+              AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
+              AND (a.is_archived IS NULL OR a.is_archived = 0)
+            ORDER BY COALESCE(t.app_id, 1), t.id
+          `).all(req.user.userId);
+        }
+      } else {
+        allTests = await testsDb.prepare(`
+          SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+          FROM tests t
+          LEFT JOIN apps a ON t.app_id = a.id
+          WHERE (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
+          ORDER BY t.id
+        `).all(appId);
+      }
       tests = await Promise.all(allTests.map(async t => ({
         ...t,
         is_deleted: t.is_deleted ? 1 : 0,
@@ -298,12 +353,12 @@ router.get('/', authenticateToken, async (req, res) => {
     } else {
       const isApiUser = isApiKeyUser(req);
       const maxRounds = await getMaxMonthlyTestRounds();
-      const assigned = await getAssignedTestsOrdered(req.user.userId);
+      const assigned = await getAssignedTestsOrdered(req.user.userId, appId);
       const testIds = assigned.map(t => t.id);
 
       // Batch queries instead of N+1 loops
       const monthlyRoundsMap = await getBatchMonthlyRounds(req.user.userId, testIds);
-      const currentRound = await getRound(req.user.userId);
+      const currentRound = await getRound(req.user.userId, appId === 'all' ? 1 : appId);
       const completionMap = await getBatchCompletionCounts(req.user.userId, testIds, currentRound);
       const stepCountsMap = await getBatchStepCounts(testIds);
 
@@ -313,8 +368,7 @@ router.get('/', authenticateToken, async (req, res) => {
         : assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
       let activeTestId = null;
       if (availableAssigned.length > 0) {
-        // Use getActiveTestId which now also uses batch internally
-        activeTestId = await getActiveTestId(req.user.userId, isApiUser);
+        activeTestId = await getActiveTestId(req.user.userId, appId, isApiUser);
       }
 
       tests = await Promise.all(assigned.map(async t => {
@@ -347,9 +401,10 @@ router.get('/', authenticateToken, async (req, res) => {
 // Get currently active test with steps for the logged-in user
 router.get('/active', authenticateToken, async (req, res) => {
   try {
+    const appId = getAppId(req);
     const userId = req.user.userId;
     const isApiUser = isApiKeyUser(req);
-    const activeTestId = await getActiveTestId(userId, isApiUser);
+    const activeTestId = await getActiveTestId(userId, appId, isApiUser);
     if (!activeTestId) {
       return res.json({ activeTest: null, message: 'No active tests available for the current round or limit reached' });
     }
@@ -390,38 +445,39 @@ router.post('/:testId/complete', authenticateToken, async (req, res) => {
     if (req.user.isAdmin) {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
+    const appId = getAppId(req);
     const userId = req.user.userId;
     const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
-    const assigned = await getAssignedTestsOrdered(userId);
+    const assigned = await getAssignedTestsOrdered(userId, appId);
     if (assigned.length === 0) {
       return res.status(400).json({ error: 'No tests assigned' });
     }
 
-    const activeTestId = await getActiveTestId(userId, isApiUser);
+    const activeTestId = await getActiveTestId(userId, appId, isApiUser);
     if (activeTestId !== testId) {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
 
-    const currentRound = await getRound(userId);
+    const currentRound = await getRound(userId, appId);
     if (!(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Cannot complete an unfinished test' });
     }
 
-    const currentVersionId = await getCurrentVersionId();
+    const currentVersionId = await getCurrentVersionId(appId);
     const idx = assigned.findIndex(t => t.id === testId);
     const candidateNext = assigned[(idx + 1) % assigned.length];
     
     // Tentatively update loop state to candidateNext
-    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, candidateNext.id, currentVersionId);
+    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+      .run(userId, appId, candidateNext.id, currentVersionId);
     if (candidateNext.id === assigned[0].id) {
-      await bumpRound(userId);
+      await bumpRound(userId, appId);
     }
 
     // Evaluate active test ID considering monthly round limits (bypassed for API key)
-    const nextActiveId = await getActiveTestId(userId, isApiUser);
+    const nextActiveId = await getActiveTestId(userId, appId, isApiUser);
 
     res.json({ message: 'Test completed', active_test_id: nextActiveId });
   } catch (error) {
@@ -438,11 +494,12 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
     if (req.user.isAdmin) {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
+    const appId = getAppId(req);
     const userId = req.user.userId;
     const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
-    const assigned = await getAssignedTestsOrdered(userId);
+    const assigned = await getAssignedTestsOrdered(userId, appId);
     if (!assigned.some(t => t.id === testId)) {
       return res.status(400).json({ error: 'Test is not assigned to this user' });
     }
@@ -455,15 +512,15 @@ router.post('/:testId/activate', authenticateToken, async (req, res) => {
       }
     }
 
-    const activeTestId = await getActiveTestId(userId, isApiUser);
-    const currentRound = await getRound(userId);
+    const activeTestId = await getActiveTestId(userId, appId, isApiUser);
+    const currentRound = await getRound(userId, appId);
     if (activeTestId !== testId && !(await isTestCompleted(userId, testId, currentRound))) {
       return res.status(400).json({ error: 'Can only re-open the current or a completed test' });
     }
 
-    const currentVersionId = await getCurrentVersionId();
-    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, testId, currentVersionId);
+    const currentVersionId = await getCurrentVersionId(appId);
+    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+      .run(userId, appId, testId, currentVersionId);
 
     res.json({ message: 'Test re-opened', active_test_id: testId });
   } catch (error) {
@@ -480,30 +537,31 @@ router.post('/:testId/end', authenticateToken, async (req, res) => {
     if (req.user.isAdmin) {
       return res.status(403).json({ error: 'Admins do not use the test loop' });
     }
+    const appId = getAppId(req);
     const userId = req.user.userId;
     const isApiUser = isApiKeyUser(req);
     const testId = parseInt(req.params.testId, 10);
 
-    const assigned = await getAssignedTestsOrdered(userId);
+    const assigned = await getAssignedTestsOrdered(userId, appId);
     if (assigned.length === 0) {
       return res.status(400).json({ error: 'No tests assigned' });
     }
 
-    const activeTestId = await getActiveTestId(userId, isApiUser);
+    const activeTestId = await getActiveTestId(userId, appId, isApiUser);
     if (activeTestId !== testId) {
       return res.status(400).json({ error: 'This test is not the current active test' });
     }
 
-    const currentVersionId = await getCurrentVersionId();
+    const currentVersionId = await getCurrentVersionId(appId);
     const idx = assigned.findIndex(t => t.id === testId);
     const candidateNext = assigned[(idx + 1) % assigned.length];
-    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)')
-      .run(userId, candidateNext.id, currentVersionId);
+    await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+      .run(userId, appId, candidateNext.id, currentVersionId);
     if (candidateNext.id === assigned[0].id) {
-      await bumpRound(userId);
+      await bumpRound(userId, appId);
     }
 
-    const nextActiveId = await getActiveTestId(userId, isApiUser);
+    const nextActiveId = await getActiveTestId(userId, appId, isApiUser);
 
     res.json({ message: 'Test ended', active_test_id: nextActiveId });
   } catch (error) {
@@ -596,11 +654,24 @@ router.post('/import', authenticateToken, requireDeveloper, upload.single('file'
 
         const testName = workbook.SheetNames.length === 1 ? baseName : `${baseName} - ${sheetName}`;
 
+        const appId = getAppId(req);
         const result = await tx.execute({
-          sql: 'INSERT INTO tests (name, description) VALUES (?, ?)',
-          args: [testName, 'Imported from file']
+          sql: 'INSERT INTO tests (name, description, app_id) VALUES (?, ?, ?)',
+          args: [testName, 'Imported from file', appId]
         });
         const testId = Number(result.lastInsertRowid);
+
+        // Auto-assign new test to all users currently assigned to this app
+        const appUsers = (await tx.execute({
+          sql: 'SELECT user_id FROM user_apps WHERE app_id = ?',
+          args: [appId]
+        })).rows;
+        for (const u of appUsers) {
+          await tx.execute({
+            sql: 'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)',
+            args: [testId, u.user_id]
+          });
+        }
 
         let autoStepNumber = 1;
         for (const row of dataRows) {
@@ -673,7 +744,13 @@ router.put('/:id', authenticateToken, requireDeveloper, async (req, res) => {
 // Bulk: get all test assignments grouped by test (admin only) — replaces N+1 frontend loop
 router.get('/assignments/bulk', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const rows = await testsDb.prepare('SELECT test_id, user_id FROM test_assignments').all();
+    const appId = getAppId(req);
+    const rows = await testsDb.prepare(`
+      SELECT ta.test_id, ta.user_id
+      FROM test_assignments ta
+      JOIN tests t ON ta.test_id = t.id
+      WHERE (t.app_id = ? OR t.app_id IS NULL)
+    `).all(appId);
     const grouped = {};
     for (const r of rows) {
       if (!grouped[r.test_id]) grouped[r.test_id] = [];
@@ -896,7 +973,10 @@ router.get('/steps', authenticateToken, async (req, res) => {
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const test = await testsDb.prepare(
-      'SELECT * FROM tests WHERE id = ?'
+      `SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+       FROM tests t
+       LEFT JOIN apps a ON t.app_id = a.id
+       WHERE t.id = ?`
     ).get(req.params.id);
     
     if (!test) {

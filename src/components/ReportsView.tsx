@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 
 interface Version {
   id: number;
@@ -7,6 +8,7 @@ interface Version {
   note: string | null;
   is_current: number;
   created_at: string;
+  app_id?: number | null;
 }
 
 interface Test {
@@ -26,13 +28,124 @@ interface User {
 
 const API_BASE = '';
 
+interface SearchableAppSelectorProps {
+  apps: { id: number; name: string; is_suspended?: number | boolean }[];
+  selectedAppIds: number[];
+  onChange: (appIds: number[]) => void;
+  label?: string;
+}
+
+const SearchableAppSelector: React.FC<SearchableAppSelectorProps> = ({
+  apps,
+  selectedAppIds,
+  onChange,
+  label = 'Apps'
+}) => {
+  const [search, setSearch] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+
+  const isAllSelected = selectedAppIds.length === 0 || selectedAppIds.length === apps.length;
+
+  const displayValue = isOpen
+    ? search
+    : isAllSelected
+    ? 'All Apps'
+    : selectedAppIds
+        .map(id => apps.find(a => a.id === id)?.name)
+        .filter(Boolean)
+        .join(', ');
+
+  const filteredApps = apps.filter(a =>
+    a.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="searchable-select">
+      <label>{label}</label>
+      <input
+        type="text"
+        className="user-input"
+        placeholder={isAllSelected ? 'All Apps' : 'Search apps...'}
+        value={displayValue}
+        onChange={e => setSearch(e.target.value)}
+        onFocus={() => {
+          setIsOpen(true);
+          setSearch('');
+        }}
+        onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+      />
+      {isOpen && (
+        <div className="searchable-dropdown" style={{ zIndex: 1000 }}>
+          <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
+            <input
+              type="checkbox"
+              checked={selectedAppIds.length === apps.length && apps.length > 0}
+              onChange={() => {
+                if (selectedAppIds.length === apps.length) {
+                  onChange([]);
+                } else {
+                  onChange(apps.map(a => a.id));
+                }
+              }}
+            />
+            <strong>All Apps (Select All)</strong>
+          </label>
+          {filteredApps.map(app => {
+            const isChecked = selectedAppIds.length === 0 || selectedAppIds.includes(app.id);
+            return (
+              <label
+                key={app.id}
+                className={`searchable-option ${isChecked ? 'selected' : ''}`}
+                onMouseDown={e => e.preventDefault()}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => {
+                    let next: number[];
+                    if (selectedAppIds.length === 0) {
+                      next = apps.map(a => a.id).filter(id => id !== app.id);
+                    } else if (selectedAppIds.includes(app.id)) {
+                      next = selectedAppIds.filter(id => id !== app.id);
+                    } else {
+                      next = [...selectedAppIds, app.id];
+                    }
+                    onChange(next);
+                  }}
+                />
+                <span>
+                  📱 {app.name}
+                  {app.is_suspended ? (
+                    <span style={{ fontSize: '0.7rem', marginLeft: '0.4rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.2)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
+                      [Suspended]
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ReportsView: React.FC = () => {
   const { user, token } = useAuth();
+  const { apps, currentApp, isAdminPanelMode } = useApp();
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const isFullAccess = !!(user?.isAdmin || user?.userGroups?.includes('admins') || user?.userGroups?.includes('developers'));
 
   const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'passed' | 'failed' | 'points' | 'payments'>('user');
+
+  // --- App Selection States for Multi-App Reporting ---
+  const [reportAppIds, setReportAppIds] = useState<number[]>([]);
+  const [testReportAppIds, setTestReportAppIds] = useState<number[]>([]);
+  const [passedReportAppIds, setPassedReportAppIds] = useState<number[]>([]);
+  const [failedReportAppIds, setFailedReportAppIds] = useState<number[]>([]);
+  const [pointsReportAppIds, setPointsReportAppIds] = useState<number[]>([]);
+  const [paymentsReportAppIds, setPaymentsReportAppIds] = useState<number[]>([]);
 
   const [users, setUsers] = useState<User[]>([]);
   const [tests, setTests] = useState<Test[]>([]);
@@ -231,19 +344,53 @@ const ReportsView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isFullAccess]);
 
+  const getCurrentVersionIdsForApps = (selectedAppIds: number[], allVersions: Version[]): number[] => {
+    const result: number[] = [];
+    for (const appId of selectedAppIds) {
+      const appVersions = allVersions.filter(v => (v.app_id || 1) === appId);
+      const current = appVersions.find(v => v.is_current) || appVersions[0];
+      if (current && !result.includes(current.id)) {
+        result.push(current.id);
+      }
+    }
+    return result;
+  };
+
+  useEffect(() => {
+    if (apps.length > 0) {
+      const defaultIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
+      setReportAppIds(defaultIds);
+      setTestReportAppIds(defaultIds);
+      setPassedReportAppIds(defaultIds);
+      setFailedReportAppIds(defaultIds);
+      setPointsReportAppIds(defaultIds);
+      setPaymentsReportAppIds(defaultIds);
+      if (versions.length > 0) {
+        const currVersionIds = getCurrentVersionIdsForApps(defaultIds, versions);
+        setReportVersionIds(currVersionIds);
+        setTestReportVersionIds(currVersionIds);
+        setPassedReportVersionIds(currVersionIds);
+        setPointsReportVersionIds(currVersionIds);
+        setFailedReportVersionIds(currVersionIds);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apps, currentApp, isAdminPanelMode]);
+
   const fetchVersions = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/versions`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/versions?appId=all`, { headers: authHeaders });
       if (res.ok) {
-        const data = await res.json();
+        const data: Version[] = await res.json();
         setVersions(data);
-        const curr = data.find((v: Version) => v.is_current);
-        if (curr) {
-          setReportVersionIds([curr.id]);
-          setTestReportVersionIds([curr.id]);
-          setPassedReportVersionIds([curr.id]);
-          setPointsReportVersionIds([curr.id]);
-          setFailedReportVersionIds([curr.id]);
+        const defaultAppIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
+        const currVersionIds = getCurrentVersionIdsForApps(defaultAppIds, data);
+        if (currVersionIds.length > 0) {
+          setReportVersionIds(currVersionIds);
+          setTestReportVersionIds(currVersionIds);
+          setPassedReportVersionIds(currVersionIds);
+          setPointsReportVersionIds(currVersionIds);
+          setFailedReportVersionIds(currVersionIds);
         }
       }
     } catch {
@@ -253,7 +400,7 @@ const ReportsView: React.FC = () => {
 
   const fetchTests = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/tests?appId=all`, { headers: authHeaders });
       if (res.ok) {
         const data: Test[] = await res.json();
         setTests(data);
@@ -357,6 +504,11 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('startDate', reportStartDate);
       url.searchParams.set('endDate', reportEndDate);
       if (reportVersionIds.length > 0) url.searchParams.set('versionIds', reportVersionIds.join(','));
+      if (reportAppIds.length > 0 && reportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', reportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
       const data = await res.json();
@@ -440,6 +592,11 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('endDate', testReportEndDate);
       if (testReportVersionIds.length > 0) url.searchParams.set('versionIds', testReportVersionIds.join(','));
       if (testReportSelectedStepId) url.searchParams.set('stepId', String(testReportSelectedStepId));
+      if (testReportAppIds.length > 0 && testReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', testReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
       const data = await res.json();
@@ -478,6 +635,11 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('startDate', passedReportStartDate);
       url.searchParams.set('endDate', passedReportEndDate);
       if (passedReportVersionIds.length > 0) url.searchParams.set('versionIds', passedReportVersionIds.join(','));
+      if (passedReportAppIds.length > 0 && passedReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', passedReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
       const data = await res.json();
@@ -515,6 +677,11 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('startDate', failedReportStartDate);
       url.searchParams.set('endDate', failedReportEndDate);
       if (failedReportVersionIds.length > 0) url.searchParams.set('versionIds', failedReportVersionIds.join(','));
+      if (failedReportAppIds.length > 0 && failedReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', failedReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
       const data = await res.json();
@@ -542,6 +709,11 @@ const ReportsView: React.FC = () => {
         url.searchParams.set('userId', paymentsReportUserIds.join(','));
       } else {
         url.searchParams.set('userId', 'all');
+      }
+      if (paymentsReportAppIds.length > 0 && paymentsReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', paymentsReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
       }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
@@ -585,6 +757,11 @@ const ReportsView: React.FC = () => {
       }
       url.searchParams.set('startDate', pointsReportStartDate);
       url.searchParams.set('endDate', pointsReportEndDate);
+      if (pointsReportAppIds.length > 0 && pointsReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', pointsReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
 
       const res = await fetch(url.toString(), { headers: authHeaders });
       const data = await res.json();
@@ -615,6 +792,11 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('endDate', pointsReportEndDate);
       if (pointsReportVersionIds.length > 0) url.searchParams.set('versionIds', pointsReportVersionIds.join(','));
       if (pointsReportTestIds.length > 0) url.searchParams.set('testId', pointsReportTestIds.join(','));
+      if (pointsReportAppIds.length > 0 && pointsReportAppIds.length < apps.length) {
+        url.searchParams.set('appIds', pointsReportAppIds.join(','));
+      } else {
+        url.searchParams.set('appIds', 'all');
+      }
       const res = await fetch(url.toString(), { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
@@ -775,53 +957,81 @@ const ReportsView: React.FC = () => {
                 </div>
               )}
 
-              <div className="searchable-select">
-                <label>Versions</label>
-                <input
-                  type="text"
-                  className="user-input"
-                  placeholder={reportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                  value={showVersionDropdown ? reportVersionSearch : (reportVersionIds.length > 0 ? reportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                  onChange={e => setReportVersionSearch(e.target.value)}
-                  onFocus={() => setShowVersionDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowVersionDropdown(false), 150)}
-                />
-                {showVersionDropdown && (
-                  <div className="searchable-dropdown">
-                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                      <input
-                        type="checkbox"
-                        checked={reportVersionIds.length === versions.length && versions.length > 0}
-                        onChange={() => {
-                          if (reportVersionIds.length === versions.length) setReportVersionIds([]);
-                          else setReportVersionIds(versions.map(v => v.id));
-                          setReportData(null);
-                        }}
-                      />
-                      <strong>Select All</strong>
-                    </label>
-                    {versions
-                      .filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase()))
-                      .map(v => (
-                        <label
-                          key={v.id}
-                          className={`searchable-option ${reportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                          onMouseDown={e => e.preventDefault()}
-                        >
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={reportAppIds}
+                onChange={ids => {
+                  setReportAppIds(ids);
+                  setReportData(null);
+                  const newVersions = getCurrentVersionIdsForApps(ids, versions);
+                  setReportVersionIds(newVersions);
+                }}
+              />
+
+              {(() => {
+                const visibleVersions = versions.filter(v => reportAppIds.includes(v.app_id || 1));
+                const allVisibleSelected = visibleVersions.length > 0 && visibleVersions.every(v => reportVersionIds.includes(v.id));
+                return (
+                  <div className="searchable-select">
+                    <label>Versions</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder={reportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showVersionDropdown ? reportVersionSearch : (reportVersionIds.length > 0 ? reportVersionIds.map(id => visibleVersions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                      onChange={e => setReportVersionSearch(e.target.value)}
+                      onFocus={() => setShowVersionDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowVersionDropdown(false), 150)}
+                    />
+                    {showVersionDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                           <input
                             type="checkbox"
-                            checked={reportVersionIds.includes(v.id)}
+                            checked={allVisibleSelected}
                             onChange={() => {
-                              setReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                              if (allVisibleSelected) {
+                                setReportVersionIds(prev => prev.filter(id => !visibleVersions.some(v => v.id === id)));
+                              } else {
+                                setReportVersionIds(prev => Array.from(new Set([...prev, ...visibleVersions.map(v => v.id)])));
+                              }
                               setReportData(null);
                             }}
                           />
-                          {v.name} {v.is_current ? '(current)' : ''}
+                          <strong>Select All Versions ({visibleVersions.length})</strong>
                         </label>
-                      ))}
+                        {visibleVersions
+                          .filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase()))
+                          .map(v => {
+                            const appObj = apps.find(a => a.id === (v.app_id || 1));
+                            return (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${reportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={reportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                                    setReportData(null);
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                                {apps.length > 1 && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>
+                                    📱 {appObj?.name || 'TopStor'}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="report-presets">
@@ -893,7 +1103,14 @@ const ReportsView: React.FC = () => {
                     return (
                       <div key={test.testId} className="report-test-row">
                         <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
-                          <span className="report-test-name">{test.testName}</span>
+                          <span className="report-test-name">
+                            {test.testName}
+                            {test.appName && (
+                              <span style={{ marginLeft: '0.45rem', fontSize: '0.72rem', background: 'rgba(99, 102, 241, 0.2)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: '4px', padding: '0.1rem 0.35rem', fontWeight: 600 }}>
+                                📱 {test.appName}
+                              </span>
+                            )}
+                          </span>
                           <span className="report-test-stats">
                             <span className="report-stat">{test.rounds} rounds</span>
                             <span className="report-stat report-stat-pass">{test.passes} passed</span>
@@ -1108,53 +1325,81 @@ const ReportsView: React.FC = () => {
                 )}
               </div>
 
-              <div className="searchable-select">
-                <label>Versions</label>
-                <input
-                  type="text"
-                  className="user-input"
-                  placeholder={testReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                  value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionIds.length > 0 ? testReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                  onChange={e => setTestReportVersionSearch(e.target.value)}
-                  onFocus={() => setShowTestVersionDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
-                />
-                {showTestVersionDropdown && (
-                  <div className="searchable-dropdown">
-                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                      <input
-                        type="checkbox"
-                        checked={testReportVersionIds.length === versions.length && versions.length > 0}
-                        onChange={() => {
-                          if (testReportVersionIds.length === versions.length) setTestReportVersionIds([]);
-                          else setTestReportVersionIds(versions.map(v => v.id));
-                          setTestReportData(null);
-                        }}
-                      />
-                      <strong>Select All</strong>
-                    </label>
-                    {versions
-                      .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
-                      .map(v => (
-                        <label
-                          key={v.id}
-                          className={`searchable-option ${testReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                          onMouseDown={e => e.preventDefault()}
-                        >
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={testReportAppIds}
+                onChange={ids => {
+                  setTestReportAppIds(ids);
+                  setTestReportData(null);
+                  const newVersions = getCurrentVersionIdsForApps(ids, versions);
+                  setTestReportVersionIds(newVersions);
+                }}
+              />
+
+              {(() => {
+                const visibleVersions = versions.filter(v => testReportAppIds.includes(v.app_id || 1));
+                const allVisibleSelected = visibleVersions.length > 0 && visibleVersions.every(v => testReportVersionIds.includes(v.id));
+                return (
+                  <div className="searchable-select">
+                    <label>Versions</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder={testReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionIds.length > 0 ? testReportVersionIds.map(id => visibleVersions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                      onChange={e => setTestReportVersionSearch(e.target.value)}
+                      onFocus={() => setShowTestVersionDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
+                    />
+                    {showTestVersionDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                           <input
                             type="checkbox"
-                            checked={testReportVersionIds.includes(v.id)}
+                            checked={allVisibleSelected}
                             onChange={() => {
-                              setTestReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                              if (allVisibleSelected) {
+                                setTestReportVersionIds(prev => prev.filter(id => !visibleVersions.some(v => v.id === id)));
+                              } else {
+                                setTestReportVersionIds(prev => Array.from(new Set([...prev, ...visibleVersions.map(v => v.id)])));
+                              }
                               setTestReportData(null);
                             }}
                           />
-                          {v.name} {v.is_current ? '(current)' : ''}
+                          <strong>Select All Versions ({visibleVersions.length})</strong>
                         </label>
-                      ))}
+                        {visibleVersions
+                          .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
+                          .map(v => {
+                            const appObj = apps.find(a => a.id === (v.app_id || 1));
+                            return (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${testReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={testReportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setTestReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                                    setTestReportData(null);
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                                {apps.length > 1 && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>
+                                    📱 {appObj?.name || 'TopStor'}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="report-presets">
@@ -1209,7 +1454,14 @@ const ReportsView: React.FC = () => {
                   {testReportData.tests.map((test: any) => (
                     <div key={test.testId} className="report-test-row">
                       <div className="report-test-header">
-                        <span className="report-test-name">{test.testName}</span>
+                        <span className="report-test-name">
+                          {test.testName}
+                          {test.appName && (
+                            <span style={{ marginLeft: '0.45rem', fontSize: '0.72rem', background: 'rgba(99, 102, 241, 0.2)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: '4px', padding: '0.1rem 0.35rem', fontWeight: 600 }}>
+                              📱 {test.appName}
+                            </span>
+                          )}
+                        </span>
                         <span className="report-test-stats">
                           <span className="report-stat">{test.rounds} rounds</span>
                           <span className="report-stat report-stat-pass">{test.passes} passed</span>
@@ -1399,53 +1651,81 @@ const ReportsView: React.FC = () => {
                 )}
               </div>
 
-              <div className="searchable-select">
-                <label>Versions</label>
-                <input
-                  type="text"
-                  className="user-input"
-                  placeholder={passedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                  value={showPassedVersionDropdown ? passedReportVersionSearch : (passedReportVersionIds.length > 0 ? passedReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                  onChange={e => setPassedReportVersionSearch(e.target.value)}
-                  onFocus={() => setShowPassedVersionDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowPassedVersionDropdown(false), 150)}
-                />
-                {showPassedVersionDropdown && (
-                  <div className="searchable-dropdown">
-                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                      <input
-                        type="checkbox"
-                        checked={passedReportVersionIds.length === versions.length && versions.length > 0}
-                        onChange={() => {
-                          if (passedReportVersionIds.length === versions.length) setPassedReportVersionIds([]);
-                          else setPassedReportVersionIds(versions.map(v => v.id));
-                          setPassedReportData(null);
-                        }}
-                      />
-                      <strong>Select All</strong>
-                    </label>
-                    {versions
-                      .filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase()))
-                      .map(v => (
-                        <label
-                          key={v.id}
-                          className={`searchable-option ${passedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                          onMouseDown={e => e.preventDefault()}
-                        >
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={passedReportAppIds}
+                onChange={ids => {
+                  setPassedReportAppIds(ids);
+                  setPassedReportData(null);
+                  const newVersions = getCurrentVersionIdsForApps(ids, versions);
+                  setPassedReportVersionIds(newVersions);
+                }}
+              />
+
+              {(() => {
+                const visibleVersions = versions.filter(v => passedReportAppIds.includes(v.app_id || 1));
+                const allVisibleSelected = visibleVersions.length > 0 && visibleVersions.every(v => passedReportVersionIds.includes(v.id));
+                return (
+                  <div className="searchable-select">
+                    <label>Versions</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder={passedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showPassedVersionDropdown ? passedReportVersionSearch : (passedReportVersionIds.length > 0 ? passedReportVersionIds.map(id => visibleVersions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                      onChange={e => setPassedReportVersionSearch(e.target.value)}
+                      onFocus={() => setShowPassedVersionDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowPassedVersionDropdown(false), 150)}
+                    />
+                    {showPassedVersionDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                           <input
                             type="checkbox"
-                            checked={passedReportVersionIds.includes(v.id)}
+                            checked={allVisibleSelected}
                             onChange={() => {
-                              setPassedReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                              if (allVisibleSelected) {
+                                setPassedReportVersionIds(prev => prev.filter(id => !visibleVersions.some(v => v.id === id)));
+                              } else {
+                                setPassedReportVersionIds(prev => Array.from(new Set([...prev, ...visibleVersions.map(v => v.id)])));
+                              }
                               setPassedReportData(null);
                             }}
                           />
-                          {v.name} {v.is_current ? '(current)' : ''}
+                          <strong>Select All Versions ({visibleVersions.length})</strong>
                         </label>
-                      ))}
+                        {visibleVersions
+                          .filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase()))
+                          .map(v => {
+                            const appObj = apps.find(a => a.id === (v.app_id || 1));
+                            return (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${passedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={passedReportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setPassedReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                                    setPassedReportData(null);
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                                {apps.length > 1 && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>
+                                    📱 {appObj?.name || 'TopStor'}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="report-presets">
@@ -1524,7 +1804,14 @@ const ReportsView: React.FC = () => {
                     return (
                       <div key={test.testId} className="report-test-row">
                         <div className="report-test-header" onClick={() => togglePassedTestExpand(test.testId)}>
-                          <span className="report-test-name">{test.testName}</span>
+                          <span className="report-test-name">
+                            {test.testName}
+                            {test.appName && (
+                              <span style={{ marginLeft: '0.45rem', fontSize: '0.72rem', background: 'rgba(99, 102, 241, 0.2)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: '4px', padding: '0.1rem 0.35rem', fontWeight: 600 }}>
+                                📱 {test.appName}
+                              </span>
+                            )}
+                          </span>
                           <span className="report-test-stats">
                             <span className="report-stat">{test.rounds} rounds</span>
                             <span className="report-stat report-stat-pass">
@@ -1733,53 +2020,81 @@ const ReportsView: React.FC = () => {
                 )}
               </div>
 
-              <div className="searchable-select">
-                <label>Versions</label>
-                <input
-                  type="text"
-                  className="user-input"
-                  placeholder={failedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                  value={showFailedVersionDropdown ? failedReportVersionSearch : (failedReportVersionIds.length > 0 ? failedReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                  onChange={e => setFailedReportVersionSearch(e.target.value)}
-                  onFocus={() => setShowFailedVersionDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowFailedVersionDropdown(false), 150)}
-                />
-                {showFailedVersionDropdown && (
-                  <div className="searchable-dropdown">
-                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                      <input
-                        type="checkbox"
-                        checked={failedReportVersionIds.length === versions.length && versions.length > 0}
-                        onChange={() => {
-                          if (failedReportVersionIds.length === versions.length) setFailedReportVersionIds([]);
-                          else setFailedReportVersionIds(versions.map(v => v.id));
-                          setFailedReportData(null);
-                        }}
-                      />
-                      <strong>Select All</strong>
-                    </label>
-                    {versions
-                      .filter(v => v.name.toLowerCase().includes(failedReportVersionSearch.toLowerCase()))
-                      .map(v => (
-                        <label
-                          key={v.id}
-                          className={`searchable-option ${failedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                          onMouseDown={e => e.preventDefault()}
-                        >
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={failedReportAppIds}
+                onChange={ids => {
+                  setFailedReportAppIds(ids);
+                  setFailedReportData(null);
+                  const newVersions = getCurrentVersionIdsForApps(ids, versions);
+                  setFailedReportVersionIds(newVersions);
+                }}
+              />
+
+              {(() => {
+                const visibleVersions = versions.filter(v => failedReportAppIds.includes(v.app_id || 1));
+                const allVisibleSelected = visibleVersions.length > 0 && visibleVersions.every(v => failedReportVersionIds.includes(v.id));
+                return (
+                  <div className="searchable-select">
+                    <label>Versions</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder={failedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showFailedVersionDropdown ? failedReportVersionSearch : (failedReportVersionIds.length > 0 ? failedReportVersionIds.map(id => visibleVersions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                      onChange={e => setFailedReportVersionSearch(e.target.value)}
+                      onFocus={() => setShowFailedVersionDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowFailedVersionDropdown(false), 150)}
+                    />
+                    {showFailedVersionDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                           <input
                             type="checkbox"
-                            checked={failedReportVersionIds.includes(v.id)}
+                            checked={allVisibleSelected}
                             onChange={() => {
-                              setFailedReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                              if (allVisibleSelected) {
+                                setFailedReportVersionIds(prev => prev.filter(id => !visibleVersions.some(v => v.id === id)));
+                              } else {
+                                setFailedReportVersionIds(prev => Array.from(new Set([...prev, ...visibleVersions.map(v => v.id)])));
+                              }
                               setFailedReportData(null);
                             }}
                           />
-                          {v.name} {v.is_current ? '(current)' : ''}
+                          <strong>Select All Versions ({visibleVersions.length})</strong>
                         </label>
-                      ))}
+                        {visibleVersions
+                          .filter(v => v.name.toLowerCase().includes(failedReportVersionSearch.toLowerCase()))
+                          .map(v => {
+                            const appObj = apps.find(a => a.id === (v.app_id || 1));
+                            return (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${failedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={failedReportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setFailedReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                                    setFailedReportData(null);
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                                {apps.length > 1 && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>
+                                    📱 {appObj?.name || 'TopStor'}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="report-presets">
@@ -1864,7 +2179,14 @@ const ReportsView: React.FC = () => {
                               style={{ cursor: 'pointer' }}
                               onClick={() => setExpandedFailedStep(isExpanded ? null : step.stepId)}
                             >
-                              <td><strong>{step.testName}</strong></td>
+                              <td>
+                                <strong>{step.testName}</strong>
+                                {step.appName && (
+                                  <span style={{ marginLeft: '0.45rem', fontSize: '0.72rem', background: 'rgba(99, 102, 241, 0.2)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: '4px', padding: '0.1rem 0.35rem', fontWeight: 600 }}>
+                                    📱 {step.appName}
+                                  </span>
+                                )}
+                              </td>
                               <td className="step-num-cell">{step.stepNumber}</td>
                               <td>
                                 <div>{step.description}</div>
@@ -2066,57 +2388,87 @@ const ReportsView: React.FC = () => {
                 )}
               </div>
 
-              <div className="searchable-select">
-                <label>Versions</label>
-                <input
-                  type="text"
-                  className="user-input"
-                  placeholder={pointsReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                  value={showPointsVersionDropdown ? pointsReportVersionSearch : (pointsReportVersionIds.length > 0 ? pointsReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                  onChange={e => setPointsReportVersionSearch(e.target.value)}
-                  onFocus={() => setShowPointsVersionDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowPointsVersionDropdown(false), 150)}
-                />
-                {showPointsVersionDropdown && (
-                  <div className="searchable-dropdown">
-                    <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                      <input
-                        type="checkbox"
-                        checked={pointsReportVersionIds.length === versions.length && versions.length > 0}
-                        onChange={() => {
-                          if (pointsReportVersionIds.length === versions.length) setPointsReportVersionIds([]);
-                          else setPointsReportVersionIds(versions.map(v => v.id));
-                          setPointsReportData(null);
-                          setUserProgressCache({});
-                          setExpandedPointsUser(null);
-                        }}
-                      />
-                      <strong>Select All</strong>
-                    </label>
-                    {versions
-                      .filter(v => v.name.toLowerCase().includes(pointsReportVersionSearch.toLowerCase()))
-                      .map(v => (
-                        <label
-                          key={v.id}
-                          className={`searchable-option ${pointsReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                          onMouseDown={e => e.preventDefault()}
-                        >
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={pointsReportAppIds}
+                onChange={ids => {
+                  setPointsReportAppIds(ids);
+                  setPointsReportData(null);
+                  setUserProgressCache({});
+                  setExpandedPointsUser(null);
+                  const newVersions = getCurrentVersionIdsForApps(ids, versions);
+                  setPointsReportVersionIds(newVersions);
+                }}
+              />
+
+              {(() => {
+                const visibleVersions = versions.filter(v => pointsReportAppIds.includes(v.app_id || 1));
+                const allVisibleSelected = visibleVersions.length > 0 && visibleVersions.every(v => pointsReportVersionIds.includes(v.id));
+                return (
+                  <div className="searchable-select">
+                    <label>Versions</label>
+                    <input
+                      type="text"
+                      className="user-input"
+                      placeholder={pointsReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
+                      value={showPointsVersionDropdown ? pointsReportVersionSearch : (pointsReportVersionIds.length > 0 ? pointsReportVersionIds.map(id => visibleVersions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
+                      onChange={e => setPointsReportVersionSearch(e.target.value)}
+                      onFocus={() => setShowPointsVersionDropdown(true)}
+                      onBlur={() => setTimeout(() => setShowPointsVersionDropdown(false), 150)}
+                    />
+                    {showPointsVersionDropdown && (
+                      <div className="searchable-dropdown">
+                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                           <input
                             type="checkbox"
-                            checked={pointsReportVersionIds.includes(v.id)}
+                            checked={allVisibleSelected}
                             onChange={() => {
-                              setPointsReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                              if (allVisibleSelected) {
+                                setPointsReportVersionIds(prev => prev.filter(id => !visibleVersions.some(v => v.id === id)));
+                              } else {
+                                setPointsReportVersionIds(prev => Array.from(new Set([...prev, ...visibleVersions.map(v => v.id)])));
+                              }
                               setPointsReportData(null);
                               setUserProgressCache({});
                               setExpandedPointsUser(null);
                             }}
                           />
-                          {v.name} {v.is_current ? '(current)' : ''}
+                          <strong>Select All Versions ({visibleVersions.length})</strong>
                         </label>
-                      ))}
+                        {visibleVersions
+                          .filter(v => v.name.toLowerCase().includes(pointsReportVersionSearch.toLowerCase()))
+                          .map(v => {
+                            const appObj = apps.find(a => a.id === (v.app_id || 1));
+                            return (
+                              <label
+                                key={v.id}
+                                className={`searchable-option ${pointsReportVersionIds.includes(v.id) ? 'selected' : ''}`}
+                                onMouseDown={e => e.preventDefault()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={pointsReportVersionIds.includes(v.id)}
+                                  onChange={() => {
+                                    setPointsReportVersionIds(prev => prev.includes(v.id) ? prev.filter(id => id !== v.id) : [...prev, v.id]);
+                                    setPointsReportData(null);
+                                    setUserProgressCache({});
+                                    setExpandedPointsUser(null);
+                                  }}
+                                />
+                                {v.name} {v.is_current ? '(current)' : ''}
+                                {apps.length > 1 && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.35rem' }}>
+                                    📱 {appObj?.name || 'TopStor'}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="report-presets">
@@ -2419,6 +2771,11 @@ const ReportsView: React.FC = () => {
                                                   </span>
                                                 )}
                                                 {t.testName}
+                                                {t.appName && (
+                                                  <span style={{ marginLeft: '0.45rem', fontSize: '0.72rem', background: 'rgba(99, 102, 241, 0.2)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.4)', borderRadius: '4px', padding: '0.1rem 0.35rem', fontWeight: 600 }}>
+                                                    📱 {t.appName}
+                                                  </span>
+                                                )}
                                               </td>
                                               <td>{lastTestResultBadge}</td>
                                               <td>{t.rounds > 0 ? t.rounds : '—'}</td>
@@ -2629,6 +2986,15 @@ const ReportsView: React.FC = () => {
                   )}
                 </div>
               )}
+
+              <SearchableAppSelector
+                apps={apps}
+                selectedAppIds={paymentsReportAppIds}
+                onChange={ids => {
+                  setPaymentsReportAppIds(ids);
+                  setPaymentsReportData(null);
+                }}
+              />
             </div>
 
             <button

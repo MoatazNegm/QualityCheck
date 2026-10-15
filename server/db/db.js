@@ -178,6 +178,15 @@ const clientWrapper = {
   }
 };
 
+function normalizeParams(params) {
+  const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+  return args.map(arg => {
+    if (arg === undefined) return null;
+    if (typeof arg === 'number' && !Number.isFinite(arg)) return null;
+    return arg;
+  });
+}
+
 // Compatibility wrapper for usersDb and testsDb prepare/exec syntax.
 const dbWrapper = {
   prepare(sql) {
@@ -185,19 +194,19 @@ const dbWrapper = {
       return {
         async all(...params) {
           await dbReady;
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           const res = await client.execute({ sql, args });
           return res.rows;
         },
         async get(...params) {
           await dbReady;
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           const res = await client.execute({ sql, args });
           return res.rows[0] || null;
         },
         async run(...params) {
           await dbReady;
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           const res = await client.execute({ sql, args });
           return {
             lastInsertRowid: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : null,
@@ -208,15 +217,15 @@ const dbWrapper = {
     } else {
       return {
         all(...params) {
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           return localDb.prepare(sql).all(...args);
         },
         get(...params) {
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           return localDb.prepare(sql).get(...args) || null;
         },
         run(...params) {
-          const args = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          const args = normalizeParams(params);
           const res = localDb.prepare(sql).run(...args);
           return {
             lastInsertRowid: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : null,
@@ -380,6 +389,21 @@ async function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_used_at DATETIME,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS apps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS user_apps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      app_id INTEGER NOT NULL,
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, app_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
     )
   `.split(';')
    .map(s => s.trim())
@@ -403,7 +427,9 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_point_payments_user ON point_payments(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_uploaded_files_filename ON uploaded_files(filename)',
     'CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)',
-    'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)'
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_user_apps_user ON user_apps(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_user_apps_app ON user_apps(app_id)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }
@@ -411,28 +437,36 @@ async function initDB() {
 // Return the current loop-round number for a user, initialising it
 // to 0 on first access. Round 0 means the user hasn't completed
 // a full cycle through all assigned tests yet.
-async function getRound(userId) {
+async function getRound(userId, appId = 1) {
+  const cleanAppId = parseInt(appId, 10) || 1;
   const row = await testsDb.prepare(
-    'SELECT round_no FROM user_rounds WHERE user_id = ?'
-  ).get(userId);
+    'SELECT round_no FROM user_rounds WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+  ).get(userId, cleanAppId);
   if (row) return row.round_no;
   await testsDb.prepare(
-    'INSERT OR IGNORE INTO user_rounds (user_id, round_no) VALUES (?, 0)'
-  ).run(userId);
+    'INSERT OR IGNORE INTO user_rounds (user_id, app_id, round_no) VALUES (?, ?, 0)'
+  ).run(userId, cleanAppId);
   return 0;
 }
 
 // Advance the loop-round counter for a user (called when wrapping
 // around from the last test back to the first). Returns the new round number.
-async function bumpRound(userId) {
-  await testsDb.prepare(
-    `INSERT INTO user_rounds (user_id, round_no) VALUES (?, 1)
-     ON CONFLICT(user_id) DO UPDATE SET round_no = round_no + 1`
-  ).run(userId);
-  const row = await testsDb.prepare(
-    'SELECT round_no FROM user_rounds WHERE user_id = ?'
-  ).get(userId);
-  return row ? row.round_no : 0;
+async function bumpRound(userId, appId = 1) {
+  const cleanAppId = parseInt(appId, 10) || 1;
+  const existing = await testsDb.prepare(
+    'SELECT round_no FROM user_rounds WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+  ).get(userId, cleanAppId);
+  if (!existing) {
+    await testsDb.prepare(
+      'INSERT INTO user_rounds (user_id, app_id, round_no) VALUES (?, ?, 1)'
+    ).run(userId, cleanAppId);
+    return 1;
+  } else {
+    await testsDb.prepare(
+      'UPDATE user_rounds SET round_no = round_no + 1 WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+    ).run(userId, cleanAppId);
+    return existing.round_no + 1;
+  }
 }
 
 // Perform migrations asynchronously using clientWrapper to prevent deadlocks
@@ -663,6 +697,153 @@ async function runMigrations() {
         console.warn('[Database] Failed to read uploads directory for backfill:', dirErr.message);
       }
     }
+
+    // Multi-app migrations
+    // 1. Ensure 'apps' table exists and seed initial default app 'TopStor'
+    await clientWrapper.execute({
+      sql: `CREATE TABLE IF NOT EXISTS apps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+    });
+    const defaultApp = await clientWrapper.execute({
+      sql: 'SELECT 1 FROM apps WHERE id = 1 OR name = ? LIMIT 1',
+      args: ['TopStor']
+    });
+    if (defaultApp.rows.length === 0) {
+      await clientWrapper.execute({
+        sql: "INSERT INTO apps (id, name, description) VALUES (1, 'TopStor', 'TopStor Storage System')",
+        args: []
+      });
+      console.log('[Database] Seeded default app: TopStor (id=1)');
+    }
+
+    // 2. Ensure 'user_apps' table exists
+    await clientWrapper.execute({
+      sql: `CREATE TABLE IF NOT EXISTS user_apps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        app_id INTEGER NOT NULL,
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, app_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
+      )`
+    });
+    // Assign existing users to app 1
+    await clientWrapper.execute({
+      sql: 'INSERT OR IGNORE INTO user_apps (user_id, app_id) SELECT id, 1 FROM users'
+    });
+
+    // 3. Ensure app_id column exists on tests
+    const testsColumns = (await clientWrapper.execute({ sql: 'PRAGMA table_info(tests)' })).rows;
+    if (!testsColumns.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE tests ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to tests');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE tests SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 4. Ensure app_id column exists on versions
+    const verColumns = (await clientWrapper.execute({ sql: 'PRAGMA table_info(versions)' })).rows;
+    if (!verColumns.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE versions ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to versions');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE versions SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 5. Ensure app_id column exists on test_results
+    const trColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(test_results)' })).rows;
+    if (!trColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE test_results ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to test_results');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE test_results SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 6. Ensure app_id column exists on test_submissions
+    const tsColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(test_submissions)' })).rows;
+    if (tsColsApp.length > 0 && !tsColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE test_submissions ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to test_submissions');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE test_submissions SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 7. Ensure app_id column exists on points_log
+    const plColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(points_log)' })).rows;
+    if (!plColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE points_log ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to points_log');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE points_log SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 8. Ensure app_id column exists on user_warnings
+    const uwColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_warnings)' })).rows;
+    if (uwColsApp.length > 0 && !uwColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_warnings ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to user_warnings');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE user_warnings SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 9. Ensure app_id column exists on user_rounds
+    const urColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_rounds)' })).rows;
+    if (urColsApp.length > 0 && !urColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_rounds ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to user_rounds');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE user_rounds SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 10. Ensure app_id column exists on user_loop_state
+    const ulsColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_loop_state)' })).rows;
+    if (ulsColsApp.length > 0 && !ulsColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_loop_state ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to user_loop_state');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE user_loop_state SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 11. Ensure app_id column exists on point_payments
+    const ppColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(point_payments)' })).rows;
+    if (ppColsApp.length > 0 && !ppColsApp.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE point_payments ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to point_payments');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE point_payments SET app_id = 1 WHERE app_id IS NULL' });
+
+    // 12. Ensure is_suspended, is_deleted, deleted_at, suspended_at columns exist on apps
+    const appsCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(apps)' })).rows;
+    if (!appsCols.some(c => c.name === 'is_suspended')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE apps ADD COLUMN is_suspended INTEGER DEFAULT 0' });
+      console.log('[Database] Added is_suspended column to apps');
+    }
+    if (!appsCols.some(c => c.name === 'is_deleted')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE apps ADD COLUMN is_deleted INTEGER DEFAULT 0' });
+      console.log('[Database] Added is_deleted column to apps');
+    }
+    if (!appsCols.some(c => c.name === 'deleted_at')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE apps ADD COLUMN deleted_at DATETIME' });
+      console.log('[Database] Added deleted_at column to apps');
+    }
+    if (!appsCols.some(c => c.name === 'suspended_at')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE apps ADD COLUMN suspended_at DATETIME' });
+      console.log('[Database] Added suspended_at column to apps');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE apps SET is_suspended = 0 WHERE is_suspended IS NULL' });
+    await clientWrapper.execute({ sql: 'UPDATE apps SET is_deleted = 0 WHERE is_deleted IS NULL' });
+
+    // 13. Ensure app_id column exists on api_keys
+    const akCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(api_keys)' })).rows;
+    if (!akCols.some(c => c.name === 'app_id')) {
+      await clientWrapper.execute({ sql: 'ALTER TABLE api_keys ADD COLUMN app_id INTEGER DEFAULT 1' });
+      console.log('[Database] Added app_id column to api_keys');
+    }
+    await clientWrapper.execute({ sql: 'UPDATE api_keys SET app_id = 1 WHERE app_id IS NULL' });
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_api_keys_app_id ON api_keys(app_id)' });
+
+    // Indexes for multi-app queries
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_tests_app_id ON tests(app_id)' });
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_versions_app_id ON versions(app_id)' });
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_test_results_app_id ON test_results(app_id)' });
+    await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_points_log_app_id ON points_log(app_id)' });
 
     console.log('[Database] Schema initialization and migrations completed successfully.');
   } catch (err) {

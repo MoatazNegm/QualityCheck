@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 import ReportsView from './ReportsView';
 
 interface Test {
@@ -8,6 +9,7 @@ interface Test {
   description: string;
   totalPoints?: number;
   is_deleted?: number | boolean;
+  app_id?: number;
 }
 
 interface User {
@@ -17,6 +19,8 @@ interface User {
   isSuspended: boolean;
   user_groups?: string[];
   api_keys?: ApiKeyItem[];
+  assigned_apps?: number[];
+  assigned_tests_by_app?: Record<number, number[]>;
 }
 
 interface ImportedTest {
@@ -65,6 +69,8 @@ interface ApiKeyItem {
   is_active: number;
   created_at: string;
   last_used_at: string | null;
+  app_id?: number;
+  app_name?: string;
 }
 
 const API_BASE = '';
@@ -81,7 +87,7 @@ async function gzipString(text: string): Promise<Uint8Array> {
 }
 
 const AdminPanel: React.FC = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [tests, setTests] = useState<Test[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [assignments, setAssignments] = useState<Record<number, number[]>>({});
@@ -229,7 +235,194 @@ const AdminPanel: React.FC = () => {
   const [userKeyModalData, setUserKeyModalData] = useState<{ username: string; rawKey: string; keyName: string; role: string } | null>(null);
   const [copiedUserKey, setCopiedUserKey] = useState(false);
 
-  const authHeaders = { Authorization: `Bearer ${token}` };
+  const {
+    apps,
+    archivedApps,
+    currentApp,
+    isAdminPanelMode,
+    selectApp,
+    selectAdminPanel,
+    createApp,
+    refreshApps,
+    suspendApp,
+    archiveApp,
+    restoreApp,
+    fetchArchivedApps
+  } = useApp();
+
+  // Scoped API Key creation app ID
+  const [selectedKeyAppId, setSelectedKeyAppId] = useState<number>(1);
+
+  // App Lifecycle Modals state
+  const [suspendAppTarget, setSuspendAppTarget] = useState<any | null>(null);
+  const [suspendingApp, setSuspendingApp] = useState(false);
+  const [archiveAppTarget, setArchiveAppTarget] = useState<any | null>(null);
+  const [archiveConfirmText, setArchiveConfirmText] = useState('');
+  const [archivingApp, setArchivingApp] = useState(false);
+  const [restoringAppId, setRestoringAppId] = useState<number | null>(null);
+
+  const [globalTab, setGlobalTab] = useState<'apps' | 'users' | 'storage' | 'api-keys' | 'reports'>('apps');
+
+  // Apps Overview State
+  const [appStatsMap, setAppStatsMap] = useState<Record<number, any>>({});
+  const [newAppName, setNewAppName] = useState('');
+  const [newAppDescription, setNewAppDescription] = useState('');
+  const [creatingApp, setCreatingApp] = useState(false);
+  const [appCreateError, setAppCreateError] = useState('');
+  const [appCreateSuccess, setAppCreateSuccess] = useState('');
+
+  // Global Settings: User creation multi-app state
+  const [newUserAppIds, setNewUserAppIds] = useState<number[]>([]);
+  const [newUserCustomAssignments, setNewUserCustomAssignments] = useState<Record<number, number[]>>({});
+  const [allAppTests, setAllAppTests] = useState<Record<number, Test[]>>({});
+  const [customizeAppId, setCustomizeAppId] = useState<number | null>(null);
+
+  // Global Settings: Existing user app assignments editing state
+  const [editingUserAssignments, setEditingUserAssignments] = useState<User | null>(null);
+  const [editUserAppIds, setEditUserAppIds] = useState<number[]>([]);
+  const [editUserCustomAssignments, setEditUserCustomAssignments] = useState<Record<number, number[]>>({});
+  const [savingUserAssignments, setSavingUserAssignments] = useState(false);
+  const [editAssignmentsSuccess, setEditAssignmentsSuccess] = useState('');
+  const [editAssignmentsError, setEditAssignmentsError] = useState('');
+  const [customizeEditAppId, setCustomizeEditAppId] = useState<number | null>(null);
+
+  const authHeaders = useMemo(() => {
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+    if (currentApp) {
+      headers['x-app-id'] = String(currentApp.id);
+    }
+    return headers;
+  }, [token, currentApp]);
+
+  const fetchAllAppStats = async () => {
+    if (!token || apps.length === 0) return;
+    try {
+      const statsObj: Record<number, any> = {};
+      await Promise.all(
+        apps.map(async app => {
+          try {
+            const res = await fetch(`${API_BASE}/api/apps/${app.id}/stats`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+              statsObj[app.id] = await res.json();
+            }
+          } catch {}
+        })
+      );
+      setAppStatsMap(statsObj);
+    } catch {}
+  };
+
+  const fetchAllAppTests = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/tests?appId=all`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data: Test[] = await res.json();
+        const byApp: Record<number, Test[]> = {};
+        for (const t of data) {
+          const aid = t.app_id || 1;
+          if (!byApp[aid]) byApp[aid] = [];
+          byApp[aid].push(t);
+        }
+        setAllAppTests(byApp);
+      }
+    } catch {}
+  };
+
+  const handleCreateApp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAppName.trim()) return;
+    setCreatingApp(true);
+    setAppCreateError('');
+    setAppCreateSuccess('');
+    try {
+      const app = await createApp(newAppName.trim(), newAppDescription.trim());
+      setAppCreateSuccess(`Application "${app.name}" created successfully!`);
+      setNewAppName('');
+      setNewAppDescription('');
+      await refreshApps();
+      fetchAllAppStats();
+    } catch (err: any) {
+      setAppCreateError(err.message || 'Failed to create application');
+    } finally {
+      setCreatingApp(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (err) {
+      console.warn('navigator.clipboard failed, falling back to execCommand', err);
+    }
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      textArea.style.top = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return successful;
+    } catch (err) {
+      console.error('execCommand copy failed', err);
+      return false;
+    }
+  };
+
+  const openEditUserAssignments = (u: User) => {
+    setEditingUserAssignments(u);
+    const assignedIds = (u.assigned_apps || [])
+      .map((a: any) => typeof a === 'object' && a !== null ? Number(a.id) : Number(a))
+      .filter((n: number) => !isNaN(n));
+    setEditUserAppIds(assignedIds.length > 0 ? assignedIds : (apps.length > 0 ? [apps[0].id] : [1]));
+    setEditUserCustomAssignments(u.assigned_tests_by_app || {});
+    setEditAssignmentsError('');
+    setEditAssignmentsSuccess('');
+    setCustomizeEditAppId(null);
+  };
+
+  const handleSaveUserAssignments = async () => {
+    if (!editingUserAssignments) return;
+    setSavingUserAssignments(true);
+    setEditAssignmentsError('');
+    setEditAssignmentsSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${editingUserAssignments.id}`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appIds: editUserAppIds,
+          testAssignmentsByApp: editUserCustomAssignments
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setEditAssignmentsError(data.error || 'Failed to save assignments');
+      } else {
+        setEditAssignmentsSuccess('App and test assignments saved successfully!');
+        setTimeout(() => {
+          setEditingUserAssignments(null);
+          setEditAssignmentsSuccess('');
+        }, 1200);
+        fetchUsers();
+      }
+    } catch {
+      setEditAssignmentsError('Network error');
+    } finally {
+      setSavingUserAssignments(false);
+    }
+  };
 
   useEffect(() => {
     fetchTests();
@@ -237,6 +430,9 @@ const AdminPanel: React.FC = () => {
     fetchVersions();
     fetchSettings();
     fetchApiKeys();
+    fetchAllAppTests();
+    fetchAllAppStats();
+    fetchArchivedApps();
     const dates = getDefaultReportDates('current_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
@@ -247,7 +443,17 @@ const AdminPanel: React.FC = () => {
     setPointsStartDate(dates.start);
     setPointsEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, currentApp?.id]);
+
+  useEffect(() => {
+    if (apps.length > 0) {
+      fetchAllAppStats();
+      if (newUserAppIds.length === 0) {
+        setNewUserAppIds(apps.map(a => a.id));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apps]);
 
   useEffect(() => {
     if (!tests.length) return;
@@ -1023,16 +1229,26 @@ const AdminPanel: React.FC = () => {
       const res = await fetch(`${API_BASE}/api/users`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: newUsername.trim(), password: newPassword, isAdmin, user_groups: newUserGroups }),
+        body: JSON.stringify({
+          username: newUsername.trim(),
+          password: newPassword,
+          isAdmin,
+          user_groups: newUserGroups,
+          appIds: newUserAppIds.length > 0 ? newUserAppIds : [1],
+          testAssignmentsByApp: newUserCustomAssignments
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
         setUserError(data.error || 'Failed to create user');
       } else {
-        setUserSuccess(`User "${newUsername.trim()}" created successfully.`);
+        setUserSuccess(`User "${newUsername.trim()}" created successfully and assigned to selected applications.`);
         setNewUsername('');
         setNewPassword('');
         setNewUserGroups(['testers']);
+        setNewUserAppIds(apps.map(a => a.id));
+        setNewUserCustomAssignments({});
+        setCustomizeAppId(null);
         fetchUsers();
       }
     } catch {
@@ -1661,7 +1877,10 @@ const AdminPanel: React.FC = () => {
   const fetchApiKeys = async () => {
     setApiKeysLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/api-keys`, { headers: authHeaders });
+      const url = (!isAdminPanelMode && currentApp)
+        ? `${API_BASE}/api/api-keys?appId=${currentApp.id}`
+        : `${API_BASE}/api/api-keys`;
+      const res = await fetch(url, { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
         setApiKeys(Array.isArray(data) ? data : []);
@@ -1683,9 +1902,11 @@ const AdminPanel: React.FC = () => {
     setApiKeyError('');
     setApiKeySuccess('');
     try {
+      const targetAppId = (!isAdminPanelMode && currentApp) ? currentApp.id : (selectedKeyAppId || 1);
       const payload: any = {
         name: keyName.trim(),
-        role: keyRole
+        role: keyRole,
+        appId: targetAppId
       };
       if (keyUserMode === 'existing' && keyExistingUserId) {
         payload.userId = keyExistingUserId;
@@ -1707,6 +1928,13 @@ const AdminPanel: React.FC = () => {
 
       setGeneratedRawKey(data.key);
       setGeneratedKeyMeta(data.apiKey);
+      setUserKeyModalData({
+        username: data.apiKey?.username || payload.userName,
+        rawKey: data.key,
+        keyName: data.apiKey?.name || keyName.trim(),
+        role: data.apiKey?.role || keyRole
+      });
+      setCopiedUserKey(false);
       setApiKeySuccess('API key generated successfully!');
       setKeyName('');
       setKeyCustomUsername('');
@@ -1716,6 +1944,47 @@ const AdminPanel: React.FC = () => {
       setApiKeyError(err.message || 'Error generating API key');
     } finally {
       setKeyGenerating(false);
+    }
+  };
+
+  const handleToggleSuspend = async (target: any) => {
+    setSuspendingApp(true);
+    try {
+      await suspendApp(target.id, !target.is_suspended);
+      setSuspendAppTarget(null);
+      await fetchAllAppStats();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update suspension status');
+    } finally {
+      setSuspendingApp(false);
+    }
+  };
+
+  const handleConfirmArchiveApp = async () => {
+    if (!archiveAppTarget) return;
+    if (archiveConfirmText.trim() !== archiveAppTarget.name) return;
+    setArchivingApp(true);
+    try {
+      await archiveApp(archiveAppTarget.id);
+      setArchiveAppTarget(null);
+      setArchiveConfirmText('');
+      await fetchAllAppStats();
+    } catch (err: any) {
+      alert(err.message || 'Failed to archive application');
+    } finally {
+      setArchivingApp(false);
+    }
+  };
+
+  const handleRestoreApp = async (appId: number) => {
+    setRestoringAppId(appId);
+    try {
+      await restoreApp(appId);
+      await fetchAllAppStats();
+    } catch (err: any) {
+      alert(err.message || 'Failed to restore application');
+    } finally {
+      setRestoringAppId(null);
     }
   };
 
@@ -1761,10 +2030,11 @@ const AdminPanel: React.FC = () => {
   const handleGenerateKeyForUser = async (u: User) => {
     try {
       const userRole = u.is_admin ? 'admin' : (u.user_groups || []).includes('developers') ? 'developer' : 'tester';
+      const targetAppId = (!isAdminPanelMode && currentApp) ? currentApp.id : 1;
       const res = await fetch(`${API_BASE}/api/users/${u.id}/generate-key`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: userRole })
+        body: JSON.stringify({ role: userRole, appId: targetAppId })
       });
       const data = await res.json();
       if (res.ok) {
@@ -1809,73 +2079,1225 @@ const AdminPanel: React.FC = () => {
     }
   };
 
+  const renderApiKeysManagement = (isAppMode: boolean) => {
+    return (
+      <div className="admin-section">
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 0 0.5rem 0' }}>
+            <span>🔑</span> {isAppMode ? `API Keys & Autonomous Agents — ${currentApp?.name || 'This App'}` : 'Global API Key Management & Developer Documentation'}
+          </h3>
+          <p className="admin-hint" style={{ margin: 0 }}>
+            {isAppMode
+              ? `Generate API keys scoped strictly to ${currentApp?.name || 'this application'}. Any AI bot user created here is assigned exclusively to this application and its active tests.`
+              : 'Generate and manage scoped API keys for autonomous AI agents, developer scripts, and CI/CD tools. All test executions, yes/no step results, and file uploads performed with an API key are automatically attributed to the key’s assigned user identity.'}
+          </p>
+        </div>
+
+        {/* REST API Documentation & Swagger UI Quick-Link */}
+        <div
+          style={{
+            background: 'var(--card-bg, #1e2433)',
+            border: '1px solid var(--border-color, #2d3748)',
+            borderRadius: '10px',
+            padding: '1.5rem',
+            marginBottom: '1.5rem'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+            <div style={{ flex: '1 1 300px' }}>
+              <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>📚</span> Interactive REST API Documentation (Swagger UI)
+              </h4>
+              <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                Explore complete OpenAPI 3.0 specifications with live execution testing for AI agents, developers, and CI/CD pipelines.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`${API_BASE}/api/docs/get_user_guide?token=${encodeURIComponent(token || '')}`, { headers: authHeaders });
+                    if (!res.ok) { alert('Failed to download API user guide'); return; }
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'QualityCheck_API_User_Guide.md';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                  } catch { alert('Error downloading API user guide'); }
+                }}
+              >
+                <span>📥 Download User Guide (.md)</span>
+              </button>
+              <a
+                href={`/api/docs?token=${encodeURIComponent(token || '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{ textDecoration: 'none' }}
+              >
+                <span>🚀 Open Swagger UI</span>
+                <span style={{ fontSize: '0.85rem' }}>↗</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* Generate Scoped API Key Form */}
+        <div
+          style={{
+            background: 'var(--card-bg, #1e2433)',
+            border: '1px solid var(--border-color, #2d3748)',
+            borderRadius: '10px',
+            padding: '1.5rem',
+            marginBottom: '1.5rem'
+          }}
+        >
+          <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>➕</span> Generate Scoped API Key / AI Agent Key
+          </h4>
+          <p className="admin-hint" style={{ margin: '0 0 1.25rem 0' }}>
+            Keys are cryptographically hashed and linked to a user identity. If creating a new AI bot, the user is automatically granted permission only to the designated application and its active tests.
+          </p>
+
+          <form onSubmit={handleGenerateApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                  Key Name / Agent Identifier <span style={{ color: '#e53e3e' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. AI-Regression-Bot or CI-Runner"
+                  className="user-input"
+                  style={{ width: '100%' }}
+                  value={keyName}
+                  onChange={e => { setKeyName(e.target.value); setApiKeyError(''); setApiKeySuccess(''); }}
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                  Role Permission <span style={{ color: '#e53e3e' }}>*</span>
+                </label>
+                <select
+                  className="user-input"
+                  style={{ width: '100%' }}
+                  value={keyRole}
+                  onChange={e => setKeyRole(e.target.value as any)}
+                >
+                  <option value="tester">Tester (Execute tests, step pass/fail, upload files)</option>
+                  <option value="developer">Developer (Test execution + developer logs)</option>
+                  <option value="admin">Administrator (Full API capabilities)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                  Application Scope <span style={{ color: '#e53e3e' }}>*</span>
+                </label>
+                {isAppMode ? (
+                  <div style={{
+                    padding: '0.55rem 0.85rem',
+                    background: 'rgba(59, 130, 246, 0.12)',
+                    border: '1px solid #3b82f6',
+                    borderRadius: '6px',
+                    color: '#60a5fa',
+                    fontWeight: 600,
+                    fontSize: '0.9rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}>
+                    <span>📱</span> {currentApp?.name || 'TopStor'} (Locked to this application)
+                  </div>
+                ) : (
+                  <select
+                    className="user-input"
+                    style={{ width: '100%' }}
+                    value={selectedKeyAppId}
+                    onChange={e => setSelectedKeyAppId(Number(e.target.value))}
+                  >
+                    {apps.map(a => (
+                      <option key={a.id} value={a.id}>
+                        📱 {a.name} {a.is_suspended ? '[Suspended]' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            <div style={{ background: 'rgba(0,0,0,0.18)', borderRadius: '8px', padding: '1rem', border: '1px solid var(--border-color, #2d3748)' }}>
+              <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.5rem' }}>
+                User Identity Association
+              </label>
+              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                  <input
+                    type="radio"
+                    name={`keyUserMode_${isAppMode ? 'app' : 'global'}`}
+                    value="create"
+                    checked={keyUserMode === 'create'}
+                    onChange={() => setKeyUserMode('create')}
+                  />
+                  <span>Create New Dedicated AI / Bot User</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                  <input
+                    type="radio"
+                    name={`keyUserMode_${isAppMode ? 'app' : 'global'}`}
+                    value="existing"
+                    checked={keyUserMode === 'existing'}
+                    onChange={() => setKeyUserMode('existing')}
+                  />
+                  <span>Attach Key to Existing User Account</span>
+                </label>
+              </div>
+
+              {keyUserMode === 'create' ? (
+                <div>
+                  <input
+                    type="text"
+                    placeholder="Custom Bot Username (optional, defaults to Key Name)"
+                    className="user-input"
+                    style={{ maxWidth: '380px', width: '100%' }}
+                    value={keyCustomUsername}
+                    onChange={e => setKeyCustomUsername(e.target.value)}
+                  />
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                    A dedicated bot user account will be created and assigned <strong>only</strong> to {isAppMode ? (currentApp?.name || 'this application') : 'the selected application'} and its active tests.
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <select
+                    className="user-input"
+                    style={{ maxWidth: '380px', width: '100%' }}
+                    value={keyExistingUserId}
+                    onChange={e => setKeyExistingUserId(e.target.value ? Number(e.target.value) : '')}
+                    required={keyUserMode === 'existing'}
+                  >
+                    <option value="">-- Select an Existing User --</option>
+                    {users.map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.username} ({u.is_admin ? 'Admin' : (u.user_groups || []).join(', ') || 'tester'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                className="btn"
+                disabled={keyGenerating || !keyName.trim() || (keyUserMode === 'existing' && !keyExistingUserId)}
+                style={{ padding: '0.6rem 1.4rem' }}
+              >
+                {keyGenerating ? 'Generating...' : '+ Generate Scoped API Key'}
+              </button>
+            </div>
+
+            {apiKeyError && <p className="error-msg" style={{ margin: 0 }}>{apiKeyError}</p>}
+            {apiKeySuccess && <p className="success-msg" style={{ margin: 0 }}>{apiKeySuccess}</p>}
+          </form>
+        </div>
+
+        {/* API Key Table */}
+        <div
+          style={{
+            background: 'var(--card-bg, #1e2433)',
+            border: '1px solid var(--border-color, #2d3748)',
+            borderRadius: '10px',
+            padding: '1.5rem'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>🔑</span> Active API Keys {isAppMode && currentApp ? `(${currentApp.name})` : ''}
+            </h4>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ fontSize: '0.85rem', padding: '0.3rem 0.75rem' }}
+              onClick={fetchApiKeys}
+              disabled={apiKeysLoading}
+            >
+              {apiKeysLoading ? 'Refreshing...' : '🔄 Refresh Keys'}
+            </button>
+          </div>
+
+          {apiKeys.length === 0 ? (
+            <p className="admin-hint">No API keys found for this application scope.</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="versions-table" style={{ width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Key Name</th>
+                    <th>Prefix</th>
+                    <th>App Scope</th>
+                    <th>User Identity</th>
+                    <th>Role</th>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiKeys.map(k => (
+                    <tr key={k.id}>
+                      <td><strong>{k.name}</strong></td>
+                      <td><code>{k.key_prefix}</code></td>
+                      <td>
+                        <span style={{ fontSize: '0.85rem', color: '#63b3ed', fontWeight: 600 }}>
+                          📱 {k.app_name || 'TopStor'}
+                        </span>
+                      </td>
+                      <td>{k.username}</td>
+                      <td><span className="user-summary-badge">{k.role}</span></td>
+                      <td>{new Date(k.created_at).toLocaleDateString()}</td>
+                      <td>
+                        <span style={{ color: k.is_active ? '#48bb78' : '#a0aec0', fontWeight: 600 }}>
+                          {k.is_active ? '● Active' : '○ Inactive'}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => handleToggleApiKey(k.id)}
+                          >
+                            {k.is_active ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                            onClick={() => handleDeleteApiKey(k.id, k.name)}
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="admin-panel">
-      <h2>Admin Panel</h2>
+      {isAdminPanelMode ? (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <div>
+              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span>⚙️</span> Global Admin Panel
+              </h2>
+              <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.9rem' }}>
+                Manage all applications, global user assignments, system storage, API keys, and multi-app reporting.
+              </p>
+            </div>
+            {currentApp && (
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem' }}
+                onClick={() => selectApp(currentApp.id)}
+              >
+                <span>📱</span> Return to {currentApp.name} Solution ➔
+              </button>
+            )}
+          </div>
 
-      <div className="admin-tabs">
-        <button
-          className={`tab-btn ${activeTab === 'upload' ? 'active' : ''}`}
-          onClick={() => setActiveTab('upload')}
-        >
-          Upload Tests
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'assign' ? 'active' : ''}`}
-          onClick={() => setActiveTab('assign')}
-        >
-          Assign Tests
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'users' ? 'active' : ''}`}
-          onClick={() => setActiveTab('users')}
-        >
-          Users
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'manage' ? 'active' : ''}`}
-          onClick={() => setActiveTab('manage')}
-        >
-          Manage Tests
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'disabled' ? 'active' : ''}`}
-          onClick={() => setActiveTab('disabled')}
-        >
-          Disabled Tests {tests.filter(t => t.is_deleted).length > 0 ? `(${tests.filter(t => t.is_deleted).length})` : ''}
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'versions' ? 'active' : ''}`}
-          onClick={() => setActiveTab('versions')}
-        >
-          Versions
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
-          onClick={() => setActiveTab('reports')}
-        >
-          Reports
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'backup' ? 'active' : ''}`}
-          onClick={() => setActiveTab('backup')}
-        >
-          Backup / Restore
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
-          onClick={() => setActiveTab('settings')}
-        >
-          Settings
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'api-keys' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('api-keys'); fetchApiKeys(); }}
-          style={{ fontWeight: 600, color: activeTab === 'api-keys' ? '#63b3ed' : undefined }}
-        >
-          🔑 API Keys & Agents
-        </button>
-      </div>
+          <div className="admin-tabs" style={{ marginBottom: '1.5rem' }}>
+            <button
+              className={`tab-btn ${globalTab === 'apps' ? 'active' : ''}`}
+              onClick={() => { setGlobalTab('apps'); fetchAllAppStats(); }}
+            >
+              📱 Applications ({apps.length})
+            </button>
+            <button
+              className={`tab-btn ${globalTab === 'users' ? 'active' : ''}`}
+              onClick={() => { setGlobalTab('users'); fetchUsers(); fetchAllAppTests(); }}
+            >
+              👥 Global User Settings
+            </button>
+            <button
+              className={`tab-btn ${globalTab === 'storage' ? 'active' : ''}`}
+              onClick={() => { setGlobalTab('storage'); fetchSettings(); }}
+            >
+              💾 Storage & Backup
+            </button>
+            <button
+              className={`tab-btn ${globalTab === 'api-keys' ? 'active' : ''}`}
+              onClick={() => { setGlobalTab('api-keys'); fetchApiKeys(); }}
+              style={{ fontWeight: 600, color: globalTab === 'api-keys' ? '#63b3ed' : undefined }}
+            >
+              🔑 API Keys & Agents
+            </button>
+            <button
+              className={`tab-btn ${globalTab === 'reports' ? 'active' : ''}`}
+              onClick={() => setGlobalTab('reports')}
+            >
+              📊 Multi-App Reports
+            </button>
+          </div>
+
+          {globalTab === 'apps' && (
+            <div className="admin-section">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Applications Overview</h3>
+                  <p className="admin-hint" style={{ margin: '0.25rem 0 0 0' }}>
+                    Each application encapsulates its own testing solution, versions, tests, steps, and assigned users.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                  onClick={fetchAllAppStats}
+                >
+                  🔄 Refresh Stats
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem', marginBottom: '2.5rem' }}>
+                {apps.map(app => {
+                  const stats = appStatsMap[app.id] || {};
+                  const isSelected = currentApp?.id === app.id;
+                  const isSuspended = Boolean(app.is_suspended);
+
+                  return (
+                    <div
+                      key={app.id}
+                      style={{
+                        background: 'var(--card-bg, #1e2433)',
+                        border: `1.5px solid ${isSuspended ? '#f59e0b' : isSelected ? '#3b82f6' : 'var(--border-color, #2d3748)'}`,
+                        borderRadius: '10px',
+                        padding: '1.25rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        boxShadow: isSelected ? '0 0 15px rgba(59, 130, 246, 0.2)' : '0 4px 12px rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                          <h4 style={{ margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span>📱</span> {app.name}
+                          </h4>
+                          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            {isSuspended ? (
+                              <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', border: '1px solid #f59e0b', fontWeight: 600 }}>
+                                ⏸️ Suspended
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'rgba(72, 187, 120, 0.2)', color: '#48bb78', border: '1px solid #48bb78', fontWeight: 600 }}>
+                                ● Active
+                              </span>
+                            )}
+                            {isSelected && (
+                              <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '10px', background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', border: '1px solid #3b82f6' }}>
+                                Selected
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.88rem', minHeight: '38px' }}>
+                          {app.description || 'No description provided.'}
+                        </p>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                          <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.6rem', borderRadius: '6px' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Current Version</div>
+                            <div style={{ fontWeight: 600, fontSize: '0.95rem', color: '#63b3ed' }}>
+                              {stats.currentVersion || 'None set'}
+                            </div>
+                          </div>
+                          <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.6rem', borderRadius: '6px' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Active Tests</div>
+                            <div style={{ fontWeight: 600, fontSize: '0.95rem', color: '#48bb78' }}>
+                              {stats.testsCount ?? 0} tests
+                            </div>
+                          </div>
+                          <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.6rem', borderRadius: '6px' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Assigned Users</div>
+                            <div style={{ fontWeight: 600, fontSize: '0.95rem', color: '#ecc94b' }}>
+                              {stats.usersCount ?? 0} users
+                            </div>
+                          </div>
+                          <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.6rem', borderRadius: '6px' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Total Executions</div>
+                            <div style={{ fontWeight: 600, fontSize: '0.95rem', color: '#9f7aea' }}>
+                              {stats.executionsCount ?? 0}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', padding: '0.55rem' }}
+                          onClick={() => selectApp(app.id)}
+                        >
+                          <span>Open App Solution</span>
+                          <span>➔</span>
+                        </button>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '0.4rem', fontSize: '0.8rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.3rem' }}
+                            onClick={() => setSuspendAppTarget(app)}
+                          >
+                            <span>{app.is_suspended ? '▶️ Resume' : '⏸️ Suspend'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            style={{ padding: '0.4rem', fontSize: '0.8rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.3rem' }}
+                            onClick={() => { setArchiveAppTarget(app); setArchiveConfirmText(''); }}
+                          >
+                            <span>🗑️ Archive</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem', alignItems: 'start' }}>
+                {/* Create Application Card */}
+                <div style={{ background: 'var(--card-bg, #1e2433)', border: '1px solid var(--border-color, #2d3748)', borderRadius: '10px', padding: '1.5rem' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span>➕</span> Create New Application
+                  </h4>
+                  <p className="admin-hint" style={{ margin: '0 0 1rem 0' }}>
+                    Create an application for a different product or module. You can then import tests, define versions, and assign users to it.
+                  </p>
+
+                  <form onSubmit={handleCreateApp} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <input
+                      type="text"
+                      placeholder="Application Name (e.g. TopStor V2, StorageHub)"
+                      className="user-input"
+                      value={newAppName}
+                      onChange={e => { setNewAppName(e.target.value); setAppCreateError(''); setAppCreateSuccess(''); }}
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="Description (optional)"
+                      className="user-input"
+                      value={newAppDescription}
+                      onChange={e => setNewAppDescription(e.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      className="btn"
+                      disabled={creatingApp || !newAppName.trim()}
+                      style={{ alignSelf: 'flex-start', padding: '0.55rem 1.25rem' }}
+                    >
+                      {creatingApp ? 'Creating...' : '+ Create Application'}
+                    </button>
+                  </form>
+                  {appCreateError && <p className="error-msg" style={{ marginTop: '0.75rem' }}>{appCreateError}</p>}
+                  {appCreateSuccess && <p className="success-msg" style={{ marginTop: '0.75rem' }}>{appCreateSuccess}</p>}
+                </div>
+
+                {/* Archived Applications (Archive Settings) */}
+                <div style={{ background: 'var(--card-bg, #1e2433)', border: '1px solid var(--border-color, #2d3748)', borderRadius: '10px', padding: '1.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <h4 style={{ margin: 0, fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span>📦</span> Archived Applications (Archive Settings)
+                    </h4>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem' }}
+                      onClick={fetchArchivedApps}
+                    >
+                      🔄 Refresh Archive
+                    </button>
+                  </div>
+                  <p className="admin-hint" style={{ margin: '0 0 1rem 0' }}>
+                    Archiving performs a <strong>safe soft-delete</strong>. No records are deleted from the database. Archived apps are hidden from logon and reporting, and can be restored at any time.
+                  </p>
+
+                  {archivedApps.length === 0 ? (
+                    <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.15)', borderRadius: '6px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                      No archived applications. All applications are active or suspended.
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="versions-table" style={{ width: '100%', fontSize: '0.85rem' }}>
+                        <thead>
+                          <tr>
+                            <th>Application</th>
+                            <th>Archived Date</th>
+                            <th style={{ textAlign: 'right' }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {archivedApps.map(archived => (
+                            <tr key={archived.id}>
+                              <td>
+                                <strong>📱 {archived.name}</strong>
+                                {archived.description && (
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{archived.description}</div>
+                                )}
+                              </td>
+                              <td>
+                                {archived.deleted_at ? new Date(archived.deleted_at).toLocaleDateString() : 'Archived'}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ fontSize: '0.78rem', padding: '0.25rem 0.6rem', background: '#38a169' }}
+                                  onClick={() => handleRestoreApp(archived.id)}
+                                  disabled={restoringAppId === archived.id}
+                                >
+                                  {restoringAppId === archived.id ? 'Restoring...' : '♻️ Restore'}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {globalTab === 'users' && (
+            <div className="admin-section">
+              <h3>Create New User (Global)</h3>
+              <p className="admin-hint">
+                Users must be added here in Global Settings. Assign the user to one or more applications.
+                By default, assigning an application automatically assigns all of that application's non-deleted tests.
+              </p>
+
+              <form onSubmit={handleCreateUser} className="create-user-form" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '1.25rem' }}>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', width: '100%' }}>
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={newUsername}
+                    onChange={e => { setNewUsername(e.target.value); setUserError(''); setUserSuccess(''); }}
+                    className="user-input"
+                    autoComplete="off"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={newPassword}
+                    onChange={e => { setNewPassword(e.target.value); setUserError(''); setUserSuccess(''); }}
+                    className="user-input"
+                    autoComplete="new-password"
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Groups:</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newUserGroups.includes('testers')}
+                      onChange={() => setNewUserGroups(prev => prev.includes('testers') ? prev.filter(g => g !== 'testers') : [...prev, 'testers'])}
+                    />
+                    <span>Testers</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newUserGroups.includes('admins')}
+                      onChange={() => setNewUserGroups(prev => prev.includes('admins') ? prev.filter(g => g !== 'admins') : [...prev, 'admins'])}
+                    />
+                    <span>Administrators</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newUserGroups.includes('developers')}
+                      onChange={() => setNewUserGroups(prev => prev.includes('developers') ? prev.filter(g => g !== 'developers') : [...prev, 'developers'])}
+                    />
+                    <span>Developers</span>
+                  </label>
+                </div>
+
+                {/* Application & Test Assignments */}
+                <div style={{ width: '100%', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <div>
+                      <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>Assign to Applications & Tests:</span>
+                      <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                        Selecting an app automatically assigns all non-deleted tests of that app by default.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {apps.map(app => {
+                      const isAssigned = newUserAppIds.includes(app.id);
+                      const appTests = (allAppTests[app.id] || []).filter(t => !t.is_deleted);
+                      const customList = newUserCustomAssignments[app.id];
+                      const isCustomized = Array.isArray(customList);
+                      const isExpanded = customizeAppId === app.id;
+
+                      return (
+                        <div key={app.id} style={{ background: isAssigned ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255,255,255,0.02)', border: `1px solid ${isAssigned ? '#3b82f6' : 'var(--border-color)'}`, borderRadius: '6px', padding: '0.75rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 600 }}>
+                              <input
+                                type="checkbox"
+                                checked={isAssigned}
+                                onChange={() => {
+                                  if (isAssigned) {
+                                    setNewUserAppIds(prev => prev.filter(id => id !== app.id));
+                                    setNewUserCustomAssignments(prev => {
+                                      const next = { ...prev };
+                                      delete next[app.id];
+                                      return next;
+                                    });
+                                    if (customizeAppId === app.id) setCustomizeAppId(null);
+                                  } else {
+                                    setNewUserAppIds(prev => [...prev, app.id]);
+                                  }
+                                }}
+                              />
+                              <span>📱 {app.name}</span>
+                            </label>
+
+                            {isAssigned && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '10px', background: isCustomized ? 'rgba(237, 137, 54, 0.15)' : 'rgba(72, 187, 120, 0.15)', color: isCustomized ? '#ed8936' : '#48bb78' }}>
+                                  {isCustomized ? `Custom: ${customList.length}/${appTests.length} tests` : `✓ Default: All ${appTests.length} tests`}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn-secondary"
+                                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                                  onClick={() => setCustomizeAppId(isExpanded ? null : app.id)}
+                                >
+                                  {isExpanded ? '▲ Done' : '▼ Customize Tests'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {isAssigned && isExpanded && (
+                            <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Customize tests for {app.name}:</span>
+                                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem' }}
+                                    onClick={() => setNewUserCustomAssignments(prev => ({ ...prev, [app.id]: appTests.map(t => t.id) }))}
+                                  >
+                                    Select All
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem' }}
+                                    onClick={() => setNewUserCustomAssignments(prev => ({ ...prev, [app.id]: [] }))}
+                                  >
+                                    Deselect All
+                                  </button>
+                                  {isCustomized && (
+                                    <button
+                                      type="button"
+                                      className="btn-secondary"
+                                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem' }}
+                                      onClick={() => setNewUserCustomAssignments(prev => {
+                                        const next = { ...prev };
+                                        delete next[app.id];
+                                        return next;
+                                      })}
+                                    >
+                                      Reset to Default
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.4rem', maxHeight: '160px', overflowY: 'auto', padding: '0.2rem' }}>
+                                {appTests.map(t => {
+                                  const currentList = isCustomized ? customList : appTests.map(x => x.id);
+                                  const isChecked = currentList.includes(t.id);
+                                  return (
+                                    <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.3rem', borderRadius: '4px', background: isChecked ? 'rgba(59, 130, 246, 0.12)' : 'rgba(0,0,0,0.1)', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                          const current = isCustomized ? [...customList] : appTests.map(x => x.id);
+                                          const next = isChecked ? current.filter(id => id !== t.id) : [...current, t.id];
+                                          setNewUserCustomAssignments(prev => ({ ...prev, [app.id]: next }));
+                                        }}
+                                      />
+                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.name}>{t.name}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <button type="submit" className="btn" disabled={creatingUser || !newUsername.trim() || !newPassword.trim() || newUserGroups.length === 0 || newUserAppIds.length === 0}>
+                  {creatingUser ? 'Creating...' : 'Create User'}
+                </button>
+              </form>
+              {userError && <p className="error-msg">{userError}</p>}
+              {userSuccess && <p className="success-msg">{userSuccess}</p>}
+
+              <h3 style={{ marginTop: '2.5rem' }}>All System Users</h3>
+              <p className="admin-hint">View all registered users, their roles, and assigned applications.</p>
+              {users.length === 0 ? (
+                <p className="admin-hint">No users yet.</p>
+              ) : (
+                <div className="users-list">
+                  {users.map(u => {
+                    const currentGroups = u.user_groups || (u.is_admin ? ['admins'] : ['testers']);
+                    const userActiveKeys = (u.api_keys && u.api_keys.length > 0)
+                      ? u.api_keys.filter(k => k.is_active)
+                      : apiKeys.filter(k => k.user_id === u.id && k.is_active);
+                    const hasActiveKey = userActiveKeys.length > 0;
+
+                    return (
+                      <div key={u.id} className="user-row" style={{ flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          <span className="user-row-name" style={{ fontWeight: 600, fontSize: '1rem' }}>{u.username}</span>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            {['testers', 'admins', 'developers'].map(g => {
+                              const isMember = currentGroups.includes(g);
+                              return (
+                                <label
+                                  key={g}
+                                  title={`Toggle ${g} group`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    fontSize: '0.75rem',
+                                    padding: '0.15rem 0.5rem',
+                                    borderRadius: '12px',
+                                    border: '1px solid var(--border-color)',
+                                    background: isMember ? 'var(--accent-color, #4f46e5)' : 'transparent',
+                                    color: isMember ? '#fff' : 'inherit',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isMember}
+                                    onChange={() => handleToggleUserGroup(u, g)}
+                                    style={{ margin: 0, width: '12px', height: '12px' }}
+                                  />
+                                  {g}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Assigned Apps Badges */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                          {u.is_admin ? (
+                            <span className="user-summary-badge" style={{ background: 'rgba(99, 179, 237, 0.15)', color: '#63b3ed', border: '1px solid rgba(99, 179, 237, 0.3)' }}>
+                              👑 All Apps (Admin)
+                            </span>
+                          ) : (
+                            (u.assigned_apps && u.assigned_apps.length > 0) ? (
+                              u.assigned_apps.map((appItem: any) => {
+                                const appId = typeof appItem === 'object' && appItem !== null ? Number(appItem.id) : Number(appItem);
+                                const appObj = apps.find(a => a.id === appId) || (typeof appItem === 'object' ? appItem : null);
+                                const appName = appObj?.name || `App #${appId}`;
+                                return (
+                                  <span key={appId} className="user-summary-badge" style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                                    📱 {appName}
+                                  </span>
+                                );
+                              })
+                            ) : (
+                              <span className="user-summary-badge" style={{ color: 'var(--text-muted)' }}>No Apps</span>
+                            )
+                          )}
+                          {!u.is_admin && hasActiveKey && (
+                            <span className="user-summary-badge" style={{ background: 'rgba(72, 187, 120, 0.15)', color: '#48bb78', border: '1px solid rgba(72, 187, 120, 0.4)' }} title={`Active Key: ${userActiveKeys[0].key_prefix}`}>
+                              🔑 {userActiveKeys[0].key_prefix}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="user-row-actions">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}
+                            title="Manage assigned applications and test permissions"
+                            onClick={() => openEditUserAssignments(u)}
+                          >
+                            <span>📱</span> Apps & Tests
+                          </button>
+                          {!u.is_admin && hasActiveKey && (
+                            <button
+                              type="button"
+                              className="btn-danger"
+                              style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                              title="Revoke generated key"
+                              onClick={() => handleRevokeUserKey(u)}
+                            >
+                              Revoke Key
+                            </button>
+                          )}
+                          {!u.is_admin && (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                              onClick={() => handleGenerateKeyForUser(u)}
+                            >
+                              {hasActiveKey ? "New Key" : "+ Key"}
+                            </button>
+                          )}
+                          <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
+                            <input
+                              type="checkbox"
+                              checked={!!u.isSuspended}
+                              onChange={() => toggleSuspension(u)}
+                            />
+                            <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
+                          </label>
+                          <button
+                            className="btn-icon"
+                            title="Change password"
+                            onClick={() => openChangePassword(u)}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                          </button>
+                          <button
+                            className="btn-danger"
+                            onClick={() => openDeleteUser(u)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {globalTab === 'storage' && (
+            <div className="admin-section">
+              <h3>System Storage & Backup</h3>
+              <p className="admin-hint">
+                Configure cloud attachment storage (Dropbox) and generate full database backups.
+              </p>
+
+              {/* Dropbox Storage Configuration */}
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem',
+                  marginBottom: '2rem'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>📦</span> Dropbox Attachment Storage
+                  </h4>
+                  <span
+                    style={{
+                      background: dropboxEnabled ? 'rgba(72, 187, 120, 0.15)' : 'rgba(160, 174, 192, 0.15)',
+                      color: dropboxEnabled ? '#48bb78' : 'var(--text-muted, #a0aec0)',
+                      border: `1px solid ${dropboxEnabled ? 'rgba(72, 187, 120, 0.3)' : 'rgba(160, 174, 192, 0.3)'}`,
+                      padding: '0.2rem 0.65rem',
+                      borderRadius: '12px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    {dropboxEnabled ? '● Enabled' : '○ Disabled'}
+                  </span>
+                </div>
+
+                <form onSubmit={handleSaveSettings}>
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={dropboxEnabled}
+                        onChange={e => setDropboxEnabled(e.target.checked)}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                      <span>Enable Dropbox Storage for Uploaded Files</span>
+                    </label>
+                  </div>
+
+                  {dropboxEnabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.25rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                          Dropbox Target Folder Path
+                        </label>
+                        <input
+                          type="text"
+                          className="user-input"
+                          style={{ width: '100%', maxWidth: '400px' }}
+                          value={dropboxFolderPath}
+                          onChange={e => setDropboxFolderPath(e.target.value)}
+                          placeholder="/QualityCheck_Uploads"
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                          Dropbox App Key
+                        </label>
+                        <input
+                          type="text"
+                          className="user-input"
+                          style={{ width: '100%', maxWidth: '400px' }}
+                          value={dropboxAppKey}
+                          onChange={e => setDropboxAppKey(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                          Dropbox App Secret
+                        </label>
+                        <input
+                          type="password"
+                          className="user-input"
+                          style={{ width: '100%', maxWidth: '400px' }}
+                          placeholder={dropboxIsConfigured ? 'App Secret configured. Enter new to replace.' : 'Enter Secret'}
+                          value={dropboxAppSecret}
+                          onChange={e => setDropboxAppSecret(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                    <button type="submit" className="btn" disabled={settingsSaving}>
+                      {settingsSaving ? 'Saving...' : 'Save Storage Settings'}
+                    </button>
+                    {dropboxEnabled && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={handleTestDropbox}
+                        disabled={dropboxTesting}
+                      >
+                        {dropboxTesting ? 'Testing...' : '⚡ Test Dropbox'}
+                      </button>
+                    )}
+                  </div>
+                  {settingsSuccess && <p className="success-msg" style={{ marginTop: '0.75rem' }}>{settingsSuccess}</p>}
+                  {settingsError && <p className="error-msg" style={{ marginTop: '0.75rem' }}>{settingsError}</p>}
+                </form>
+              </div>
+
+              {/* Full System Backup & Restore */}
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem'
+                }}
+              >
+                <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>💾</span> Backup & Restore All System Data
+                </h4>
+                <p className="admin-hint" style={{ margin: '0 0 1rem 0' }}>
+                  Download a JSON backup containing all apps, users, tests, steps, results, points, and attachments, or restore a previous snapshot.
+                </p>
+
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1.5rem' }}>
+                  <button className="btn" onClick={handleBackupExport} disabled={backupLoading}>
+                    {backupLoading ? 'Preparing...' : '📥 Download Backup'}
+                  </button>
+                </div>
+
+                <h5 style={{ margin: '1rem 0 0.5rem 0', fontSize: '1rem' }}>Restore from File:</h5>
+                <form onSubmit={handleBackupImport} className="upload-form">
+                  <input
+                    ref={backupFileRef}
+                    type="file"
+                    accept=".json"
+                    className="file-input"
+                  />
+                  <button type="submit" className="btn" disabled={backupLoading}>
+                    {backupLoading ? 'Restoring...' : 'Restore Backup'}
+                  </button>
+                </form>
+                {backupError && <p className="error-msg" style={{ marginTop: '0.75rem' }}>{backupError}</p>}
+                {backupMessage && <p className="success-msg" style={{ marginTop: '0.75rem' }}>{backupMessage}</p>}
+              </div>
+            </div>
+          )}
+
+          {globalTab === 'api-keys' && renderApiKeysManagement(false)}
+
+          {globalTab === 'reports' && (
+            <ReportsView />
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <div>
+              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span>📱</span> App Solution: {currentApp?.name || 'TopStor'}
+                {currentApp?.is_suspended ? (
+                  <span style={{ fontSize: '0.8rem', padding: '0.2rem 0.6rem', borderRadius: '12px', background: 'rgba(245, 158, 11, 0.25)', color: '#fbbf24', border: '1px solid #f59e0b', fontWeight: 600 }}>
+                    ⏸️ SUSPENDED
+                  </span>
+                ) : null}
+              </h2>
+              <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.9rem' }}>
+                {currentApp?.description || `Manage tests, versions, users, and execution for ${currentApp?.name || 'this application'}.`}
+              </p>
+            </div>
+            {(user?.isAdmin || (user as any)?.is_admin) && (
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem' }}
+                onClick={selectAdminPanel}
+              >
+                <span>⚙️</span> Switch to Global Admin Panel
+              </button>
+            )}
+          </div>
+
+          {currentApp?.is_suspended && (
+            <div style={{
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1.5px solid #f59e0b',
+              borderRadius: '8px',
+              padding: '0.85rem 1.25rem',
+              marginBottom: '1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.75rem'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '1.5rem' }}>⚠️</span>
+                <div>
+                  <strong style={{ color: '#fbbf24' }}>This Application is Currently Suspended</strong>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Testers and developers are blocked from logging in to this application. Only administrators have access.
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: '0.85rem', padding: '0.4rem 0.9rem', background: '#38a169' }}
+                onClick={() => handleToggleSuspend(currentApp)}
+                disabled={suspendingApp}
+              >
+                {suspendingApp ? 'Resuming...' : '▶️ Resume Application'}
+              </button>
+            </div>
+          )}
+
+          <div className="admin-tabs">
+            <button
+              className={`tab-btn ${activeTab === 'upload' ? 'active' : ''}`}
+              onClick={() => setActiveTab('upload')}
+            >
+              Upload Tests
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'assign' ? 'active' : ''}`}
+              onClick={() => setActiveTab('assign')}
+            >
+              Assign Tests
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'users' ? 'active' : ''}`}
+              onClick={() => setActiveTab('users')}
+            >
+              App Users
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'manage' ? 'active' : ''}`}
+              onClick={() => setActiveTab('manage')}
+            >
+              Manage Tests
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'disabled' ? 'active' : ''}`}
+              onClick={() => setActiveTab('disabled')}
+            >
+              Disabled Tests {tests.filter(t => t.is_deleted).length > 0 ? `(${tests.filter(t => t.is_deleted).length})` : ''}
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'versions' ? 'active' : ''}`}
+              onClick={() => setActiveTab('versions')}
+            >
+              Versions
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
+              onClick={() => setActiveTab('reports')}
+            >
+              Reports
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => setActiveTab('settings')}
+            >
+              Settings
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'api-keys' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('api-keys'); fetchApiKeys(); }}
+            >
+              API Keys
+            </button>
+          </div>
 
       {activeTab === 'upload' && (
         <div className="admin-section">
@@ -1927,66 +3349,47 @@ const AdminPanel: React.FC = () => {
 
       {activeTab === 'users' && (
         <div className="admin-section">
-          <h3>Create New User</h3>
-          <form onSubmit={handleCreateUser} className="create-user-form" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '1rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', width: '100%' }}>
-              <input
-                type="text"
-                placeholder="Username"
-                value={newUsername}
-                onChange={e => { setNewUsername(e.target.value); setUserError(''); setUserSuccess(''); }}
-                className="user-input"
-                autoComplete="off"
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={newPassword}
-                onChange={e => { setNewPassword(e.target.value); setUserError(''); setUserSuccess(''); }}
-                className="user-input"
-                autoComplete="new-password"
-              />
+          <div style={{
+            background: 'rgba(59, 130, 246, 0.1)',
+            border: '1px solid rgba(59, 130, 246, 0.3)',
+            borderRadius: '8px',
+            padding: '1rem 1.25rem',
+            marginBottom: '1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '1rem'
+          }}>
+            <div>
+              <strong style={{ color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.98rem' }}>
+                <span>ℹ️</span> Global User Management
+              </strong>
+              <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.88rem', color: 'var(--text-muted, #a0aec0)' }}>
+                Users are added through <strong>Global Settings only</strong>. Below are the users currently assigned to <strong>{currentApp?.name || 'this application'}</strong>.
+              </p>
             </div>
-            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Groups:</span>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={newUserGroups.includes('testers')}
-                  onChange={() => setNewUserGroups(prev => prev.includes('testers') ? prev.filter(g => g !== 'testers') : [...prev, 'testers'])}
-                />
-                <span>Testers</span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={newUserGroups.includes('admins')}
-                  onChange={() => setNewUserGroups(prev => prev.includes('admins') ? prev.filter(g => g !== 'admins') : [...prev, 'admins'])}
-                />
-                <span>Administrators</span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={newUserGroups.includes('developers')}
-                  onChange={() => setNewUserGroups(prev => prev.includes('developers') ? prev.filter(g => g !== 'developers') : [...prev, 'developers'])}
-                />
-                <span>Developers</span>
-              </label>
-            </div>
-            <button type="submit" className="btn" disabled={creatingUser || !newUsername.trim() || !newPassword.trim() || newUserGroups.length === 0}>
-              {creatingUser ? 'Creating...' : 'Create User'}
-            </button>
-          </form>
-          {userError && <p className="error-msg">{userError}</p>}
-          {userSuccess && <p className="success-msg">{userSuccess}</p>}
+            {(user?.isAdmin || (user as any)?.is_admin) && (
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                onClick={() => {
+                  selectAdminPanel();
+                  setGlobalTab('users');
+                }}
+              >
+                <span>👥</span> Manage in Global User Settings ➔
+              </button>
+            )}
+          </div>
 
-          <h3 style={{ marginTop: '2rem' }}>Existing Users</h3>
-          {users.length === 0 ? (
-            <p className="admin-hint">No users yet.</p>
+          <h3>Users Assigned to {currentApp?.name || 'Application'}</h3>
+          {users.filter(u => u.is_admin || u.assigned_apps?.includes(currentApp?.id || 1)).length === 0 ? (
+            <p className="admin-hint">No users currently assigned to this application.</p>
           ) : (
             <div className="users-list">
-              {users.map(u => {
+              {users.filter(u => u.is_admin || u.assigned_apps?.includes(currentApp?.id || 1)).map(u => {
                 const summary = userSummaries[u.id];
                 const currentGroups = u.user_groups || (u.is_admin ? ['admins'] : ['testers']);
                 const userActiveKeys = (u.api_keys && u.api_keys.length > 0)
@@ -2031,7 +3434,7 @@ const AdminPanel: React.FC = () => {
                       </div>
                     </div>
                     <div className="user-row-summary">
-                      {hasActiveKey ? (
+                      {!u.is_admin && (hasActiveKey ? (
                         <span
                           className="user-summary-badge"
                           style={{ background: 'rgba(72, 187, 120, 0.15)', color: '#48bb78', border: '1px solid rgba(72, 187, 120, 0.4)' }}
@@ -2047,7 +3450,7 @@ const AdminPanel: React.FC = () => {
                         >
                           No Key
                         </span>
-                      )}
+                      ))}
                       {summary ? (
                         <>
                           <span className="user-summary-badge" title="Assigned tests">{summary.assignedCount} assigned</span>
@@ -2060,7 +3463,7 @@ const AdminPanel: React.FC = () => {
                       ) : null}
                     </div>
                     <div className="user-row-actions">
-                      {hasActiveKey && (
+                      {!u.is_admin && hasActiveKey && (
                         <button
                           type="button"
                           className="btn-danger"
@@ -2071,15 +3474,17 @@ const AdminPanel: React.FC = () => {
                           Revoke Key
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
-                        title={hasActiveKey ? "Generate another key for this user" : "Generate a new key for this user"}
-                        onClick={() => handleGenerateKeyForUser(u)}
-                      >
-                        {hasActiveKey ? "New Key" : "+ Key"}
-                      </button>
+                      {!u.is_admin && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '0.22rem 0.55rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                          title={hasActiveKey ? "Generate another key for this user" : "Generate a new key for this user"}
+                          onClick={() => handleGenerateKeyForUser(u)}
+                        >
+                          {hasActiveKey ? "New Key" : "+ Key"}
+                        </button>
+                      )}
                       <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
                         <input
                           type="checkbox"
@@ -2088,13 +3493,15 @@ const AdminPanel: React.FC = () => {
                         />
                         <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
                       </label>
-                      <button
-                        className="btn-icon"
-                        title="Pay points"
-                        onClick={() => openPayPoints(u)}
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                      </button>
+                      {!u.is_admin && (
+                        <button
+                          className="btn-icon"
+                          title="Pay points"
+                          onClick={() => openPayPoints(u)}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        </button>
+                      )}
                       <button
                         className="btn-icon"
                         title="View test history"
@@ -2126,56 +3533,6 @@ const AdminPanel: React.FC = () => {
                   </div>
                 );
               })}
-            </div>
-          )}
-
-          {/* User Key Modal */}
-          {userKeyModalData && (
-            <div className="modal-backdrop" style={{ zIndex: 1000 }}>
-              <div className="modal" style={{ maxWidth: '520px', width: '90%' }}>
-                <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>🔑</span> Generated Key for {userKeyModalData.username}
-                </h3>
-                <p style={{ fontSize: '0.88rem', color: 'var(--text-muted, #a0aec0)', lineHeight: '1.4' }}>
-                  A new key was generated for <strong>{userKeyModalData.username}</strong> ({userKeyModalData.role} role).
-                  Copy and share it now so the user can log on. You can revoke it anytime later without removing their account.
-                </p>
-                <div style={{
-                  background: 'rgba(0, 0, 0, 0.35)',
-                  border: '1px solid var(--border-color, #2d3748)',
-                  padding: '0.85rem 1rem',
-                  borderRadius: '6px',
-                  fontFamily: 'monospace',
-                  wordBreak: 'break-all',
-                  fontSize: '0.92rem',
-                  color: '#63b3ed',
-                  margin: '1rem 0',
-                  userSelect: 'all'
-                }}>
-                  {userKeyModalData.rawKey}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ background: copiedUserKey ? '#48bb78' : undefined }}
-                    onClick={() => {
-                      navigator.clipboard.writeText(userKeyModalData.rawKey);
-                      setCopiedUserKey(true);
-                      setTimeout(() => setCopiedUserKey(false), 3000);
-                    }}
-                  >
-                    {copiedUserKey ? '✓ Copied!' : '📋 Copy Key'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setUserKeyModalData(null)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
             </div>
           )}
         </div>
@@ -2380,1340 +3737,264 @@ const AdminPanel: React.FC = () => {
       )}
 
       {activeTab === 'reports' && <ReportsView />}
-      {false && activeTab === 'reports' && (
+      {activeTab === 'settings' && (
         <div className="admin-section">
-          <div className="report-sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
-            <button
-              type="button"
-              className={`tab-btn ${reportsSubTab === 'user' ? 'active' : ''}`}
-              onClick={() => setReportsSubTab('user')}
-              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
-            >
-              User Reports
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${reportsSubTab === 'test' ? 'active' : ''}`}
-              onClick={() => setReportsSubTab('test')}
-              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
-            >
-              Test Reports
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${reportsSubTab === 'passed' ? 'active' : ''}`}
-              onClick={() => setReportsSubTab('passed')}
-              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
-            >
-              Passed Steps
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${reportsSubTab === 'points' ? 'active' : ''}`}
-              onClick={() => setReportsSubTab('points')}
-              style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
-            >
-              Points
-            </button>
+          <h3>System Settings</h3>
+          <p className="admin-hint">
+            Configure application business rules and time thresholds.
+          </p>
+
+          {settingsLoading && <p className="admin-hint">Loading settings...</p>}
+
+          <div style={{ maxWidth: '960px', margin: '1rem 0' }}>
+            {!settingsLoading && (
+              <div
+                style={{
+                  background: 'var(--card-bg, #1e2433)',
+                  border: '1px solid var(--border-color, #2d3748)',
+                  borderRadius: '10px',
+                  padding: '1.5rem',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>⏱️</span> Consecutive Cross-Test Failure Time Threshold
+                  </h4>
+                  <span
+                    style={{
+                      background: 'rgba(99, 179, 237, 0.15)',
+                      color: 'var(--accent, #63b3ed)',
+                      border: '1px solid rgba(99, 179, 237, 0.3)',
+                      padding: '0.2rem 0.65rem',
+                      borderRadius: '12px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    Default: 3 Minutes
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(235, 130, 60, 0.08)',
+                    borderLeft: '4px solid #ed8936',
+                    borderRadius: '6px',
+                    padding: '1rem 1.1rem',
+                    marginBottom: '1.5rem',
+                    fontSize: '0.92rem',
+                    lineHeight: '1.5'
+                  }}
+                >
+                  <strong style={{ color: '#ed8936', display: 'block', marginBottom: '0.4rem' }}>
+                    💡 What does this setting mean?
+                  </strong>
+                  <p style={{ margin: '0 0 0.5rem 0' }}>
+                    When a tester user is executing tests in sequence:
+                  </p>
+                  <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
+                    <li>
+                      If the user submits a <strong>failed step</strong> in one test, and then fails a step in a <strong>different test</strong> within this time window (e.g. 3 minutes), the points for the second failed step are withheld.
+                    </li>
+                    <li>
+                      <strong>Audit Warning Logged:</strong> A warning entry is recorded in the audit log explaining that the cross-test step points were withheld due to rapid consecutive failures.
+                    </li>
+                  </ul>
+                </div>
+
+                <form onSubmit={handleSaveSettings}>
+                  <div style={{ marginBottom: '1.75rem' }}>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Consecutive Failure Time Threshold (Minutes)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        className="user-input"
+                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
+                        value={thresholdMinutes}
+                        onChange={e => setThresholdMinutes(e.target.value)}
+                        required
+                      />
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        minutes (= {Math.round((parseFloat(thresholdMinutes) || 0) * 60)} seconds)
+                      </span>
+                    </div>
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>🔒</span> Maximum Test Rounds per Month
+                      </h4>
+                      <span
+                        style={{
+                          background: 'rgba(99, 179, 237, 0.15)',
+                          color: 'var(--accent, #63b3ed)',
+                          border: '1px solid rgba(99, 179, 237, 0.3)',
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '12px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        Default: 8 Rounds
+                      </span>
+                    </div>
+
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Maximum Test Rounds per Month (per test per user)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        className="user-input"
+                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
+                        value={maxMonthlyRounds}
+                        onChange={e => setMaxMonthlyRounds(e.target.value)}
+                        required
+                      />
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        rounds per month per test
+                      </span>
+                    </div>
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
+                  {/* Dropbox Storage Configuration */}
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>📦</span> Dropbox Attachment Storage
+                      </h4>
+                      <span
+                        style={{
+                          background: dropboxEnabled ? 'rgba(72, 187, 120, 0.15)' : 'rgba(160, 174, 192, 0.15)',
+                          color: dropboxEnabled ? '#48bb78' : 'var(--text-muted, #a0aec0)',
+                          border: `1px solid ${dropboxEnabled ? 'rgba(72, 187, 120, 0.3)' : 'rgba(160, 174, 192, 0.3)'}`,
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '12px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        {dropboxEnabled ? '● Enabled' : '○ Disabled'}
+                      </span>
+                    </div>
+
+                    <div style={{ marginBottom: '1.25rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={dropboxEnabled}
+                          onChange={e => setDropboxEnabled(e.target.checked)}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
+                        <span>Enable Dropbox Storage for Uploaded Files</span>
+                      </label>
+                    </div>
+
+                    {dropboxEnabled && (
+                      <div
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid var(--border-color, #2d3748)',
+                          borderRadius: '8px',
+                          padding: '1.25rem',
+                          marginTop: '1rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '1.25rem'
+                        }}
+                      >
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox Target Folder Path <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder="/QualityCheck_Uploads"
+                            value={dropboxFolderPath}
+                            onChange={e => setDropboxFolderPath(e.target.value)}
+                            required={dropboxEnabled}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox App Key (Client ID) <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder="Enter Dropbox App Key"
+                            value={dropboxAppKey}
+                            onChange={e => setDropboxAppKey(e.target.value)}
+                            required={dropboxEnabled}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
+                            Dropbox App Secret (Client Secret) <span style={{ color: '#e53e3e' }}>*</span>
+                          </label>
+                          <input
+                            type="password"
+                            className="user-input"
+                            style={{ width: '100%', maxWidth: '400px' }}
+                            placeholder={dropboxIsConfigured ? 'App Secret configured. Enter new to replace.' : 'Enter Dropbox App Secret'}
+                            value={dropboxAppSecret}
+                            onChange={e => setDropboxAppSecret(e.target.value)}
+                            required={dropboxEnabled && !dropboxIsConfigured}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+
+                  {settingsError && <p className="error-msg" style={{ marginBottom: '1rem' }}>{settingsError}</p>}
+                  {settingsSuccess && (
+                    <p className="success-msg" style={{ color: '#48bb78', marginBottom: '1rem', fontWeight: 500 }}>
+                      ✅ {settingsSuccess}
+                    </p>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                    <button type="submit" className="btn" disabled={settingsSaving}>
+                      {settingsSaving ? 'Saving...' : 'Save Settings'}
+                    </button>
+                    {dropboxEnabled && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={handleTestDropbox}
+                        disabled={dropboxTesting}
+                      >
+                        {dropboxTesting ? 'Testing...' : '⚡ Test Dropbox'}
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+            )}
           </div>
-
-          {reportsSubTab === 'user' && (
-            <>
-              <h3>User Report</h3>
-              <p className="admin-hint">
-                Select a user and a date range to view their points earned, steps attempted, per-test breakdown, and fully passed tests.
-              </p>
-
-              <div className="report-controls">
-                <div className="report-selectors">
-                  <div className="searchable-select">
-                    <label>Users</label>
-                    <input
-                      type="text"
-                      className="user-input"
-                      placeholder="Search users..."
-                      value={showUserDropdown ? reportUserSearch : (reportUserIds.length > 0 ? reportUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ') : reportUserSearch)}
-                      onChange={e => setReportUserSearch(e.target.value)}
-                      onFocus={() => { setShowUserDropdown(true); setReportUserSearch(''); }}
-                      onBlur={() => setTimeout(() => setShowUserDropdown(false), 150)}
-                    />
-                    {showUserDropdown && (
-                      <div className="searchable-dropdown">
-                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                          <input
-                            type="checkbox"
-                            checked={reportUserIds.length === nonAdminUsers.length && nonAdminUsers.length > 0}
-                            onChange={toggleAllUsers}
-                          />
-                          <strong>Select All Users</strong>
-                        </label>
-                        {nonAdminUsers
-                          .filter(u => u.username.toLowerCase().includes(reportUserSearch.toLowerCase()))
-                          .map(u => (
-                            <label
-                              key={u.id}
-                              className={`searchable-option ${reportUserIds.includes(u.id) ? 'selected' : ''}`}
-                              onMouseDown={e => e.preventDefault()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={reportUserIds.includes(u.id)}
-                                onChange={() => toggleUserSelect(u.id)}
-                              />
-                              {u.username}
-                            </label>
-                          ))}
-                        {nonAdminUsers.filter(u => u.username.toLowerCase().includes(reportUserSearch.toLowerCase())).length === 0 && (
-                          <div className="searchable-no-results">No users found</div>
-                        )}
-                      </div>
-                    )}
-                    {reportUserIds.length > 0 && (
-                      <div className="selected-tags">
-                        {reportUserIds.map(id => {
-                          const u = nonAdminUsers.find(x => x.id === id);
-                          return u ? (
-                            <span key={id} className="selected-tag">
-                              {u.username}
-                              <button type="button" onClick={() => toggleUserSelect(id)}>×</button>
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="searchable-select">
-                    <label>Versions</label>
-                    <input
-                      type="text"
-                      className="user-input"
-                      placeholder={reportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                      value={showVersionDropdown ? reportVersionSearch : (reportVersionIds.length > 0 ? reportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                      onChange={e => setReportVersionSearch(e.target.value)}
-                      onFocus={() => setShowVersionDropdown(true)}
-                      onBlur={() => setTimeout(() => setShowVersionDropdown(false), 150)}
-                    />
-                    {showVersionDropdown && (
-                      <div className="searchable-dropdown">
-                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                          <input
-                            type="checkbox"
-                            checked={reportVersionIds.length === versions.length && versions.length > 0}
-                            onChange={() => {
-                              if (reportVersionIds.length === versions.length) {
-                                setReportVersionIds([]);
-                              } else {
-                                setReportVersionIds(versions.map(v => v.id));
-                              }
-                              setReportData(null);
-                              setReportError('');
-                            }}
-                          />
-                          <strong>Select All</strong>
-                        </label>
-                        {versions
-                          .filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase()))
-                          .map(v => (
-                            <label
-                              key={v.id}
-                              className={`searchable-option ${reportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                              onMouseDown={e => e.preventDefault()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={reportVersionIds.includes(v.id)}
-                                onChange={() => {
-                                  setReportVersionIds(prev => {
-                                    if (prev.includes(v.id)) {
-                                      return prev.filter(id => id !== v.id);
-                                    }
-                                    return [...prev, v.id];
-                                  });
-                                  setReportData(null);
-                                  setReportError('');
-                                }}
-                              />
-                              {v.name} {v.is_current ? '(current)' : ''}
-                            </label>
-                          ))}
-                        {versions.filter(v => v.name.toLowerCase().includes(reportVersionSearch.toLowerCase())).length === 0 && (
-                          <div className="searchable-no-results">No versions found</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="report-presets">
-                  <button
-                    className={`btn-secondary report-preset-btn ${reportPreset === 'current_month' ? 'active' : ''}`}
-                    onClick={() => handlePresetChange('current_month')}
-                  >
-                    Current Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${reportPreset === 'last_month' ? 'active' : ''}`}
-                    onClick={() => handlePresetChange('last_month')}
-                  >
-                    Last Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${reportPreset === 'current_year' ? 'active' : ''}`}
-                    onClick={() => handlePresetChange('current_year')}
-                  >
-                    Current Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${reportPreset === 'last_year' ? 'active' : ''}`}
-                    onClick={() => handlePresetChange('last_year')}
-                  >
-                    Last Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${reportPreset === 'custom' ? 'active' : ''}`}
-                    onClick={() => handlePresetChange('custom')}
-                  >
-                    Custom
-                  </button>
-                </div>
-
-                <div className="report-dates">
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={reportStartDate}
-                    onChange={e => { setReportStartDate(e.target.value); setReportPreset('custom'); setReportData(null); setReportError(''); }}
-                  />
-                  <span className="report-date-sep">to</span>
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={reportEndDate}
-                    onChange={e => { setReportEndDate(e.target.value); setReportPreset('custom'); setReportData(null); setReportError(''); }}
-                  />
-                </div>
-
-                <button
-                  className="btn"
-                  onClick={fetchUserReport}
-                  disabled={reportLoading || reportUserIds.length === 0 || reportVersionIds.length === 0 || !reportStartDate || !reportEndDate}
-                >
-                  {reportLoading ? 'Generating...' : 'Generate Report'}
-                </button>
-              </div>
-
-              {reportError && <p className="error-msg">{reportError}</p>}
-
-              {reportData && (
-                <div className="report-results">
-                  <h4>
-                    Report for {reportData.users && reportData.users.length > 0
-                      ? reportData.users.map((u: any) => u.userName).join(', ')
-                      : 'selected users'}
-                    {' '}({reportData.startDate} — {reportData.endDate})
-                    {reportData.versionIds && reportData.versionIds.length > 0 && (
-                      <span className="report-version-tag">
-                        Versions {reportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
-                      </span>
-                    )}
-                  </h4>
-
-                  <div className="report-summary">
-                    <div className="report-summary-card">
-                      <span className="report-summary-value">{reportData.totalPointsEarned}</span>
-                      <span className="report-summary-label">Points Earned</span>
-                    </div>
-                    <div className="report-summary-card">
-                      <span className="report-summary-value">{reportData.totalSteps}</span>
-                      <span className="report-summary-label">Steps Submitted</span>
-                    </div>
-                  </div>
-
-                  {reportData.tests.length === 0 ? (
-                    <p className="admin-hint">No test activity in this period.</p>
-                  ) : (
-                    <div className="report-tests-list">
-                      {(reportData.tests || []).map((test: any) => {
-                        const isOpen = expandedTests.has(test.testId);
-                        const failedSteps = (test.steps || []).filter((s: any) => s.fails > 0);
-                        return (
-                          <div key={test.testId} className="report-test-row">
-                            <div className="report-test-header" onClick={() => toggleTestExpand(test.testId)}>
-                              <span className="report-test-name">{test.testName}</span>
-                              <span className="report-test-stats">
-                                <span className="report-stat">{test.rounds} rounds</span>
-                                <span className="report-stat report-stat-pass">{test.passes} passed</span>
-                                <span className="report-stat report-stat-fail">{test.fails} failed</span>
-                              </span>
-                              {test.fullyPassed && (
-                                <span className="status-badge status-pass">FULLY PASSED</span>
-                              )}
-                              <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
-                            </div>
-                             {isOpen && (
-                               <div className="report-test-body">
-                                 {failedSteps.length === 0 ? (
-                                   <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed steps in this period.</p>
-                                 ) : (
-                                   <table className="report-steps-table">
-                                     <thead>
-                                       <tr>
-                                         <th>Step</th>
-                                         <th>Description</th>
-                                         <th>Fails</th>
-                                         <th>Rounds</th>
-                                       </tr>
-                                     </thead>
-                                     <tbody>
-                                       {failedSteps.map((step: any) => {
-                                         const stepKey = `${test.testId}-${step.stepId}`;
-                                         const isStepOpen = expandedReportSteps.has(stepKey);
-                                         return (
-                                           <>
-                                             <tr key={step.stepId} className="report-step-row-failed" style={{ cursor: 'pointer' }} onClick={() => toggleReportStepExpand(test.testId, step.stepId)}>
-                                               <td className="step-num-cell">{step.stepNumber}</td>
-                                               <td>{step.description}</td>
-                                               <td><span className="status-badge status-fail">{step.fails}</span></td>
-                                               <td>{step.rounds && step.rounds.length > 0 ? step.rounds.map((r: any) => `R${r}`).join(', ') : '—'}</td>
-                                             </tr>
-                                             {isStepOpen && step.submissions && step.submissions.length > 0 && (
-                                               <tr key={`${step.stepId}-details`}>
-                                                 <td colSpan={5} style={{ padding: '0', background: 'transparent' }}>
-                                                   <div style={{ padding: '0.5rem 1rem' }}>
-                                                     <table className="report-steps-table" style={{ width: '100%' }}>
-                                                       <thead>
-                                                         <tr>
-                                                           <th>User</th>
-                                                           <th>Round</th>
-                                                           <th>Comment</th>
-                                                           <th>Config File</th>
-                                                           <th>Time</th>
-                                                         </tr>
-                                                       </thead>
-                                                       <tbody>
-                                                         {step.submissions.map((sub: any, idx: number) => (
-                                                           <tr key={idx} className="report-step-row-failed">
-                                                             <td><strong>{sub.userName || sub.username || sub.user_name || (sub.userId ? `User ${sub.userId}` : '—')}</strong></td>
-                                                             <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
-                                                             <td className="report-step-comment">{sub.comment || '—'}</td>
-                                                             <td>
-                                                               {sub.configFilePath ? (
-                                                                 <a
-                                                                   className="report-file-link"
-                                                                   href={`${API_BASE}${sub.configFilePath}`}
-                                                                   target="_blank"
-                                                                   rel="noopener noreferrer"
-                                                                   download
-                                                                 >
-                                                                   📥 Download
-                                                                 </a>
-                                                               ) : (
-                                                                 '—'
-                                                               )}
-                                                             </td>
-                                                             <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
-                                                           </tr>
-                                                         ))}
-                                                       </tbody>
-                                                     </table>
-                                                   </div>
-                                                 </td>
-                                               </tr>
-                                             )}
-                                           </>
-                                         );
-                                       })}
-                                     </tbody>
-                                   </table>
-                                 )}
-                               </div>
-                             )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {reportsSubTab === 'test' && (
-            <>
-              <h3>Test Report</h3>
-               <p className="admin-hint">
-                 Select tests, steps, and a date range to view how many times each test was run, how many passed/failed, and which users failed at which steps.
-               </p>
-
-              <div className="report-controls">
-                <div className="report-selectors">
-                   <div className="searchable-select">
-                     <label>Tests</label>
-                     <input
-                       type="text"
-                       className="user-input"
-                       placeholder={testReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                       value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : 'All Tests')}
-                       onChange={e => setTestReportTestSearch(e.target.value)}
-                       onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
-                       onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
-                     />
-                     {showTestDropdown && (
-                       <div className="searchable-dropdown">
-                         <label
-                           className={`searchable-option ${testReportTestIds.length === 0 ? 'selected' : ''}`}
-                           onMouseDown={e => e.preventDefault()}
-                         >
-                           <input
-                             type="checkbox"
-                             checked={testReportTestIds.length === 0}
-                             onChange={() => {
-                               if (testReportTestIds.length > 0) {
-                                 setTestReportTestIds([]);
-                                 setTestReportData(null);
-                                 setTestReportError('');
-                                 setTestReportSteps([]);
-                                 setTestReportSelectedStepId(null);
-                               }
-                             }}
-                           />
-                           All Tests
-                         </label>
-                         {tests
-                           .filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase()))
-                           .map(t => (
-                             <label
-                               key={t.id}
-                               className={`searchable-option ${testReportTestIds.includes(t.id) ? 'selected' : ''}`}
-                               onMouseDown={e => e.preventDefault()}
-                             >
-                               <input
-                                 type="checkbox"
-                                 checked={testReportTestIds.includes(t.id)}
-                                 onChange={() => toggleTestSelect(t.id)}
-                               />
-                               {t.name}
-                             </label>
-                           ))}
-                         {tests.filter(t => t.name.toLowerCase().includes(testReportTestSearch.toLowerCase())).length === 0 && (
-                           <div className="searchable-no-results">No tests found</div>
-                         )}
-                       </div>
-                     )}
-                     {testReportTestIds.length > 0 && (
-                       <div className="selected-tags">
-                         {testReportTestIds.map(id => {
-                           const t = tests.find(x => x.id === id);
-                           return t ? (
-                             <span key={id} className="selected-tag">
-                               {t.name}
-                               <button type="button" onClick={() => toggleTestSelect(id)}>×</button>
-                             </span>
-                           ) : null;
-                         })}
-                       </div>
-                     )}
-                   </div>
-
-                   <div className="searchable-select">
-                     <label>Steps</label>
-                     <input
-                       type="text"
-                       className="user-input"
-                       placeholder={testReportSelectedStepId ? 'Search steps...' : 'All Steps'}
-                       value={showStepDropdown ? testReportStepSearch : (testReportSelectedStepId ? (() => {
-                         for (const test of testReportSteps) {
-                           const step = test.steps.find((s: any) => s.id === testReportSelectedStepId);
-                           if (step) return `${test.testName} - Step ${step.step_number}`;
-                         }
-                         return '';
-                       })() : 'All Steps')}
-                       onChange={e => setTestReportStepSearch(e.target.value)}
-                       onFocus={() => { setShowStepDropdown(true); setTestReportStepSearch(''); fetchTestReportSteps(); }}
-                       onBlur={() => setTimeout(() => setShowStepDropdown(false), 150)}
-                     />
-                     {showStepDropdown && (
-                       <div className="searchable-dropdown">
-                         <div
-                           className={`searchable-option ${testReportSelectedStepId === null ? 'selected' : ''}`}
-                           onMouseDown={e => e.preventDefault()}
-                           onClick={() => setTestReportSelectedStepId(null)}
-                         >
-                           All Steps
-                         </div>
-                         {testReportSteps.map(test => (
-                           test.steps.map((step: any) => (
-                             <div
-                               key={`${test.testId}-${step.id}`}
-                               className={`searchable-option ${testReportSelectedStepId === step.id ? 'selected' : ''}`}
-                               onMouseDown={e => e.preventDefault()}
-                               onClick={() => setTestReportSelectedStepId(step.id)}
-                             >
-                               {test.testName} — Step {step.step_number}: {step.description}
-                             </div>
-                           ))
-                         ))}
-                         {testReportSteps.length === 0 && testReportTestIds.length > 0 && (
-                           <div className="searchable-no-results">No steps found</div>
-                         )}
-                       </div>
-                     )}
-                   </div>
-
-                    <div className="searchable-select">
-                      <label>Versions</label>
-                      <input
-                        type="text"
-                        className="user-input"
-                        placeholder={testReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                        value={showTestVersionDropdown ? testReportVersionSearch : (testReportVersionIds.length > 0 ? testReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                        onChange={e => setTestReportVersionSearch(e.target.value)}
-                        onFocus={() => setShowTestVersionDropdown(true)}
-                        onBlur={() => setTimeout(() => setShowTestVersionDropdown(false), 150)}
-                      />
-                      {showTestVersionDropdown && (
-                        <div className="searchable-dropdown">
-                          <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                            <input
-                              type="checkbox"
-                              checked={testReportVersionIds.length === versions.length && versions.length > 0}
-                              onChange={() => {
-                                if (testReportVersionIds.length === versions.length) {
-                                  setTestReportVersionIds([]);
-                                } else {
-                                  setTestReportVersionIds(versions.map(v => v.id));
-                                }
-                                setTestReportData(null);
-                                setTestReportError('');
-                              }}
-                            />
-                            <strong>Select All</strong>
-                          </label>
-                          {versions
-                            .filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase()))
-                            .map(v => (
-                              <label
-                                key={v.id}
-                                className={`searchable-option ${testReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                                onMouseDown={e => e.preventDefault()}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={testReportVersionIds.includes(v.id)}
-                                  onChange={() => {
-                                    setTestReportVersionIds(prev => {
-                                      if (prev.includes(v.id)) {
-                                        return prev.filter(id => id !== v.id);
-                                      }
-                                      return [...prev, v.id];
-                                    });
-                                    setTestReportData(null);
-                                    setTestReportError('');
-                                  }}
-                                />
-                                {v.name} {v.is_current ? '(current)' : ''}
-                              </label>
-                            ))}
-                          {versions.filter(v => v.name.toLowerCase().includes(testReportVersionSearch.toLowerCase())).length === 0 && (
-                            <div className="searchable-no-results">No versions found</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                </div>
-
-                <div className="report-presets">
-                  <button
-                    className={`btn-secondary report-preset-btn ${testReportPreset === 'current_month' ? 'active' : ''}`}
-                    onClick={() => {
-                      setTestReportPreset('current_month');
-                      const dates = getDefaultReportDates('current_month');
-                      setTestReportStartDate(dates.start);
-                      setTestReportEndDate(dates.end);
-                      setTestReportData(null);
-                      setTestReportError('');
-                    }}
-                  >
-                    Current Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${testReportPreset === 'last_month' ? 'active' : ''}`}
-                    onClick={() => {
-                      setTestReportPreset('last_month');
-                      const dates = getDefaultReportDates('last_month');
-                      setTestReportStartDate(dates.start);
-                      setTestReportEndDate(dates.end);
-                      setTestReportData(null);
-                      setTestReportError('');
-                    }}
-                  >
-                    Last Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${testReportPreset === 'current_year' ? 'active' : ''}`}
-                    onClick={() => {
-                      setTestReportPreset('current_year');
-                      const dates = getDefaultReportDates('current_year');
-                      setTestReportStartDate(dates.start);
-                      setTestReportEndDate(dates.end);
-                      setTestReportData(null);
-                      setTestReportError('');
-                    }}
-                  >
-                    Current Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${testReportPreset === 'last_year' ? 'active' : ''}`}
-                    onClick={() => {
-                      setTestReportPreset('last_year');
-                      const dates = getDefaultReportDates('last_year');
-                      setTestReportStartDate(dates.start);
-                      setTestReportEndDate(dates.end);
-                      setTestReportData(null);
-                      setTestReportError('');
-                    }}
-                  >
-                    Last Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${testReportPreset === 'custom' ? 'active' : ''}`}
-                    onClick={() => {
-                      setTestReportPreset('custom');
-                      setTestReportData(null);
-                      setTestReportError('');
-                    }}
-                  >
-                    Custom
-                  </button>
-                </div>
-
-                <div className="report-dates">
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={testReportStartDate}
-                    onChange={e => { setTestReportStartDate(e.target.value); setTestReportPreset('custom'); setTestReportData(null); setTestReportError(''); }}
-                  />
-                  <span className="report-date-sep">to</span>
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={testReportEndDate}
-                    onChange={e => { setTestReportEndDate(e.target.value); setTestReportPreset('custom'); setTestReportData(null); setTestReportError(''); }}
-                  />
-                </div>
-
-                <button
-                  className="btn"
-                  onClick={fetchTestReport}
-                  disabled={testReportLoading || testReportVersionIds.length === 0 || !testReportStartDate || !testReportEndDate}
-                >
-                  {testReportLoading ? 'Generating...' : 'Generate Report'}
-                </button>
-              </div>
-
-              {testReportError && <p className="error-msg">{testReportError}</p>}
-
-              {testReportData && (
-                <div className="report-results">
-                  <h4>
-                    Test Report ({testReportData.startDate} — {testReportData.endDate})
-                    {testReportData.versionIds && testReportData.versionIds.length > 0 && (
-                      <span className="report-version-tag">
-                        Versions {testReportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
-                      </span>
-                    )}
-                  </h4>
-
-                  {testReportData.tests.length === 0 ? (
-                    <p className="admin-hint">No test activity in this period.</p>
-                  ) : (
-                    <div className="report-tests-list">
-                      {testReportData.tests.map((test: any) => {
-                        const isOpen = expandedTestReportTests.has(test.testId);
-                        const failedUsers = test.failedUsers || [];
-                        return (
-                          <div key={test.testId} className="report-test-row">
-                            <div className="report-test-header" onClick={() => toggleTestReportExpand(test.testId)}>
-                              <span className="report-test-name">{test.testName}</span>
-                              <span className="report-test-stats">
-                                <span className="report-stat">{test.rounds} rounds</span>
-                                <span className="report-stat report-stat-pass">{test.passes} passed</span>
-                                <span className="report-stat report-stat-fail">{test.fails} failed</span>
-                              </span>
-                              <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
-                            </div>
-                            {isOpen && (
-                              <div className="report-test-body">
-                                {failedUsers.length === 0 ? (
-                                  <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No failed users in this period.</p>
-                                ) : (
-                                  <table className="report-steps-table">
-                                    <thead>
-                                      <tr>
-                                        <th>User</th>
-                                        <th>Step</th>
-                                        <th>Round</th>
-                                        <th>Description</th>
-                                        <th>Comment</th>
-                                        <th>File</th>
-                                        <th>Time</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {failedUsers.map((fu: any) => {
-                                        const filteredSubs = (fu.submissions || []).filter((sub: any) => {
-                                          if (!testReportLineSearch || testReportLineSearch.trim() === '' || testReportLineSearch.toLowerCase() === 'all lines') return true;
-                                          const term = testReportLineSearch.toLowerCase().trim();
-                                          return String(sub.stepNumber) === term ||
-                                                 `line ${sub.stepNumber}`.includes(term) ||
-                                                 `step ${sub.stepNumber}`.includes(term) ||
-                                                 sub.description.toLowerCase().includes(term);
-                                        });
-
-                                        return filteredSubs.map((sub: any) => (
-                                          <tr key={`${fu.userId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-failed">
-                                            <td>{fu.userName}</td>
-                                            <td className="step-num-cell">{sub.stepNumber}</td>
-                                            <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
-                                            <td>
-                                              <div>{sub.description}</div>
-                                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                                                <strong style={{ color: '#818cf8' }}>Success Symptom:</strong> {sub.successSymptom || sub.success_symptom || 'N/A'}
-                                              </div>
-                                              {(sub.attachment_path || sub.attachmentPath) && (
-                                                <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                                                  <a
-                                                    href={`${API_BASE}${sub.attachment_path || sub.attachmentPath}`}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="report-file-link"
-                                                    download={sub.attachment_name || sub.attachmentName || true}
-                                                    onClick={e => e.stopPropagation()}
-                                                  >
-                                                    📎 Reference File: {sub.attachment_name || sub.attachmentName || 'Download'}
-                                                  </a>
-                                                </div>
-                                              )}
-                                            </td>
-                                            <td className="report-step-comment">{sub.comment || '—'}</td>
-                                            <td>
-                                              {sub.configFilePath ? (
-                                                <a
-                                                  className="report-file-link"
-                                                  href={`${API_BASE}${sub.configFilePath}`}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  download
-                                                >
-                                                  📥 Download
-                                                </a>
-                                              ) : (
-                                                '—'
-                                              )}
-                                            </td>
-                                            <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
-                                          </tr>
-                                        ));
-                                      })}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {reportsSubTab === 'passed' && (
-            <>
-              <h3>Passed Steps Report</h3>
-               <p className="admin-hint">
-                 Select tests, steps, and a date range to view passed steps that have comments or uploaded configuration files.
-               </p>
-
-               <div className="report-controls">
-                 <div className="report-selectors">
-                    <div className="searchable-select">
-                      <label>Tests</label>
-                      <input
-                        type="text"
-                        className="user-input"
-                        placeholder={passedReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                        value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ') : 'All Tests')}
-                        onChange={e => setPassedReportTestSearch(e.target.value)}
-                        onFocus={() => { setShowPassedTestDropdown(true); setPassedReportTestSearch(''); }}
-                        onBlur={() => setTimeout(() => setShowPassedTestDropdown(false), 150)}
-                      />
-                      {showPassedTestDropdown && (
-                        <div className="searchable-dropdown">
-                          <label
-                            className={`searchable-option ${passedReportTestIds.length === 0 ? 'selected' : ''}`}
-                            onMouseDown={e => e.preventDefault()}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={passedReportTestIds.length === 0}
-                              onChange={() => {
-                                if (passedReportTestIds.length > 0) {
-                                  setPassedReportTestIds([]);
-                                  setPassedReportData(null);
-                                  setPassedReportError('');
-                                  setPassedReportSteps([]);
-                                  setPassedReportSelectedStepId(null);
-                                }
-                              }}
-                            />
-                            All Tests
-                          </label>
-                          {tests
-                            .filter(t => t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase()))
-                            .map(t => (
-                              <label
-                                key={t.id}
-                                className={`searchable-option ${passedReportTestIds.includes(t.id) ? 'selected' : ''}`}
-                                onMouseDown={e => e.preventDefault()}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={passedReportTestIds.includes(t.id)}
-                                  onChange={() => togglePassedTestSelect(t.id)}
-                                />
-                                {t.name}
-                              </label>
-                            ))}
-                          {tests.filter(t => t.name.toLowerCase().includes(passedReportTestSearch.toLowerCase())).length === 0 && (
-                            <div className="searchable-no-results">No tests found</div>
-                          )}
-                        </div>
-                      )}
-                      {passedReportTestIds.length > 0 && (
-                        <div className="selected-tags">
-                          {passedReportTestIds.map(id => {
-                            const t = tests.find(x => x.id === id);
-                            return t ? (
-                              <span key={id} className="selected-tag">
-                                {t.name}
-                                <button type="button" onClick={() => togglePassedTestSelect(id)}>×</button>
-                              </span>
-                            ) : null;
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="searchable-select">
-                      <label>Steps</label>
-                      <input
-                        type="text"
-                        className="user-input"
-                        placeholder={passedReportSelectedStepId ? 'Search steps...' : 'All Steps'}
-                        value={showPassedStepDropdown ? passedReportStepSearch : (passedReportSelectedStepId ? (() => {
-                          for (const test of passedReportSteps) {
-                            const step = test.steps.find((s: any) => s.id === passedReportSelectedStepId);
-                            if (step) return `${test.testName} - Step ${step.step_number}`;
-                          }
-                          return '';
-                        })() : 'All Steps')}
-                        onChange={e => setPassedReportStepSearch(e.target.value)}
-                        onFocus={() => { setShowPassedStepDropdown(true); setPassedReportStepSearch(''); fetchPassedReportSteps(); }}
-                        onBlur={() => setTimeout(() => setShowPassedStepDropdown(false), 150)}
-                      />
-                      {showPassedStepDropdown && (
-                        <div className="searchable-dropdown">
-                          <div
-                            className={`searchable-option ${passedReportSelectedStepId === null ? 'selected' : ''}`}
-                            onMouseDown={e => e.preventDefault()}
-                            onClick={() => setPassedReportSelectedStepId(null)}
-                          >
-                            All Steps
-                          </div>
-                          {passedReportSteps.map(test => (
-                            test.steps.map((step: any) => (
-                              <div
-                                key={`${test.testId}-${step.id}`}
-                                className={`searchable-option ${passedReportSelectedStepId === step.id ? 'selected' : ''}`}
-                                onMouseDown={e => e.preventDefault()}
-                                onClick={() => setPassedReportSelectedStepId(step.id)}
-                              >
-                                {test.testName} — Step {step.step_number}: {step.description}
-                              </div>
-                            ))
-                          ))}
-                          {passedReportSteps.length === 0 && passedReportTestIds.length > 0 && (
-                            <div className="searchable-no-results">No steps found</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                     <div className="searchable-select">
-                       <label>Versions</label>
-                       <input
-                         type="text"
-                         className="user-input"
-                         placeholder={passedReportVersionIds.length === 0 ? 'All Versions' : 'Search versions...'}
-                         value={showPassedTestVersionDropdown ? passedReportVersionSearch : (passedReportVersionIds.length > 0 ? passedReportVersionIds.map(id => versions.find(v => v.id === id)?.name).filter(Boolean).join(', ') : 'All Versions')}
-                         onChange={e => setPassedReportVersionSearch(e.target.value)}
-                         onFocus={() => setShowPassedTestVersionDropdown(true)}
-                         onBlur={() => setTimeout(() => setShowPassedTestVersionDropdown(false), 150)}
-                       />
-                       {showPassedTestVersionDropdown && (
-                         <div className="searchable-dropdown">
-                           <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                             <input
-                               type="checkbox"
-                               checked={passedReportVersionIds.length === versions.length && versions.length > 0}
-                               onChange={() => {
-                                 if (passedReportVersionIds.length === versions.length) {
-                                   setPassedReportVersionIds([]);
-                                 } else {
-                                   setPassedReportVersionIds(versions.map(v => v.id));
-                                 }
-                                 setPassedReportData(null);
-                                 setPassedReportError('');
-                               }}
-                             />
-                             <strong>Select All</strong>
-                           </label>
-                           {versions
-                             .filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase()))
-                             .map(v => (
-                               <label
-                                 key={v.id}
-                                 className={`searchable-option ${passedReportVersionIds.includes(v.id) ? 'selected' : ''}`}
-                                 onMouseDown={e => e.preventDefault()}
-                               >
-                                 <input
-                                   type="checkbox"
-                                   checked={passedReportVersionIds.includes(v.id)}
-                                   onChange={() => {
-                                     setPassedReportVersionIds(prev => {
-                                       if (prev.includes(v.id)) {
-                                         return prev.filter(id => id !== v.id);
-                                       }
-                                       return [...prev, v.id];
-                                     });
-                                     setPassedReportData(null);
-                                     setPassedReportError('');
-                                   }}
-                                 />
-                                 {v.name} {v.is_current ? '(current)' : ''}
-                               </label>
-                             ))}
-                           {versions.filter(v => v.name.toLowerCase().includes(passedReportVersionSearch.toLowerCase())).length === 0 && (
-                             <div className="searchable-no-results">No versions found</div>
-                           )}
-                         </div>
-                       )}
-                     </div>
-                </div>
-
-                <div className="report-presets">
-                  <button
-                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'current_month' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPassedReportPreset('current_month');
-                      const dates = getDefaultReportDates('current_month');
-                      setPassedReportStartDate(dates.start);
-                      setPassedReportEndDate(dates.end);
-                      setPassedReportData(null);
-                      setPassedReportError('');
-                    }}
-                  >
-                    Current Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'last_month' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPassedReportPreset('last_month');
-                      const dates = getDefaultReportDates('last_month');
-                      setPassedReportStartDate(dates.start);
-                      setPassedReportEndDate(dates.end);
-                      setPassedReportData(null);
-                      setPassedReportError('');
-                    }}
-                  >
-                    Last Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'current_year' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPassedReportPreset('current_year');
-                      const dates = getDefaultReportDates('current_year');
-                      setPassedReportStartDate(dates.start);
-                      setPassedReportEndDate(dates.end);
-                      setPassedReportData(null);
-                      setPassedReportError('');
-                    }}
-                  >
-                    Current Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'last_year' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPassedReportPreset('last_year');
-                      const dates = getDefaultReportDates('last_year');
-                      setPassedReportStartDate(dates.start);
-                      setPassedReportEndDate(dates.end);
-                      setPassedReportData(null);
-                      setPassedReportError('');
-                    }}
-                  >
-                    Last Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${passedReportPreset === 'custom' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPassedReportPreset('custom');
-                      setPassedReportData(null);
-                      setPassedReportError('');
-                    }}
-                  >
-                    Custom
-                  </button>
-                </div>
-
-                <div className="report-dates">
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={passedReportStartDate}
-                    onChange={e => { setPassedReportStartDate(e.target.value); setPassedReportPreset('custom'); setPassedReportData(null); setPassedReportError(''); }}
-                  />
-                  <span className="report-date-sep">to</span>
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={passedReportEndDate}
-                    onChange={e => { setPassedReportEndDate(e.target.value); setPassedReportPreset('custom'); setPassedReportData(null); setPassedReportError(''); }}
-                  />
-                </div>
-
-                <button
-                  className="btn"
-                  onClick={fetchPassedReport}
-                  disabled={passedReportLoading || passedReportVersionIds.length === 0 || !passedReportStartDate || !passedReportEndDate}
-                >
-                  {passedReportLoading ? 'Generating...' : 'Generate Report'}
-                </button>
-              </div>
-
-              {passedReportError && <p className="error-msg">{passedReportError}</p>}
-
-              {passedReportData && (
-                <div className="report-results">
-                  <h4>
-                    Passed Steps Report ({passedReportData.startDate} — {passedReportData.endDate})
-                    {passedReportData.versionIds && passedReportData.versionIds.length > 0 && (
-                      <span className="report-version-tag">
-                        Versions {passedReportData.versionIds.map((vid: number) => versions.find(v => v.id === vid)?.name || vid).join(', ')}
-                      </span>
-                    )}
-                  </h4>
-
-                  {passedReportData.tests.length === 0 ? (
-                    <p className="admin-hint">No passed steps with comments or files in this period.</p>
-                  ) : (
-                    <div className="report-tests-list">
-                      {passedReportData.tests.map((test: any) => {
-                        const isOpen = expandedPassedReportTests.has(test.testId);
-                        const passedUsers = test.passedUsers || [];
-                        return (
-                          <div key={test.testId} className="report-test-row">
-                            <div className="report-test-header" onClick={() => togglePassedTestReportExpand(test.testId)}>
-                              <span className="report-test-name">{test.testName}</span>
-                              <span className="report-test-stats">
-                                <span className="report-stat">{test.rounds} rounds</span>
-                                <span className="report-stat report-stat-pass">{test.passes} passed</span>
-                                <span className="report-stat report-stat-fail">{test.fails} failed</span>
-                              </span>
-                              <span className="expand-icon">{isOpen ? '▲' : '▼'}</span>
-                            </div>
-                            {isOpen && (
-                              <div className="report-test-body">
-                                {passedUsers.length === 0 ? (
-                                  <p className="admin-hint" style={{ padding: '0.5rem 1rem' }}>No passed steps with comments or files in this period.</p>
-                                ) : (
-                                  <table className="report-steps-table">
-                                    <thead>
-                                      <tr>
-                                        <th>User</th>
-                                        <th>Step</th>
-                                        <th>Round</th>
-                                        <th>Description</th>
-                                        <th>Comment</th>
-                                        <th>File</th>
-                                        <th>Time</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {passedUsers.map((pu: any) => {
-                                        return pu.submissions.map((sub: any) => (
-                                          <tr key={`${pu.userId}-${sub.stepId}-${sub.roundId}-${sub.executed_at}`} className="report-step-row-passed">
-                                            <td>{pu.userName}</td>
-                                            <td className="step-num-cell">{sub.stepNumber}</td>
-                                            <td>{sub.roundId != null ? `R${sub.roundId}` : '—'}</td>
-                                            <td>{sub.description}</td>
-                                            <td className="report-step-comment">{sub.comment || '—'}</td>
-                                            <td>
-                                              {sub.configFilePath ? (
-                                                <a
-                                                  className="report-file-link"
-                                                  href={`${API_BASE}${sub.configFilePath}`}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  download
-                                                >
-                                                  📥 Download
-                                                </a>
-                                              ) : (
-                                                '—'
-                                              )}
-                                            </td>
-                                            <td>{sub.executed_at ? new Date(sub.executed_at).toLocaleString() : '—'}</td>
-                                          </tr>
-                                        ));
-                                      })}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {reportsSubTab === 'points' && (
-            <>
-              <h3>Points Report</h3>
-              <p className="admin-hint">
-                Select a user (or leave it as All Users) and a date range to count the total points earned in that period.
-              </p>
-
-              <div className="report-controls">
-                <div className="report-selectors">
-                  <div className="searchable-select">
-                    <label>Users</label>
-                    <input
-                      type="text"
-                      className="user-input"
-                      placeholder="Search users..."
-                      value={showPointsUserDropdown ? pointsUserSearch : (pointsUserIds.length > 0 ? pointsUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ') : 'All Users')}
-                      onChange={e => setPointsUserSearch(e.target.value)}
-                      onFocus={() => { setShowPointsUserDropdown(true); setPointsUserSearch(''); }}
-                      onBlur={() => setTimeout(() => setShowPointsUserDropdown(false), 150)}
-                    />
-                    {showPointsUserDropdown && (
-                      <div className="searchable-dropdown">
-                        <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
-                          <input
-                            type="checkbox"
-                            checked={pointsUserIds.length === nonAdminUsers.length && nonAdminUsers.length > 0}
-                            onChange={toggleAllPointsUsers}
-                          />
-                          <strong>All Users</strong>
-                        </label>
-                        {nonAdminUsers
-                          .filter(u => u.username.toLowerCase().includes(pointsUserSearch.toLowerCase()))
-                          .map(u => (
-                            <label
-                              key={u.id}
-                              className={`searchable-option ${pointsUserIds.includes(u.id) ? 'selected' : ''}`}
-                              onMouseDown={e => e.preventDefault()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={pointsUserIds.includes(u.id)}
-                                onChange={() => togglePointsUserSelect(u.id)}
-                              />
-                              {u.username}
-                            </label>
-                          ))}
-                        {nonAdminUsers.filter(u => u.username.toLowerCase().includes(pointsUserSearch.toLowerCase())).length === 0 && (
-                          <div className="searchable-no-results">No users found</div>
-                        )}
-                      </div>
-                    )}
-                    {pointsUserIds.length > 0 && (
-                      <div className="selected-tags">
-                        {pointsUserIds.map(id => {
-                          const u = nonAdminUsers.find(x => x.id === id);
-                          return u ? (
-                            <span key={id} className="selected-tag">
-                              {u.username}
-                              <button type="button" onClick={() => togglePointsUserSelect(id)}>×</button>
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="report-presets">
-                  <button
-                    className={`btn-secondary report-preset-btn ${pointsPreset === 'current_month' ? 'active' : ''}`}
-                    onClick={() => handlePointsPresetChange('current_month')}
-                  >
-                    Current Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${pointsPreset === 'last_month' ? 'active' : ''}`}
-                    onClick={() => handlePointsPresetChange('last_month')}
-                  >
-                    Last Month
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${pointsPreset === 'current_year' ? 'active' : ''}`}
-                    onClick={() => handlePointsPresetChange('current_year')}
-                  >
-                    Current Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${pointsPreset === 'last_year' ? 'active' : ''}`}
-                    onClick={() => handlePointsPresetChange('last_year')}
-                  >
-                    Last Year
-                  </button>
-                  <button
-                    className={`btn-secondary report-preset-btn ${pointsPreset === 'custom' ? 'active' : ''}`}
-                    onClick={() => handlePointsPresetChange('custom')}
-                  >
-                    Custom
-                  </button>
-                </div>
-
-                <div className="report-dates">
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={pointsStartDate}
-                    onChange={e => { setPointsStartDate(e.target.value); setPointsPreset('custom'); setPointsData(null); setPointsError(''); }}
-                  />
-                  <span className="report-date-sep">to</span>
-                  <input
-                    type="date"
-                    className="user-input"
-                    value={pointsEndDate}
-                    onChange={e => { setPointsEndDate(e.target.value); setPointsPreset('custom'); setPointsData(null); setPointsError(''); }}
-                  />
-                </div>
-
-                <button
-                  className="btn"
-                  onClick={fetchPointsReport}
-                  disabled={pointsLoading || !pointsStartDate || !pointsEndDate}
-                >
-                  {pointsLoading ? 'Counting...' : 'Count Points'}
-                </button>
-              </div>
-
-              {pointsError && <p className="error-msg">{pointsError}</p>}
-
-              {pointsData && (
-                <div className="report-results">
-                  <h4>
-                    Points earned {pointsUserIds.length === 0 ? 'for All Users' : 'for ' + pointsUserIds.map(id => nonAdminUsers.find(x => x.id === id)?.username).filter(Boolean).join(', ')}
-                    {' '}({pointsData.startDate} — {pointsData.endDate})
-                  </h4>
-
-                  <div className="report-summary">
-                    <div className="report-summary-card">
-                      <span className="report-summary-value">{pointsData.totalPointsEarned}</span>
-                      <span className="report-summary-label">Total Points Earned</span>
-                    </div>
-                    <div className="report-summary-card">
-                      <span className="report-summary-value">{pointsData.totalSteps}</span>
-                      <span className="report-summary-label">Steps Logged</span>
-                    </div>
-                  </div>
-
-                  {pointsData.users.length === 0 ? (
-                    <p className="admin-hint">No points earned in this period.</p>
-                  ) : (
-                    <table className="report-steps-table">
-                      <thead>
-                        <tr>
-                          <th>User</th>
-                          <th>Points Earned</th>
-                          <th>Steps Logged</th>
-                          <th>Test Result (Pass/Fail)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(pointsData.users || []).map((u: any) => (
-                          <tr key={u.userId}>
-                            <td>{u.userName}</td>
-                            <td><span className="status-badge status-pass">{u.pointsEarned}</span></td>
-                            <td>{u.steps}</td>
-                            <td>
-                              {(u.testsPassed != null && (u.testsPassed > 0 || u.testsFailed > 0)) ? (
-                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                                  <span style={{ color: u.testsPassed > 0 ? 'var(--success, #48bb78)' : 'inherit' }}>{u.testsPassed}</span>
-                                  <span style={{ color: 'var(--text-muted)' }}>/</span>
-                                  <span style={{ color: u.testsFailed > 0 ? 'var(--danger, #fc8181)' : 'inherit' }}>{u.testsFailed}</span>
-                                </span>
-                              ) : (
-                                <span style={{ color: 'var(--text-muted)' }}>—</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              )}
-            </>
-          )}
         </div>
       )}
-
-      {activeTab === 'backup' && (
-        <div className="admin-section">
-          <h3>Backup All Data</h3>
-          <p className="admin-hint">
-            Download a JSON backup containing all users, tests, steps, results, assignments, loop
-            state, points, versions — and every uploaded config file referenced by a failed step,
-            so restoring reproduces the system exactly (comments and their attachments included).
-          </p>
-          <button className="btn" onClick={handleBackupExport} disabled={backupLoading}>
-            {backupLoading ? 'Preparing...' : 'Download Backup'}
-          </button>
-
-          <h3 style={{ marginTop: '2rem' }}>Restore from Backup</h3>
-          <p className="admin-hint">
-            Upload a previously exported backup file to restore all data. This will replace all current data.
-          </p>
-          <form onSubmit={handleBackupImport} className="upload-form">
-            <input
-              ref={backupFileRef}
-              type="file"
-              accept=".json"
-              className="file-input"
-            />
-            <button type="submit" className="btn" disabled={backupLoading}>
-              {backupLoading ? 'Restoring...' : 'Restore Backup'}
-            </button>
-          </form>
-
-          {backupError && <p className="error-msg">{backupError}</p>}
-          {backupMessage && <p className="success-msg">{backupMessage}</p>}
-        </div>
+      {activeTab === 'api-keys' && renderApiKeysManagement(true)}
+        </>
       )}
       {deleteTarget && (
         <div className="modal-overlay" onClick={closeDeleteUser}>
@@ -3925,967 +4206,391 @@ const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {(activeTab === 'settings' || activeTab === 'api-keys') && (
-        <div className="admin-section">
-          {activeTab === 'api-keys' && (
-            <div style={{ marginBottom: '1.25rem' }}>
-              <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 0 0.5rem 0' }}>
-                <span>🔑</span> API Key Management & Developer Documentation
-              </h3>
-              <p className="admin-hint" style={{ margin: 0 }}>
-                Generate and manage scoped API keys for autonomous AI agents, developer scripts, and CI/CD tools. All test executions, yes/no step results, and file uploads performed with an API key are automatically attributed to the key's assigned user identity.
-              </p>
-            </div>
-          )}
 
-          {activeTab === 'settings' && (
-            <>
-              <h3>System Settings</h3>
-              <p className="admin-hint">
-                Configure application-wide business rules and time thresholds.
-              </p>
-
-              {/* High-visibility API Key Generator Quick Notice Banner */}
-              <div
-                style={{
-                  maxWidth: '960px',
-                  margin: '1rem 0 1.5rem 0',
-                  background: 'linear-gradient(135deg, rgba(49, 130, 206, 0.18), rgba(66, 153, 225, 0.08))',
-                  border: '1.5px solid #3182ce',
-                  borderRadius: '10px',
-                  padding: '1.25rem 1.5rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '1rem',
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.12)'
-                }}
-              >
-                <div>
-                  <h4 style={{ margin: '0 0 0.35rem 0', color: '#63b3ed', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>🔑</span> API Key Generation for AI Agents & Developers
-                  </h4>
-                  <p style={{ margin: 0, color: 'var(--text-muted, #cbd5e0)', fontSize: '0.9rem', lineHeight: '1.4' }}>
-                    Looking to generate API keys for autonomous AI agents or developer scripts? Keys with automatic user attribution can be managed directly here or in the dedicated tab.
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => { setActiveTab('api-keys'); fetchApiKeys(); }}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      background: 'linear-gradient(135deg, #3182ce, #2b6cb0)',
-                      color: '#fff',
-                      fontWeight: 600,
-                      padding: '0.6rem 1.25rem',
-                      borderRadius: '6px',
-                      boxShadow: '0 2px 8px rgba(49, 130, 206, 0.4)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <span>🔑 Open API Keys & Agents Tab</span>
-                    <span>→</span>
-                  </button>
-                  <a
-                    href="#api-keys-section"
-                    className="btn-secondary"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      padding: '0.6rem 1rem',
-                      fontSize: '0.88rem',
-                      textDecoration: 'none'
-                    }}
-                  >
-                    <span>Scroll to Generator ↓</span>
-                  </a>
-                </div>
-              </div>
-
-              {settingsLoading && <p className="admin-hint">Loading settings...</p>}
-            </>
-          )}
-
-          <div style={{ maxWidth: '960px', margin: '1rem 0' }}>
-            {activeTab === 'settings' && !settingsLoading && (
-              <div
-                style={{
-                  background: 'var(--card-bg, #1e2433)',
-                  border: '1px solid var(--border-color, #2d3748)',
-                  borderRadius: '10px',
-                  padding: '1.5rem',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>⏱️</span> Consecutive Cross-Test Failure Time Threshold
-                  </h4>
-                  <span
-                    style={{
-                      background: 'rgba(99, 179, 237, 0.15)',
-                      color: 'var(--accent, #63b3ed)',
-                      border: '1px solid rgba(99, 179, 237, 0.3)',
-                      padding: '0.2rem 0.65rem',
-                      borderRadius: '12px',
-                      fontSize: '0.8rem',
-                      fontWeight: 600
-                    }}
-                  >
-                    Default: 3 Minutes
-                  </span>
-                </div>
-
-                <div
+      {/* User Key Modal */}
+      {userKeyModalData && (
+        <div className="modal-backdrop" style={{ zIndex: 1000 }} onClick={() => setUserKeyModalData(null)}>
+          <div className="modal" style={{ maxWidth: '520px', width: '90%' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>🔑</span> Generated Key for {userKeyModalData.username}
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-muted, #a0aec0)', lineHeight: '1.4' }}>
+              A new key was generated for <strong>{userKeyModalData.username}</strong> ({userKeyModalData.role} role).
+              Copy and share it now so the user can log on. You can revoke it anytime later without removing their account.
+            </p>
+            <div style={{ margin: '1.25rem 0' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={userKeyModalData.rawKey}
+                  onClick={e => e.currentTarget.select()}
                   style={{
-                    background: 'rgba(235, 130, 60, 0.08)',
-                    borderLeft: '4px solid #ed8936',
+                    flex: 1,
+                    background: 'rgba(0, 0, 0, 0.45)',
+                    border: '1.5px solid #4a5568',
+                    padding: '0.75rem 0.85rem',
                     borderRadius: '6px',
-                    padding: '1rem 1.1rem',
-                    marginBottom: '1.5rem',
-                    fontSize: '0.92rem',
-                    lineHeight: '1.5'
+                    fontFamily: 'monospace',
+                    fontSize: '0.95rem',
+                    color: '#63b3ed',
+                    cursor: 'text'
+                  }}
+                  title="Click to select all, then Ctrl+C to copy"
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    background: copiedUserKey ? '#38a169' : undefined,
+                    padding: '0.75rem 1rem',
+                    whiteSpace: 'nowrap',
+                    fontWeight: 600
+                  }}
+                  onClick={async () => {
+                    const success = await copyToClipboard(userKeyModalData.rawKey);
+                    if (success) {
+                      setCopiedUserKey(true);
+                      setTimeout(() => setCopiedUserKey(false), 3000);
+                    } else {
+                      alert('Could not copy automatically. Please select the key text in the box and press Ctrl+C.');
+                    }
                   }}
                 >
-                  <strong style={{ color: '#ed8936', display: 'block', marginBottom: '0.4rem' }}>
-                    💡 What does this setting mean?
-                  </strong>
-                  <p style={{ margin: '0 0 0.5rem 0' }}>
-                    When a tester user is executing tests in sequence:
-                  </p>
-                  <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
-                    <li>
-                      If the user submits a <strong>failed step</strong> in one test, and then fails a step in a <strong>different test</strong> within this time window (e.g. 3 minutes), the system assumes the user relied on or repeated the prior test's failure pattern.
-                    </li>
-                    <li>
-                      <strong>0 Points Awarded:</strong> The points for the second failed step are zeroed out in the points ledger.
-                    </li>
-                    <li>
-                      <strong>Audit Warning Logged:</strong> A warning entry is recorded in the audit log explaining that the cross-test step points were withheld due to rapid consecutive failures.
-                    </li>
-                  </ul>
-                  <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-                    <em>Changing this threshold adjusts the time window (in minutes) required between cross-test step failures for points eligibility.</em>
-                  </p>
-                </div>
+                  {copiedUserKey ? '✓ Copied!' : '📋 Copy Key'}
+                </button>
+              </div>
+              <small style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.78rem', marginTop: '0.4rem' }}>
+                💡 Tip: Click inside the box to select all text, or use the <strong>Copy Key</strong> button.
+              </small>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setUserKeyModalData(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-                <form onSubmit={handleSaveSettings}>
-                  <div style={{ marginBottom: '1.75rem' }}>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Consecutive Failure Time Threshold (Minutes)
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        className="user-input"
-                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
-                        value={thresholdMinutes}
-                        onChange={e => setThresholdMinutes(e.target.value)}
-                        required
-                      />
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                        minutes (= {Math.round((parseFloat(thresholdMinutes) || 0) * 60)} seconds)
-                      </span>
-                    </div>
-                  </div>
+      {/* Edit User App & Test Assignments Modal */}
+      {editingUserAssignments && (
+        <div className="modal-overlay" onClick={() => setEditingUserAssignments(null)}>
+          <div className="modal" style={{ maxWidth: '650px', width: '95%', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                <span>📱</span> Manage Applications & Tests — {editingUserAssignments.username}
+              </h3>
+              <button className="modal-close" onClick={() => setEditingUserAssignments(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <p className="admin-hint" style={{ margin: 0 }}>
+                Select which applications <strong>{editingUserAssignments.username}</strong> is assigned to.
+                By default, all non-deleted tests of an assigned application are included. You can customize test assignments per application.
+              </p>
 
-                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+              {editAssignmentsError && <p className="error-msg">{editAssignmentsError}</p>}
+              {editAssignmentsSuccess && <p className="success-msg">{editAssignmentsSuccess}</p>}
 
-                  <div style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span>🔒</span> Maximum Test Rounds per Month
-                      </h4>
-                      <span
-                        style={{
-                          background: 'rgba(99, 179, 237, 0.15)',
-                          color: 'var(--accent, #63b3ed)',
-                          border: '1px solid rgba(99, 179, 237, 0.3)',
-                          padding: '0.2rem 0.65rem',
-                          borderRadius: '12px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600
-                        }}
-                      >
-                        Default: 8 Rounds
-                      </span>
-                    </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {apps.map(app => {
+                  const isAssigned = editUserAppIds.includes(app.id);
+                  const appTests = (allAppTests[app.id] || []).filter(t => !t.is_deleted);
+                  const customList = editUserCustomAssignments[app.id];
+                  const isCustomized = Array.isArray(customList);
+                  const assignedCount = isCustomized ? customList.length : appTests.length;
+                  const isExpanded = customizeEditAppId === app.id;
 
+                  return (
                     <div
+                      key={app.id}
                       style={{
-                        background: 'rgba(66, 153, 225, 0.08)',
-                        borderLeft: '4px solid #4299e1',
-                        borderRadius: '6px',
-                        padding: '1rem 1.1rem',
-                        marginBottom: '1.25rem',
-                        fontSize: '0.92rem',
-                        lineHeight: '1.5'
+                        background: isAssigned ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                        border: `1px solid ${isAssigned ? '#3b82f6' : 'var(--border-color, #2d3748)'}`,
+                        borderRadius: '8px',
+                        padding: '1rem',
+                        transition: 'all 0.2s ease'
                       }}
                     >
-                      <strong style={{ color: '#4299e1', display: 'block', marginBottom: '0.4rem' }}>
-                        💡 What does this setting mean?
-                      </strong>
-                      <p style={{ margin: '0 0 0.5rem 0' }}>
-                        Specifies the maximum number of times (rounds) a tester user can start or attempt a specific test within the current calendar month (started, completed, or stopped due to a failed step or new version).
-                      </p>
-                      <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
-                        <li>
-                          <strong>Automatic Test Locking:</strong> Once a user visits/attempts a specific test for this number of rounds in the current month, that test will be locked for the user, and the system automatically advances to the next available assigned test.
-                        </li>
-                        <li>
-                          <strong>Global User Lock:</strong> If all assigned tests for a user reach this monthly limit, all tests become locked and a clear message is displayed to the tester: <em>"You have consumed all your allowed test rounds for this month. Please refer to management."</em>
-                        </li>
-                        <li>
-                          <strong>Automated Process & API Key Exemption:</strong> Automated processes and scripts connecting via an API Key are completely exempt from this limit. Since API key usage indicates an automated, accurate workflow, no round limitations are applied.
-                        </li>
-                      </ul>
-                    </div>
-
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Maximum Test Rounds per Month (per test per user)
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <input
-                        type="number"
-                        step="1"
-                        min="1"
-                        className="user-input"
-                        style={{ width: '160px', fontSize: '1rem', padding: '0.5rem 0.75rem' }}
-                        value={maxMonthlyRounds}
-                        onChange={e => setMaxMonthlyRounds(e.target.value)}
-                        required
-                      />
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                        rounds per month per test
-                      </span>
-                    </div>
-                  </div>
-
-                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
-
-                  {/* Dropbox Storage Configuration */}
-                  <div style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                      <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span>📦</span> Dropbox Attachment Storage
-                      </h4>
-                      <span
-                        style={{
-                          background: dropboxEnabled ? 'rgba(72, 187, 120, 0.15)' : 'rgba(160, 174, 192, 0.15)',
-                          color: dropboxEnabled ? '#48bb78' : 'var(--text-muted, #a0aec0)',
-                          border: `1px solid ${dropboxEnabled ? 'rgba(72, 187, 120, 0.3)' : 'rgba(160, 174, 192, 0.3)'}`,
-                          padding: '0.2rem 0.65rem',
-                          borderRadius: '12px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600
-                        }}
-                      >
-                        {dropboxEnabled ? '● Enabled' : '○ Disabled'}
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        background: 'rgba(66, 153, 225, 0.08)',
-                        borderLeft: '4px solid #4299e1',
-                        borderRadius: '6px',
-                        padding: '1rem 1.1rem',
-                        marginBottom: '1.25rem',
-                        fontSize: '0.92rem',
-                        lineHeight: '1.5'
-                      }}
-                    >
-                      <strong style={{ color: '#4299e1', display: 'block', marginBottom: '0.4rem' }}>
-                        💡 Direct Dropbox Storage Architecture
-                      </strong>
-                      <p style={{ margin: 0 }}>
-                        When enabled, all user uploaded attachments (ZIP files, PDFs, etc.) are automatically stored directly in your Dropbox account under the designated folder path. The database will only store file metadata, saving database bandwidth and cost.
-                      </p>
-                    </div>
-
-                    <div style={{ marginBottom: '1.25rem' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600 }}>
-                        <input
-                          type="checkbox"
-                          checked={dropboxEnabled}
-                          onChange={e => setDropboxEnabled(e.target.checked)}
-                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                        />
-                        <span>Enable Dropbox Storage for Uploaded Files</span>
-                      </label>
-                    </div>
-
-                    {dropboxEnabled && (
-                      <div
-                        style={{
-                          background: 'rgba(255, 255, 255, 0.03)',
-                          border: '1px solid var(--border-color, #2d3748)',
-                          borderRadius: '8px',
-                          padding: '1.25rem',
-                          marginTop: '1rem',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '1.25rem'
-                        }}
-                      >
-                        <div>
-                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                            Dropbox Target Folder Path <span style={{ color: '#e53e3e' }}>*</span>
-                          </label>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600, fontSize: '1rem' }}>
                           <input
-                            type="text"
-                            className="user-input"
-                            style={{ width: '100%', maxWidth: '400px' }}
-                            placeholder="/QualityCheck_Uploads"
-                            value={dropboxFolderPath}
-                            onChange={e => setDropboxFolderPath(e.target.value)}
-                            required={dropboxEnabled}
+                            type="checkbox"
+                            checked={isAssigned}
+                            onChange={() => {
+                              if (isAssigned) {
+                                setEditUserAppIds(prev => prev.filter(id => id !== app.id));
+                                setEditUserCustomAssignments(prev => {
+                                  const next = { ...prev };
+                                  delete next[app.id];
+                                  return next;
+                                });
+                                if (customizeEditAppId === app.id) setCustomizeEditAppId(null);
+                              } else {
+                                setEditUserAppIds(prev => [...prev, app.id]);
+                              }
+                            }}
+                            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
                           />
-                          <small style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                            Target folder in Dropbox (must start with a slash <code>/</code>). Files will be saved inside this directory.
-                          </small>
-                        </div>
+                          <span>📱 {app.name}</span>
+                        </label>
 
-                        <div>
-                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                            Dropbox App Key (Client ID) <span style={{ color: '#e53e3e' }}>*</span>
-                          </label>
-                          <input
-                            type="text"
-                            className="user-input"
-                            style={{ width: '100%', maxWidth: '400px' }}
-                            placeholder="Enter Dropbox App Key"
-                            value={dropboxAppKey}
-                            onChange={e => setDropboxAppKey(e.target.value)}
-                            required={dropboxEnabled}
-                          />
-                        </div>
-
-                        <div>
-                          <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem' }}>
-                            Dropbox App Secret (Client Secret) <span style={{ color: '#e53e3e' }}>*</span>
-                          </label>
-                          <input
-                            type="password"
-                            className="user-input"
-                            style={{ width: '100%', maxWidth: '400px' }}
-                            placeholder={dropboxIsConfigured ? 'App Secret configured (●●●●●●●●). Enter new to replace.' : 'Enter Dropbox App Secret'}
-                            value={dropboxAppSecret}
-                            onChange={e => setDropboxAppSecret(e.target.value)}
-                            required={dropboxEnabled && !dropboxIsConfigured}
-                          />
-                        </div>
-
-                        <div style={{
-                          background: 'rgba(0, 97, 254, 0.08)',
-                          border: '1px solid rgba(0, 97, 254, 0.3)',
-                          borderRadius: '6px',
-                          padding: '0.9rem 1rem',
-                          fontSize: '0.88rem'
-                        }}>
-                          <div style={{ fontWeight: 600, color: '#60a5fa', marginBottom: '0.4rem' }}>
-                            📋 Required Dropbox App Console Configuration:
-                          </div>
-                          <div style={{ marginBottom: '0.5rem' }}>
-                            1. In <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent, #63b3ed)', textDecoration: 'underline' }}>Dropbox App Console</a>, create an app with <strong>Scoped access</strong> and <strong>Full Dropbox</strong> access.
-                          </div>
-                          <div style={{ marginBottom: '0.5rem' }}>
-                            2. In the <strong>Permissions</strong> tab, check: <code>files.content.write</code> and <code>files.content.read</code>.
-                          </div>
-                          <div style={{ marginBottom: '0.25rem' }}>
-                            3. In the <strong>Settings</strong> tab under <strong>OAuth 2 → Redirect URIs</strong>, add this exact URL:
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
-                            <code style={{ background: 'rgba(0,0,0,0.3)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.85rem', color: '#90cdf4', flex: 1, wordBreak: 'break-all' }}>
-                              {window.location.origin}/admin
-                            </code>
+                        {isAssigned && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <span
+                              style={{
+                                fontSize: '0.8rem',
+                                padding: '0.2rem 0.6rem',
+                                borderRadius: '12px',
+                                background: isCustomized ? 'rgba(237, 137, 54, 0.15)' : 'rgba(72, 187, 120, 0.15)',
+                                color: isCustomized ? '#ed8936' : '#48bb78',
+                                border: `1px solid ${isCustomized ? 'rgba(237, 137, 54, 0.3)' : 'rgba(72, 187, 120, 0.3)'}`
+                              }}
+                            >
+                              {isCustomized ? `Custom: ${assignedCount}/${appTests.length} tests` : `✓ Default: All ${appTests.length} tests`}
+                            </span>
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                              onClick={() => {
-                                navigator.clipboard.writeText(`${window.location.origin}/admin`);
-                                alert(`Copied to clipboard: ${window.location.origin}/admin`);
-                              }}
+                              style={{ fontSize: '0.78rem', padding: '0.25rem 0.6rem' }}
+                              onClick={() => setCustomizeEditAppId(isExpanded ? null : app.id)}
                             >
-                              📋 Copy URI
+                              {isExpanded ? '▲ Done' : '▼ Customize Tests'}
                             </button>
-                          </div>
-                        </div>
-
-                        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ background: '#0061FE', borderColor: '#0061FE' }}
-                            onClick={async () => {
-                              if (!dropboxAppKey.trim()) {
-                                alert('Please enter your Dropbox App Key first.');
-                                return;
-                              }
-                              if (!dropboxIsConfigured && (!dropboxAppSecret.trim() || dropboxAppSecret === '●●●●●●●●')) {
-                                alert('Please enter your Dropbox App Secret first.');
-                                return;
-                              }
-
-                              // Auto-save settings before redirecting so key and secret are stored
-                              try {
-                                await fetch(`${API_BASE}/api/settings`, {
-                                  method: 'PUT',
-                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ key: 'dropbox_enabled', value: 'true' })
-                                });
-                                await fetch(`${API_BASE}/api/settings`, {
-                                  method: 'PUT',
-                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ key: 'dropbox_folder_path', value: dropboxFolderPath.trim() || '/QualityCheck_Uploads' })
-                                });
-                                await fetch(`${API_BASE}/api/settings`, {
-                                  method: 'PUT',
-                                  headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ key: 'dropbox_app_key', value: dropboxAppKey.trim() })
-                                });
-                                if (dropboxAppSecret.trim() && dropboxAppSecret !== '●●●●●●●●') {
-                                  await fetch(`${API_BASE}/api/settings`, {
-                                    method: 'PUT',
-                                    headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ key: 'dropbox_app_secret', value: dropboxAppSecret.trim() })
-                                  });
-                                }
-                              } catch (e) {
-                                console.warn('Could not pre-save settings before redirect', e);
-                              }
-
-                              const redirectUri = encodeURIComponent(`${window.location.origin}/admin`);
-                              window.location.href = `https://www.dropbox.com/oauth2/authorize?client_id=${encodeURIComponent(dropboxAppKey.trim())}&response_type=code&token_access_type=offline&redirect_uri=${redirectUri}`;
-                            }}
-                          >
-                            🔗 Connect & Authorize with Dropbox
-                          </button>
-
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={handleTestDropbox}
-                            disabled={dropboxTesting || !dropboxFolderPath.trim()}
-                          >
-                            {dropboxTesting ? '🔄 Testing...' : '🔌 Test Connection'}
-                          </button>
-                        </div>
-
-                        {dropboxTestResult && (
-                          <div
-                            style={{
-                              padding: '0.75rem 1rem',
-                              borderRadius: '6px',
-                              fontSize: '0.9rem',
-                              background: dropboxTestResult.success ? 'rgba(72, 187, 120, 0.12)' : 'rgba(229, 62, 62, 0.12)',
-                              border: `1px solid ${dropboxTestResult.success ? '#48bb78' : '#e53e3e'}`,
-                              color: dropboxTestResult.success ? '#48bb78' : '#feb2b2'
-                            }}
-                          >
-                            {dropboxTestResult.success ? '✅ ' : '❌ '}
-                            {dropboxTestResult.message}
-                            {dropboxTestResult.accountName && (
-                              <div style={{ marginTop: '0.25rem', fontSize: '0.85rem' }}>
-                                Account: <strong>{dropboxTestResult.accountName}</strong>
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
 
-                  <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #2d3748)', margin: '1.75rem 0' }} />
+                      {isAssigned && isExpanded && (
+                        <div style={{ marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border-color, #2d3748)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                              Select specific tests to assign for {app.name}:
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                                onClick={() => {
+                                  setEditUserCustomAssignments(prev => ({
+                                    ...prev,
+                                    [app.id]: appTests.map(t => t.id)
+                                  }));
+                                }}
+                              >
+                                Select All
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                                onClick={() => {
+                                  setEditUserCustomAssignments(prev => ({
+                                    ...prev,
+                                    [app.id]: []
+                                  }));
+                                }}
+                              >
+                                Deselect All
+                              </button>
+                              {isCustomized && (
+                                <button
+                                  type="button"
+                                  className="btn-secondary"
+                                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                                  onClick={() => {
+                                    setEditUserCustomAssignments(prev => {
+                                      const next = { ...prev };
+                                      delete next[app.id];
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  Reset to Default
+                                </button>
+                              )}
+                            </div>
+                          </div>
 
-                  {settingsError && <p className="error-msg" style={{ marginBottom: '1rem' }}>{settingsError}</p>}
-                  {settingsSuccess && (
-                    <p className="success-msg" style={{ color: '#48bb78', marginBottom: '1rem', fontWeight: 500 }}>
-                      ✅ {settingsSuccess}
-                    </p>
-                  )}
-
-                  <button type="submit" className="btn" disabled={settingsSaving}>
-                    {settingsSaving ? 'Saving...' : 'Save Settings'}
-                  </button>
-                  </form>
-              </div>
-            )}
-
-            {/* REST API Documentation & Swagger UI Quick-Link */}
-            <div id="api-keys-section">
-              <div
-                style={{
-                  background: 'var(--card-bg, #1e2433)',
-                  border: '1px solid var(--border-color, #2d3748)',
-                  borderRadius: '10px',
-                  padding: '1.5rem',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  marginTop: activeTab === 'settings' ? '1.5rem' : '0'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-                  <div style={{ flex: '1 1 300px' }}>
-                    <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span>📚</span> Interactive REST API Documentation (Swagger UI)
-                    </h4>
-                    <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-muted, #a0aec0)', fontSize: '0.9rem', lineHeight: '1.5' }}>
-                      Explore complete OpenAPI 3.0 specifications with live execution testing for AI agents, developers, and CI/CD pipelines. Includes endpoints for submitting test results (<code>yes/no</code>, <code>pass/fail</code>), file uploads, test authoring, and progress tracking.
-                    </p>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        padding: '0.6rem 1.1rem',
-                        fontSize: '0.92rem',
-                        fontWeight: 600,
-                        whiteSpace: 'nowrap'
-                      }}
-                      onClick={async () => {
-                        try {
-                          const res = await fetch(`${API_BASE}/api/docs/get_user_guide?token=${encodeURIComponent(token || '')}`, {
-                            headers: authHeaders
-                          });
-                          if (!res.ok) {
-                            alert('Failed to download API user guide');
-                            return;
-                          }
-                          const blob = await res.blob();
-                          const url = window.URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = 'QualityCheck_API_User_Guide.md';
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          window.URL.revokeObjectURL(url);
-                        } catch (err) {
-                          alert('Error downloading API user guide');
-                        }
-                      }}
-                    >
-                      <span>📥 Download User Guide (.md)</span>
-                    </button>
-                    <a
-                      href={`/api/docs?token=${encodeURIComponent(token || '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        textDecoration: 'none',
-                        background: 'linear-gradient(135deg, #3182ce, #2b6cb0)',
-                        whiteSpace: 'nowrap',
-                        padding: '0.6rem 1.2rem',
-                        fontSize: '0.95rem',
-                        fontWeight: 600
-                      }}
-                    >
-                      <span>🚀 Open Swagger UI</span>
-                      <span style={{ fontSize: '0.85rem' }}>↗</span>
-                    </a>
-                  </div>
-                </div>
+                          {appTests.length === 0 ? (
+                            <p className="admin-hint" style={{ margin: 0 }}>No active tests in this application.</p>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto', padding: '0.25rem' }}>
+                              {appTests.map(t => {
+                                const currentList = isCustomized ? customList : appTests.map(x => x.id);
+                                const isChecked = currentList.includes(t.id);
+                                return (
+                                  <label
+                                    key={t.id}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.4rem',
+                                      fontSize: '0.85rem',
+                                      padding: '0.35rem 0.5rem',
+                                      borderRadius: '4px',
+                                      background: isChecked ? 'rgba(59, 130, 246, 0.12)' : 'rgba(0,0,0,0.1)',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        const current = isCustomized ? [...customList] : appTests.map(x => x.id);
+                                        const next = isChecked ? current.filter(id => id !== t.id) : [...current, t.id];
+                                        setEditUserCustomAssignments(prev => ({ ...prev, [app.id]: next }));
+                                      }}
+                                    />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.name}>
+                                      {t.name}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* API Key Management for AI Agents & Developers */}
-              <div
-                style={{
-                  background: 'var(--card-bg, #1e2433)',
-                  border: '1px solid var(--border-color, #2d3748)',
-                  borderRadius: '10px',
-                  padding: '1.5rem',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  marginTop: '1.5rem'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <h4 style={{ margin: 0, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>🔑</span> API Key Management for Developers & AI Agents
-                  </h4>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ fontSize: '0.85rem', padding: '0.3rem 0.75rem' }}
-                    onClick={fetchApiKeys}
-                    disabled={apiKeysLoading}
-                  >
-                    {apiKeysLoading ? 'Refreshing...' : '🔄 Refresh Keys'}
-                  </button>
-                </div>
-
-                <div
-                  style={{
-                    background: 'rgba(99, 179, 237, 0.08)',
-                    borderLeft: '4px solid #3182ce',
-                    borderRadius: '6px',
-                    padding: '1rem 1.1rem',
-                    marginBottom: '1.5rem',
-                    fontSize: '0.92rem',
-                    lineHeight: '1.5'
-                  }}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setEditingUserAssignments(null)}
+                  disabled={savingUserAssignments}
                 >
-                  <strong style={{ color: '#63b3ed', display: 'block', marginBottom: '0.4rem' }}>
-                    🤖 Identity & User Attribution for AI Agents
-                  </strong>
-                  <p style={{ margin: '0 0 0.5rem 0' }}>
-                    Generate scoped API keys for autonomous AI agents, automated testing pipelines, and developer tools. When an agent updates anything in the application (executes tests, records <code>yes/no</code> or <code>pass/fail</code> step results, uploads log/evidence files, or authors test cases), the author/tester will automatically be set to the user name assigned to this key across all reports, points ledgers, and audit logs.
-                  </p>
-                  <ul style={{ margin: '0 0 0.5rem 1.2rem', padding: 0 }}>
-                    <li><strong>Tester Role:</strong> Can query active tests, fetch next steps, submit results (pass/fail/yes/no), and upload attachments. Automatically assigned all current active tests upon key creation.</li>
-                    <li><strong>Developer Role:</strong> Can create tests, update descriptions, add/remove steps, configure points, and import Excel workbooks.</li>
-                    <li><strong>Admin Role:</strong> Full system access, including generating keys and modifying application settings.</li>
-                  </ul>
-                </div>
-
-                {/* Form to generate new API key */}
-                <form onSubmit={handleGenerateApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-                    <div>
-                      <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem', fontSize: '0.9rem' }}>
-                        API Key Name / Agent Identifier <span style={{ color: '#e53e3e' }}>*</span>
-                      </label>
-                      <input
-                        type="text"
-                        className="user-input"
-                        placeholder="e.g. Agent-Tester-Alpha or Developer-Script"
-                        value={keyName}
-                        onChange={e => { setKeyName(e.target.value); setApiKeyError(''); }}
-                        style={{ width: '100%' }}
-                        required
-                      />
-                      <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
-                        Descriptive label identifying who or what is using this key.
-                      </small>
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.4rem', fontSize: '0.9rem' }}>
-                        Permission Role <span style={{ color: '#e53e3e' }}>*</span>
-                      </label>
-                      <select
-                        className="user-input"
-                        value={keyRole}
-                        onChange={e => setKeyRole(e.target.value as any)}
-                        style={{ width: '100%' }}
-                      >
-                        <option value="tester">Tester (Execute tests, submit results, upload files)</option>
-                        <option value="developer">Developer (Author tests, manage steps, configure points)</option>
-                        <option value="admin">Administrator (Full administrative access)</option>
-                      </select>
-                      <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
-                        Defines endpoint authorization and capabilities.
-                      </small>
-                    </div>
-                  </div>
-
-                  {/* User Attribution Mode */}
-                  <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color, #2d3748)', borderRadius: '8px', padding: '1rem' }}>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                      👤 User Attribution (Who will submissions and reports be credited to?)
-                    </label>
-                    <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
-                        <input
-                          type="radio"
-                          name="keyUserMode"
-                          value="create"
-                          checked={keyUserMode === 'create'}
-                          onChange={() => setKeyUserMode('create')}
-                        />
-                        <span>Auto-create / Use Dedicated User Account</span>
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
-                        <input
-                          type="radio"
-                          name="keyUserMode"
-                          value="existing"
-                          checked={keyUserMode === 'existing'}
-                          onChange={() => setKeyUserMode('existing')}
-                        />
-                        <span>Link to Existing User</span>
-                      </label>
-                    </div>
-
-                    {keyUserMode === 'create' ? (
-                      <div>
-                        <input
-                          type="text"
-                          className="user-input"
-                          placeholder={keyName.trim() ? `Username will be: ${keyName.trim().replace(/\s+/g, '_')}` : "Custom username (optional, defaults to Key Name)"}
-                          value={keyCustomUsername}
-                          onChange={e => setKeyCustomUsername(e.target.value)}
-                          style={{ width: '100%', maxWidth: '380px' }}
-                        />
-                        <small style={{ color: 'var(--text-muted, #a0aec0)', fontSize: '0.8rem', display: 'block', marginTop: '0.25rem' }}>
-                          If a user with this name already exists, the key will link to them. Otherwise, a new user account is automatically provisioned.
-                        </small>
-                      </div>
-                    ) : (
-                      <div>
-                        <select
-                          className="user-input"
-                          value={keyExistingUserId}
-                          onChange={e => setKeyExistingUserId(e.target.value ? Number(e.target.value) : '')}
-                          style={{ width: '100%', maxWidth: '380px' }}
-                          required={keyUserMode === 'existing'}
-                        >
-                          <option value="">-- Select an existing user --</option>
-                          {users.map(u => (
-                            <option key={u.id} value={u.id}>
-                              {u.username} ({u.is_admin ? 'Admin' : (u.user_groups || []).join(', ') || 'User'})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-
-                  {apiKeyError && <p className="error-msg" style={{ margin: 0 }}>{apiKeyError}</p>}
-                  {apiKeySuccess && !generatedRawKey && <p className="success-msg" style={{ margin: 0, color: '#48bb78' }}>✅ {apiKeySuccess}</p>}
-
-                  <div>
-                    <button
-                      type="submit"
-                      className="btn"
-                      disabled={keyGenerating || !keyName.trim() || (keyUserMode === 'existing' && !keyExistingUserId)}
-                      style={{ minWidth: '180px' }}
-                    >
-                      {keyGenerating ? 'Generating Key...' : '➕ Generate API Key'}
-                    </button>
-                  </div>
-                </form>
-
-                {/* Banner when a new key is successfully generated */}
-                {generatedRawKey && (
-                  <div
-                    style={{
-                      marginTop: '1.5rem',
-                      background: 'rgba(72, 187, 120, 0.1)',
-                      border: '1.5px solid #48bb78',
-                      borderRadius: '8px',
-                      padding: '1.25rem',
-                      animation: 'fadeIn 0.3s ease'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                      <span style={{ fontWeight: 700, color: '#48bb78', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span>🎉</span> API Key Generated Successfully!
-                      </span>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
-                        onClick={() => { setGeneratedRawKey(null); setGeneratedKeyMeta(null); setCopiedKey(false); }}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-
-                    <div style={{
-                      background: '#0d1117',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '6px',
-                      padding: '0.75rem 1rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '1rem',
-                      fontFamily: 'monospace',
-                      fontSize: '0.95rem',
-                      color: '#58a6ff',
-                      wordBreak: 'break-all',
-                      marginBottom: '0.75rem'
-                    }}>
-                      <span>{generatedRawKey}</span>
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{
-                          padding: '0.4rem 0.9rem',
-                          fontSize: '0.85rem',
-                          background: copiedKey ? '#38a169' : '#3182ce',
-                          whiteSpace: 'nowrap'
-                        }}
-                        onClick={() => {
-                          navigator.clipboard.writeText(generatedRawKey);
-                          setCopiedKey(true);
-                          setTimeout(() => setCopiedKey(false), 2500);
-                        }}
-                      >
-                        {copiedKey ? '✅ Copied!' : '📋 Copy Key'}
-                      </button>
-                    </div>
-
-                    <div style={{ fontSize: '0.88rem', color: '#e2e8f0', marginBottom: '0.5rem' }}>
-                      Attributed to user: <strong style={{ color: '#63b3ed' }}>{generatedKeyMeta?.username}</strong> &bull; Role: <strong style={{ textTransform: 'capitalize' }}>{generatedKeyMeta?.role}</strong>
-                    </div>
-
-                    <div style={{
-                      fontSize: '0.82rem',
-                      color: '#feb2b2',
-                      background: 'rgba(229, 62, 62, 0.15)',
-                      padding: '0.5rem 0.75rem',
-                      borderRadius: '4px',
-                      borderLeft: '3px solid #e53e3e'
-                    }}>
-                      ⚠️ <strong>Warning:</strong> Please copy this key now and store it in a secure location. You will not be able to view this full key again once you navigate away!
-                    </div>
-                  </div>
-                )}
-
-                {/* Table of Existing API Keys */}
-                <div style={{ marginTop: '2rem' }}>
-                  <h5 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: 'var(--text-color, #e2e8f0)' }}>
-                    Active & Configured Keys ({apiKeys.length})
-                  </h5>
-
-                  {apiKeysLoading && apiKeys.length === 0 ? (
-                    <p className="admin-hint">Loading API keys...</p>
-                  ) : apiKeys.length === 0 ? (
-                    <div style={{
-                      padding: '1.5rem',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px dashed var(--border-color, #2d3748)',
-                      borderRadius: '8px',
-                      textAlign: 'center',
-                      color: 'var(--text-muted, #a0aec0)'
-                    }}>
-                      No API keys generated yet. Use the form above to generate a key for AI agents or automated testers.
-                    </div>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table className="report-steps-table" style={{ width: '100%', fontSize: '0.9rem' }}>
-                        <thead>
-                          <tr>
-                            <th>Key Name</th>
-                            <th>Role</th>
-                            <th>Attributed User</th>
-                            <th>Prefix</th>
-                            <th>Created</th>
-                            <th>Last Used</th>
-                            <th>Status</th>
-                            <th style={{ textAlign: 'right' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {apiKeys.map(k => (
-                            <tr key={k.id} style={{ opacity: k.is_active ? 1 : 0.6 }}>
-                              <td style={{ fontWeight: 600 }}>{k.name}</td>
-                              <td>
-                                <span
-                                  style={{
-                                    display: 'inline-block',
-                                    padding: '0.15rem 0.5rem',
-                                    borderRadius: '10px',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 600,
-                                    textTransform: 'uppercase',
-                                    background:
-                                      k.role === 'admin'
-                                        ? 'rgba(237, 137, 54, 0.2)'
-                                        : k.role === 'developer'
-                                        ? 'rgba(159, 122, 234, 0.2)'
-                                        : 'rgba(49, 130, 206, 0.2)',
-                                    color:
-                                      k.role === 'admin'
-                                        ? '#f6ad55'
-                                        : k.role === 'developer'
-                                        ? '#d6bcfa'
-                                        : '#63b3ed',
-                                    border: `1px solid ${
-                                      k.role === 'admin'
-                                        ? 'rgba(237, 137, 54, 0.4)'
-                                        : k.role === 'developer'
-                                        ? 'rgba(159, 122, 234, 0.4)'
-                                        : 'rgba(49, 130, 206, 0.4)'
-                                    }`
-                                  }}
-                                >
-                                  {k.role}
-                                </span>
-                              </td>
-                              <td>
-                                <span style={{ color: '#90cdf4', fontWeight: 500 }}>
-                                  👤 {k.username || `User #${k.user_id}`}
-                                </span>
-                              </td>
-                              <td>
-                                <code style={{ background: 'rgba(0,0,0,0.3)', padding: '0.2rem 0.4rem', borderRadius: '4px', fontSize: '0.82rem' }}>
-                                  {k.key_prefix}
-                                </code>
-                              </td>
-                              <td style={{ fontSize: '0.82rem', color: 'var(--text-muted, #a0aec0)' }}>
-                                {k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}
-                              </td>
-                              <td style={{ fontSize: '0.82rem', color: 'var(--text-muted, #a0aec0)' }}>
-                                {k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : 'Never'}
-                              </td>
-                              <td>
-                                <span
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.3rem',
-                                    fontSize: '0.8rem',
-                                    fontWeight: 600,
-                                    color: k.is_active ? '#48bb78' : '#a0aec0'
-                                  }}
-                                >
-                                  <span style={{ fontSize: '0.6rem' }}>●</span>
-                                  {k.is_active ? 'Active' : 'Inactive'}
-                                </span>
-                              </td>
-                              <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
-                                  <button
-                                    type="button"
-                                    className="btn-secondary"
-                                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.8rem' }}
-                                    title={k.is_active ? 'Deactivate key' : 'Activate key'}
-                                    onClick={() => handleToggleApiKey(k.id)}
-                                  >
-                                    {k.is_active ? 'Disable' : 'Enable'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn-danger"
-                                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.8rem' }}
-                                    title="Revoke and permanently delete key"
-                                    onClick={() => handleDeleteApiKey(k.id, k.name)}
-                                  >
-                                    Revoke
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleSaveUserAssignments}
+                  disabled={savingUserAssignments || editUserAppIds.length === 0}
+                >
+                  {savingUserAssignments ? 'Saving...' : 'Save Assignments'}
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Suspend / Resume Application Modal */}
+      {suspendAppTarget && (
+        <div className="modal-overlay" onClick={() => setSuspendAppTarget(null)}>
+          <div className="modal" style={{ maxWidth: '480px', width: '90%' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>{suspendAppTarget.is_suspended ? '▶️' : '⏸️'}</span>
+                {suspendAppTarget.is_suspended ? 'Resume Application' : 'Suspend Application'}
+              </h3>
+              <button className="modal-close" onClick={() => setSuspendAppTarget(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
+              <p style={{ margin: 0, lineHeight: 1.5 }}>
+                {suspendAppTarget.is_suspended ? (
+                  <>
+                    Are you sure you want to resume <strong>{suspendAppTarget.name}</strong>? Non-admin users assigned to this application will immediately be able to log in and perform tests normally.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to suspend <strong>{suspendAppTarget.name}</strong>?
+                    <br /><br />
+                    <span style={{ color: '#fbbf24' }}>
+                      ⚠️ <strong>Impact:</strong> Non-admin testers and developers will be <strong>blocked from logging into this application</strong>. It will remain visible in the left pane (with a [PAUSED] badge) and in global reporting for admins.
+                    </span>
+                  </>
+                )}
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setSuspendAppTarget(null)}
+                  disabled={suspendingApp}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={suspendAppTarget.is_suspended ? 'btn' : 'btn-danger'}
+                  onClick={() => handleToggleSuspend(suspendAppTarget)}
+                  disabled={suspendingApp}
+                >
+                  {suspendingApp ? 'Processing...' : (suspendAppTarget.is_suspended ? 'Resume Application' : 'Confirm Suspend')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archive Application (Soft Delete) Double-Check Modal */}
+      {archiveAppTarget && (
+        <div className="modal-overlay" onClick={() => { setArchiveAppTarget(null); setArchiveConfirmText(''); }}>
+          <div className="modal modal-danger" style={{ maxWidth: '520px', width: '90%' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>⚠️</span> Double-Check: Archive Application
+              </h3>
+              <button className="modal-close" onClick={() => { setArchiveAppTarget(null); setArchiveConfirmText(''); }}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
+              <div style={{ background: 'rgba(229, 62, 62, 0.12)', borderLeft: '4px solid #e53e3e', padding: '0.85rem 1rem', borderRadius: '4px' }}>
+                <strong style={{ color: '#feb2b2' }}>Major Application Archive Confirmation</strong>
+                <p style={{ margin: '0.4rem 0 0 0', fontSize: '0.88rem', lineHeight: '1.4' }}>
+                  Archiving <strong>{archiveAppTarget.name}</strong> will remove it from the active left pane, logon selectors, and active reports.
+                  <br /><br />
+                  <strong>Database Safety Guarantee:</strong> No database records (tests, execution history, points, versions, or user accounts) will be deleted. You can restore this application at any time from <em>Archive Settings</em>.
+                </p>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.88rem', marginBottom: '0.4rem' }}>
+                  To confirm archival, please type the exact application name <strong>{archiveAppTarget.name}</strong> below:
+                </label>
+                <input
+                  type="text"
+                  className="user-input"
+                  style={{ width: '100%' }}
+                  placeholder={archiveAppTarget.name}
+                  value={archiveConfirmText}
+                  onChange={e => setArchiveConfirmText(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setArchiveAppTarget(null); setArchiveConfirmText(''); }}
+                  disabled={archivingApp}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={handleConfirmArchiveApp}
+                  disabled={archivingApp || archiveConfirmText.trim() !== archiveAppTarget.name}
+                >
+                  {archivingApp ? 'Archiving...' : 'Confirm Archival (Soft Delete)'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

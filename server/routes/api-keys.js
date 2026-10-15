@@ -5,18 +5,31 @@ const bcrypt = require('bcryptjs');
 const { testsDb, usersDb } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
-// List all API keys (Admin only)
+// List API keys (Admin only, optionally filtered by appId)
 router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const keys = await testsDb.prepare(`
+    const filterAppId = req.query.appId && req.query.appId !== 'all' ? parseInt(req.query.appId, 10) : null;
+
+    let sql = `
       SELECT ak.id, ak.name, ak.key_prefix, ak.role, ak.is_active,
              ak.created_at, ak.last_used_at, ak.user_id,
+             COALESCE(ak.app_id, 1) as app_id,
+             COALESCE(a.name, 'TopStor') as app_name,
              u.username, u.is_suspended
       FROM api_keys ak
       JOIN users u ON ak.user_id = u.id
-      ORDER BY ak.created_at DESC
-    `).all();
+      LEFT JOIN apps a ON ak.app_id = a.id
+    `;
+    const args = [];
 
+    if (filterAppId) {
+      sql += ' WHERE ak.app_id = ? ';
+      args.push(filterAppId);
+    }
+
+    sql += ' ORDER BY ak.created_at DESC';
+
+    const keys = await testsDb.prepare(sql).all(...args);
     res.json(keys);
   } catch (error) {
     console.error('List API keys error:', error);
@@ -24,13 +37,24 @@ router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Generate a new API key (Admin only)
+// Generate a new API key scoped to a specific application (Admin only)
+// If creating an AI / bot user, that user is created for and assigned to this application ONLY
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { name, role = 'tester', userId, userName } = req.body;
+    const { name, role = 'tester', userId, userName, appId } = req.body;
 
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Key name / description is required' });
+    }
+
+    // Determine target app for this key
+    const targetAppId = parseInt(appId || req.headers['x-app-id'], 10) || 1;
+    const targetApp = await testsDb.prepare(
+      'SELECT id, name, is_deleted, is_suspended FROM apps WHERE id = ?'
+    ).get(targetAppId);
+
+    if (!targetApp || targetApp.is_deleted) {
+      return res.status(400).json({ error: 'Selected application does not exist or has been archived' });
     }
 
     const validRoles = ['tester', 'developer', 'admin'];
@@ -45,6 +69,9 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
         return res.status(404).json({ error: 'Specified user ID not found' });
       }
       targetUsername = existingUser.username;
+
+      // Ensure existing user is mapped to this app
+      await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(targetUserId, targetAppId);
     } else {
       // Determine the user name to link or create
       const finalUsername = (targetUsername || String(name).trim()).replace(/\s+/g, '_');
@@ -57,8 +84,11 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       if (existingUser) {
         targetUserId = existingUser.id;
         targetUsername = existingUser.username;
+
+        // Ensure user is mapped to this app
+        await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(targetUserId, targetAppId);
       } else {
-        // Create a new user for this key
+        // Create a new AI / bot user for this key assigned to THIS APP ONLY
         const randomPassword = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await bcrypt.hash(randomPassword, 10);
         const isAdmin = chosenRole === 'admin' ? 1 : 0;
@@ -72,15 +102,22 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
         targetUserId = newUserResult.lastInsertRowid;
         targetUsername = finalUsername;
 
-        // If tester role, assign all active tests so the key can immediately be used for test execution
+        // Assign user exclusively to this application
+        await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(targetUserId, targetAppId);
+
+        // If tester role, assign all active non-deleted tests of THIS APP ONLY
         if (chosenRole === 'tester') {
           try {
-            const activeTests = await testsDb.prepare('SELECT id FROM tests WHERE COALESCE(is_deleted, 0) = 0').all();
-            for (const t of activeTests) {
+            const activeAppTests = await testsDb.prepare(`
+              SELECT id FROM tests
+              WHERE (app_id = ? OR app_id IS NULL) AND COALESCE(is_deleted, 0) = 0
+            `).all(targetAppId);
+
+            for (const t of activeAppTests) {
               await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(t.id, targetUserId);
             }
           } catch (assignErr) {
-            console.warn('Non-fatal: failed to auto-assign tests to new API key user:', assignErr.message);
+            console.warn('Non-fatal: failed to auto-assign app tests to new API key user:', assignErr.message);
           }
         }
       }
@@ -94,9 +131,9 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     const keyHash = crypto.createHash('sha256').update(rawApiKey).digest('hex');
 
     const result = await testsDb.prepare(`
-      INSERT INTO api_keys (name, key_hash, key_prefix, user_id, role, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(String(name).trim(), keyHash, keyPrefix, targetUserId, chosenRole);
+      INSERT INTO api_keys (name, key_hash, key_prefix, user_id, role, is_active, app_id)
+      VALUES (?, ?, ?, ?, ?, 1, ?)
+    `).run(String(name).trim(), keyHash, keyPrefix, targetUserId, chosenRole, targetAppId);
 
     res.status(201).json({
       message: 'API key created successfully. Please copy it now as it will not be displayed again.',
@@ -108,6 +145,8 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
         role: chosenRole,
         user_id: targetUserId,
         username: targetUsername,
+        app_id: targetAppId,
+        app_name: targetApp.name,
         is_active: 1,
         created_at: new Date().toISOString()
       }
@@ -180,7 +219,8 @@ router.get('/me', authenticateToken, async (req, res) => {
         userGroups: req.user.userGroups || [],
         role: req.user.role || (req.user.isAdmin ? 'admin' : 'tester'),
         isApiKey: !!req.user.isApiKey,
-        apiKeyName: req.user.apiKeyName || null
+        apiKeyName: req.user.apiKeyName || null,
+        appId: req.user.appId || 1
       }
     });
   } catch (error) {
