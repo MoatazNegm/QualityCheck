@@ -42,7 +42,7 @@ async function getAssignedTestsOrdered(userId, appId = 1) {
       LEFT JOIN apps a ON t.app_id = a.id
       WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
         AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
-        AND (a.is_archived IS NULL OR a.is_archived = 0)
+        AND (a.is_deleted IS NULL OR a.is_deleted = 0)
       ORDER BY COALESCE(t.app_id, 1), t.id
     `).all(userId, userId);
   }
@@ -316,7 +316,7 @@ router.get('/', authenticateToken, async (req, res) => {
             FROM tests t
             LEFT JOIN apps a ON t.app_id = a.id
             WHERE COALESCE(t.is_deleted, 0) = 0
-              AND (a.is_archived IS NULL OR a.is_archived = 0)
+              AND (a.is_deleted IS NULL OR a.is_deleted = 0)
             ORDER BY COALESCE(t.app_id, 1), t.id
           `).all();
         } else {
@@ -326,7 +326,7 @@ router.get('/', authenticateToken, async (req, res) => {
             LEFT JOIN apps a ON t.app_id = a.id
             WHERE COALESCE(t.is_deleted, 0) = 0
               AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
-              AND (a.is_archived IS NULL OR a.is_archived = 0)
+              AND (a.is_deleted IS NULL OR a.is_deleted = 0)
             ORDER BY COALESCE(t.app_id, 1), t.id
           `).all(req.user.userId);
         }
