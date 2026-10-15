@@ -6,19 +6,14 @@ const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const { saveUploadedFile } = require('../utils/fileStorage');
-
-function getAppId(req) {
-  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId) || 1;
-  const num = parseInt(raw, 10);
-  return isNaN(num) ? 1 : num;
-}
+const { getAppId, canUserAccessApp, getUserAssignedApps } = require('../utils/appContext');
 
 async function getAssignedTestsOrdered(userId, appId = 1) {
   const cleanAppId = parseInt(appId, 10) || 1;
   return await testsDb.prepare(`
     SELECT t.* FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
-    WHERE ta.user_id = ? AND (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
+    WHERE ta.user_id = ? AND t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
     ORDER BY t.id
   `).all(userId, cleanAppId);
 }
@@ -254,7 +249,13 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
 
     // The app, version, and round this submission belongs to
     const testRow = await testsDb.prepare('SELECT app_id FROM tests WHERE id = ?').get(testId);
-    const appId = testRow ? (testRow.app_id || 1) : 1;
+    if (!testRow) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    const appId = testRow.app_id || 1;
+    if (!canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
 
     const currentVersion = await testsDb.prepare('SELECT id FROM versions WHERE is_current = 1 AND app_id = ? LIMIT 1').get(appId);
     const currentVersionId = currentVersion ? currentVersion.id : null;

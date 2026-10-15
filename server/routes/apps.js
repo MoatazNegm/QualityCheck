@@ -1,23 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const { testsDb, usersDb, cache } = require('../db/db');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireGlobalAdmin } = require('../middleware/auth');
+const { isGlobalAdminUser, canUserAccessApp, getUserAssignedApps } = require('../utils/appContext');
 
-// Helper to determine if user has admin privileges
-function isAdminUser(user) {
-  if (!user) return false;
-  if (user.isAdmin) return true;
-  const groups = user.userGroups || [];
-  return groups.includes('admins');
-}
-
-// List active apps: admins see all non-deleted apps, non-admins see non-deleted apps assigned to them
+// List active apps: global root admins see all apps, scoped users/admins only see their assigned apps
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const isAdmin = isAdminUser(req.user);
+    const isGlobal = isGlobalAdminUser(req.user);
     const includeArchived = req.query.includeArchived === 'true' || req.query.archived === 'true';
 
-    if (isAdmin) {
+    if (isGlobal) {
       const sql = includeArchived
         ? `SELECT id, name, description, created_at,
                   COALESCE(is_suspended, 0) as is_suspended,
@@ -35,7 +28,22 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json(apps);
     }
 
-    const userId = req.user.userId;
+    // API Key user: strictly locked to its own app_id
+    if (req.user.isApiKey) {
+      const keyAppId = req.user.appId || 1;
+      const apps = await testsDb.prepare(`
+        SELECT id, name, description, created_at,
+               COALESCE(is_suspended, 0) as is_suspended,
+               COALESCE(is_deleted, 0) as is_deleted,
+               suspended_at, deleted_at
+        FROM apps
+        WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+      `).all(keyAppId);
+      return res.json(apps);
+    }
+
+    // App-scoped user (admin, tester, developer): only see apps explicitly assigned to them
+    const userId = req.user.userId || req.user.id;
     const apps = await testsDb.prepare(`
       SELECT a.id, a.name, a.description, a.created_at,
              COALESCE(a.is_suspended, 0) as is_suspended,
@@ -47,17 +55,6 @@ router.get('/', authenticateToken, async (req, res) => {
       ORDER BY a.id
     `).all(userId);
 
-    if (apps.length === 0) {
-      const defaultApp = await testsDb.prepare(`
-        SELECT id, name, description, created_at,
-               COALESCE(is_suspended, 0) as is_suspended,
-               COALESCE(is_deleted, 0) as is_deleted,
-               suspended_at, deleted_at
-        FROM apps WHERE id = 1 AND COALESCE(is_deleted, 0) = 0
-      `).get();
-      if (defaultApp) apps.push(defaultApp);
-    }
-
     res.json(apps);
   } catch (error) {
     console.error('Get apps error:', error);
@@ -65,8 +62,8 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// List archived/deleted apps (Admin only - for Archive Settings)
-router.get('/archived', authenticateToken, requireAdmin, async (req, res) => {
+// List archived/deleted apps (Global Admin only - for Archive Settings)
+router.get('/archived', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const archivedApps = await testsDb.prepare(`
       SELECT id, name, description, created_at, deleted_at,
@@ -88,6 +85,10 @@ router.get('/archived', authenticateToken, requireAdmin, async (req, res) => {
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!canUserAccessApp(req.user, id)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
+
     const app = await testsDb.prepare(`
       SELECT id, name, description, created_at,
              COALESCE(is_suspended, 0) as is_suspended,
@@ -109,6 +110,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
 router.get('/:id/stats', authenticateToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!canUserAccessApp(req.user, id)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
+
     const app = await testsDb.prepare(`
       SELECT id, name, description, created_at,
              COALESCE(is_suspended, 0) as is_suspended,
@@ -157,8 +162,8 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// Create a new App (admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) => {
+// Create a new App (Global Admin only)
+router.post('/', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const { name, description } = req.body;
     if (!name || !String(name).trim()) {
@@ -199,8 +204,8 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Update an App (admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+// Update an App (Global Admin only)
+router.put('/:id', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const { name, description } = req.body;
@@ -242,9 +247,9 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Suspend or Unsuspend an App (admin only)
+// Suspend or Unsuspend an App (Global Admin only)
 // Suspended apps appear in the left pane and in global reports, but users cannot logon to use them
-router.patch('/:id/suspend', authenticateToken, requireAdmin, async (req, res) => {
+router.patch('/:id/suspend', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const app = await testsDb.prepare('SELECT id, name, is_suspended FROM apps WHERE id = ?').get(id);
@@ -285,9 +290,9 @@ router.patch('/:id/suspend', authenticateToken, requireAdmin, async (req, res) =
   }
 });
 
-// Soft-Delete (Archive) an App (admin only)
+// Soft-Delete (Archive) an App (Global Admin only)
 // Preserves all database rows (tests, submissions, points, users) but excludes app from active logon/sidebar and normal reports
-router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.delete('/:id', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
 
@@ -322,8 +327,8 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Restore an Archived App (admin only)
-router.patch('/:id/restore', authenticateToken, requireAdmin, async (req, res) => {
+// Restore an Archived App (Global Admin only)
+router.patch('/:id/restore', authenticateToken, requireGlobalAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const app = await testsDb.prepare('SELECT id, name, is_deleted FROM apps WHERE id = ?').get(id);

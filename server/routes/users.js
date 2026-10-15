@@ -4,12 +4,16 @@ const bcrypt = require('bcryptjs');
 const { usersDb, testsDb, getRound } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { dataDir } = require('../utils/dataDir');
+const { isGlobalAdminUser, getUserAssignedApps } = require('../utils/appContext');
 const fs = require('fs');
 const path = require('path');
 
 // Get all users (admin or developer only)
 router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const isGlobal = isGlobalAdminUser(req.user);
+    const callerApps = getUserAssignedApps(req.user);
+
     const users = await usersDb.prepare(
       'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
     ).all();
@@ -18,7 +22,7 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
     let keysByUser = {};
     try {
       const allKeys = await testsDb.prepare(
-        'SELECT id, name, key_prefix, role, is_active, user_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC'
+        'SELECT id, name, key_prefix, role, is_active, user_id, COALESCE(app_id, 1) as app_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC'
       ).all();
       for (const k of allKeys) {
         if (!keysByUser[k.user_id]) keysByUser[k.user_id] = [];
@@ -63,14 +67,33 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
       console.warn('Non-fatal: could not query assignments by app:', testErr.message);
     }
 
-    const formatted = users.map(u => ({
-      ...u,
-      user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers'])),
-      api_keys: keysByUser[u.id] || [],
-      assigned_apps: (appsByUser[u.id] || []).map(a => a.id),
-      assigned_app_objects: appsByUser[u.id] || [],
-      assigned_tests_by_app: testsByUserAndApp[u.id] || {}
-    }));
+    let filteredUsers = users;
+    if (!isGlobal) {
+      filteredUsers = users.filter(u => {
+        // Root admin is not shown to app-scoped admins unless assigned to that app
+        const uApps = (appsByUser[u.id] || []).map(a => a.id);
+        return uApps.some(aid => callerApps.includes(aid));
+      });
+    }
+
+    const formatted = filteredUsers.map(u => {
+      const allowedAppObjs = (appsByUser[u.id] || []).filter(a => isGlobal || callerApps.includes(a.id));
+      const allowedAppIds = allowedAppObjs.map(a => a.id);
+      const allowedTestsByApp = {};
+      for (const aid of allowedAppIds) {
+        if (testsByUserAndApp[u.id]?.[aid]) {
+          allowedTestsByApp[aid] = testsByUserAndApp[u.id][aid];
+        }
+      }
+      return {
+        ...u,
+        user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers'])),
+        api_keys: (keysByUser[u.id] || []).filter(k => isGlobal || callerApps.includes(k.app_id || 1)),
+        assigned_apps: allowedAppIds,
+        assigned_app_objects: allowedAppObjs,
+        assigned_tests_by_app: allowedTestsByApp
+      };
+    });
     
     res.json(formatted);
   } catch (error) {
@@ -421,13 +444,24 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
 router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const isGlobal = isGlobalAdminUser(req.user);
+    const callerApps = getUserAssignedApps(req.user);
+
+    if (!isGlobal) {
+      const targetUserApps = (await testsDb.prepare('SELECT app_id FROM user_apps WHERE user_id = ?').all(id)).map(r => r.app_id);
+      if (targetUserApps.length > 0 && !targetUserApps.some(aid => callerApps.includes(aid))) {
+        return res.status(403).json({ error: 'You do not have permission to manage this user' });
+      }
+    }
+
     const { is_admin, user_groups, appIds, testAssignmentsByApp } = req.body;
     
     let groups = user_groups;
     if (!groups || !Array.isArray(groups)) {
       groups = is_admin ? ['admins'] : ['testers'];
     }
-    const isAdminCalc = groups.includes('admins') || (is_admin ? 1 : 0);
+    // Only global system admin can grant is_admin = 1. App-scoped users are never global admins.
+    const isAdminCalc = isGlobal && (groups.includes('admins') || (is_admin ? 1 : 0));
     const groupsJson = JSON.stringify(groups);
     
     await usersDb.prepare(
@@ -436,7 +470,10 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
 
     // If appIds provided, update user_apps and test assignments
     if (Array.isArray(appIds)) {
-      const targetAppIds = appIds.map(a => typeof a === 'object' && a !== null ? parseInt(a.id, 10) : parseInt(a, 10)).filter(n => !isNaN(n));
+      let targetAppIds = appIds.map(a => typeof a === 'object' && a !== null ? parseInt(a.id, 10) : parseInt(a, 10)).filter(n => !isNaN(n));
+      if (!isGlobal) {
+        targetAppIds = targetAppIds.filter(aid => callerApps.includes(aid));
+      }
       if (targetAppIds.length > 0) {
         const placeholders = targetAppIds.map(() => '?').join(',');
         await testsDb.prepare(`DELETE FROM user_apps WHERE user_id = ? AND app_id NOT IN (${placeholders})`).run(id, ...targetAppIds);

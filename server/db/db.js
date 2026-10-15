@@ -732,10 +732,83 @@ async function runMigrations() {
         FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
       )`
     });
-    // Assign existing users to app 1
-    await clientWrapper.execute({
-      sql: 'INSERT OR IGNORE INTO user_apps (user_id, app_id) SELECT id, 1 FROM users'
-    });
+    // Legacy migration: ONLY if user_apps was completely empty, assign admin (user 1) to app 1
+    const existingUserApps = (await clientWrapper.execute({ sql: 'SELECT COUNT(*) as count FROM user_apps' })).rows[0];
+    const uCount = existingUserApps ? Number(existingUserApps.count || existingUserApps.COUNT || 0) : 0;
+    if (uCount === 0) {
+      await clientWrapper.execute({
+        sql: 'INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (1, 1)'
+      });
+    }
+
+    // Data isolation migration: ensure NexusERP tests (48..52) and ERP users are properly isolated
+    try {
+      const erpAppRow = (await clientWrapper.execute({ sql: "SELECT id FROM apps WHERE LOWER(name) LIKE '%erp%' LIMIT 1" })).rows[0];
+      const erpAppId = erpAppRow ? Number(erpAppRow.id) : 10;
+
+      // Update tests 44..52 (S01..S09) to erpAppId
+      await clientWrapper.execute({
+        sql: `UPDATE tests SET app_id = ? WHERE id IN (44, 45, 46, 47, 48, 49, 50, 51, 52)`,
+        args: [erpAppId]
+      });
+      await clientWrapper.execute({
+        sql: `UPDATE test_results SET app_id = ? WHERE test_id IN (44, 45, 46, 47, 48, 49, 50, 51, 52)`,
+        args: [erpAppId]
+      });
+      await clientWrapper.execute({
+        sql: `UPDATE test_submissions SET app_id = ? WHERE test_id IN (44, 45, 46, 47, 48, 49, 50, 51, 52)`,
+        args: [erpAppId]
+      });
+
+      // Find ERP users (30, 31, 32 or username containing ERP)
+      const erpUsers = (await clientWrapper.execute({
+        sql: "SELECT id FROM users WHERE LOWER(username) LIKE '%erp%' OR id IN (30, 31, 32)"
+      })).rows;
+
+      for (const u of erpUsers) {
+        const uid = Number(u.id);
+        // Remove rogue TopStor assignment
+        await clientWrapper.execute({
+          sql: 'DELETE FROM user_apps WHERE user_id = ? AND app_id = 1',
+          args: [uid]
+        });
+        // Ensure assigned to erpAppId
+        await clientWrapper.execute({
+          sql: 'INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)',
+          args: [uid, erpAppId]
+        });
+        // Ensure not global admin (is_admin = 0)
+        await clientWrapper.execute({
+          sql: 'UPDATE users SET is_admin = 0 WHERE id = ?',
+          args: [uid]
+        });
+        // Update API keys to erpAppId
+        await clientWrapper.execute({
+          sql: 'UPDATE api_keys SET app_id = ? WHERE user_id = ?',
+          args: [erpAppId, uid]
+        });
+        // Remove TopStor test assignments
+        await clientWrapper.execute({
+          sql: `DELETE FROM test_assignments WHERE user_id = ? AND test_id IN (SELECT id FROM tests WHERE app_id = 1)`,
+          args: [uid]
+        });
+        // Assign ERP tests
+        for (const tid of [44, 45, 46, 47, 48, 49, 50, 51, 52]) {
+          await clientWrapper.execute({
+            sql: 'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)',
+            args: [tid, uid]
+          });
+        }
+      }
+      // Remove tests 44..52 from users not in erpAppId
+      await clientWrapper.execute({
+        sql: `DELETE FROM test_assignments WHERE test_id IN (44, 45, 46, 47, 48, 49, 50, 51, 52) AND user_id NOT IN (SELECT user_id FROM user_apps WHERE app_id = ?)`,
+        args: [erpAppId]
+      });
+      console.log('[Database] NexusERP tests and user isolation migration verified successfully');
+    } catch (migErr) {
+      console.warn('[Database] Isolation data migration notice:', migErr.message);
+    }
 
     // 3. Ensure app_id column exists on tests
     const testsColumns = (await clientWrapper.execute({ sql: 'PRAGMA table_info(tests)' })).rows;

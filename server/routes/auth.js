@@ -72,7 +72,7 @@ router.get('/user-apps', async (req, res) => {
     } catch {
       groups = [];
     }
-    const isAdmin = Boolean(user.is_admin || groups.includes('admins'));
+    const isGlobal = (user.username.toLowerCase() === 'admin' || user.id === 1);
 
     const allApps = await testsDb.prepare(`
       SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
@@ -81,10 +81,11 @@ router.get('/user-apps', async (req, res) => {
       ORDER BY id
     `).all();
 
-    if (isAdmin) {
+    if (isGlobal) {
       return res.json({
         exists: true,
         isAdmin: true,
+        isGlobalAdmin: true,
         apps: allApps
       });
     }
@@ -99,7 +100,8 @@ router.get('/user-apps', async (req, res) => {
 
     return res.json({
       exists: true,
-      isAdmin: false,
+      isAdmin: Boolean(user.is_admin || groups.includes('admins')),
+      isGlobalAdmin: false,
       apps: userApps
     });
   } catch (error) {
@@ -133,6 +135,7 @@ router.post('/login', async (req, res) => {
       const keyHash = crypto.createHash('sha256').update(candidateApiKey).digest('hex');
       const keyRow = await testsDb.prepare(`
         SELECT ak.id as key_id, ak.name as key_name, ak.role as key_role, ak.is_active,
+               COALESCE(ak.app_id, 1) as app_id,
                u.id as user_id, u.username, u.is_admin, u.is_suspended, u.user_groups
         FROM api_keys ak
         JOIN users u ON ak.user_id = u.id
@@ -172,42 +175,21 @@ router.post('/login', async (req, res) => {
         groups = keyRow.is_admin ? ['admins'] : ['testers'];
       }
 
-      const isAdmin = !!keyRow.is_admin || role === 'admin';
-      const allApps = await testsDb.prepare(`
-        SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
-        FROM apps
-        WHERE COALESCE(is_deleted, 0) = 0
-        ORDER BY id
-      `).all();
-
-      let userApps = isAdmin ? allApps : await testsDb.prepare(`
+      const isAdmin = role === 'admin';
+      const keyAppId = keyRow.app_id || 1;
+      const userApps = await testsDb.prepare(`
         SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
         FROM apps a
-        JOIN user_apps ua ON a.id = ua.app_id
-        WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
-        ORDER BY a.id
-      `).all(keyRow.user_id);
+        WHERE a.id = ? AND COALESCE(a.is_deleted, 0) = 0
+      `).all(keyAppId);
 
-      if (!isAdmin && userApps.length === 0) {
-        const defaultApp = await testsDb.prepare('SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended FROM apps WHERE id = 1 AND COALESCE(is_deleted, 0) = 0').get();
-        if (defaultApp) userApps = [defaultApp];
-      }
-
-      const reqSelectedApp = (req.body && req.body.selectedApp !== undefined && req.body.selectedApp !== '') ? req.body.selectedApp : (req.body && req.body.appId !== undefined ? req.body.appId : undefined);
-      const resolvedSelectedApp = reqSelectedApp !== undefined ? reqSelectedApp : (isAdmin ? 'admin' : (userApps[0]?.id || 1));
-
-      if (resolvedSelectedApp !== 'admin') {
-        const targetAppId = parseInt(resolvedSelectedApp, 10);
-        if (!isNaN(targetAppId)) {
-          const targetApp = await testsDb.prepare('SELECT id, name, is_suspended, is_deleted FROM apps WHERE id = ?').get(targetAppId);
-          if (targetApp) {
-            if (targetApp.is_deleted) {
-              return res.status(403).json({ error: 'The selected application is archived or does not exist.' });
-            }
-            if (targetApp.is_suspended && !isAdmin) {
-              return res.status(403).json({ error: `Application "${targetApp.name}" is currently suspended. Access is restricted to administrators.` });
-            }
-          }
+      const targetApp = await testsDb.prepare('SELECT id, name, is_suspended, is_deleted FROM apps WHERE id = ?').get(keyAppId);
+      if (targetApp) {
+        if (targetApp.is_deleted) {
+          return res.status(403).json({ error: 'The application for this key is archived or does not exist.' });
+        }
+        if (targetApp.is_suspended && !isAdmin) {
+          return res.status(403).json({ error: `Application "${targetApp.name}" is currently suspended. Access is restricted to administrators.` });
         }
       }
 
@@ -216,11 +198,14 @@ router.post('/login', async (req, res) => {
           userId: keyRow.user_id,
           username: keyRow.username,
           isAdmin: isAdmin,
+          isGlobalAdmin: false,
           isSuspended: !!keyRow.is_suspended,
           userGroups: groups,
           apiKeyId: keyRow.key_id,
           role: role,
-          isApiKey: true
+          isApiKey: true,
+          appId: keyAppId,
+          assignedApps: [keyAppId]
         },
         JWT_SECRET,
         { expiresIn: TOKEN_EXPIRATION }
@@ -256,13 +241,16 @@ router.post('/login', async (req, res) => {
           id: keyRow.user_id,
           username: keyRow.username,
           isAdmin: isAdmin,
+          isGlobalAdmin: false,
           isSuspended: !!keyRow.is_suspended,
           userGroups: groups,
           isApiKey: true,
-          apiKeyId: keyRow.key_id
+          apiKeyId: keyRow.key_id,
+          appId: keyAppId,
+          assignedApps: [keyAppId]
         },
         assignedApps: userApps,
-        selectedApp: resolvedSelectedApp
+        selectedApp: keyAppId
       });
     }
 
@@ -351,7 +339,9 @@ router.post('/login', async (req, res) => {
     res.cookie('token', token, cookieOptions);
     res.cookie('auth_token', token, cookieOptions);
 
-    const isAdmin = !!user.is_admin || groups.includes('admins');
+    const isGlobal = (user.username.toLowerCase() === 'admin' || user.id === 1);
+    const isAdmin = Boolean(user.is_admin || groups.includes('admins'));
+
     const allApps = await testsDb.prepare(`
       SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
       FROM apps
@@ -359,7 +349,7 @@ router.post('/login', async (req, res) => {
       ORDER BY id
     `).all();
 
-    let userApps = isAdmin ? allApps : await testsDb.prepare(`
+    let userApps = isGlobal ? allApps : await testsDb.prepare(`
       SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
       FROM apps a
       JOIN user_apps ua ON a.id = ua.app_id
@@ -367,13 +357,19 @@ router.post('/login', async (req, res) => {
       ORDER BY a.id
     `).all(user.id);
 
-    if (!isAdmin && userApps.length === 0) {
-      const defaultApp = await testsDb.prepare('SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended FROM apps WHERE id = 1 AND COALESCE(is_deleted, 0) = 0').get();
-      if (defaultApp) userApps = [defaultApp];
-    }
-
     const reqSelectedApp = (req.body && req.body.selectedApp !== undefined && req.body.selectedApp !== '') ? req.body.selectedApp : (req.body && req.body.appId !== undefined ? req.body.appId : undefined);
-    const resolvedSelectedApp = reqSelectedApp !== undefined ? reqSelectedApp : (isAdmin ? 'admin' : (userApps[0]?.id || 1));
+    let resolvedSelectedApp;
+    if (isGlobal) {
+      resolvedSelectedApp = reqSelectedApp !== undefined ? reqSelectedApp : 'admin';
+    } else {
+      const allowedIds = userApps.map(a => a.id);
+      const requestedId = parseInt(reqSelectedApp, 10);
+      if (!isNaN(requestedId) && allowedIds.includes(requestedId)) {
+        resolvedSelectedApp = requestedId;
+      } else {
+        resolvedSelectedApp = userApps[0]?.id || 1;
+      }
+    }
 
     if (resolvedSelectedApp !== 'admin') {
       const targetAppId = parseInt(resolvedSelectedApp, 10);
@@ -396,8 +392,10 @@ router.post('/login', async (req, res) => {
         id: user.id,
         username: user.username,
         isAdmin: isAdmin,
+        isGlobalAdmin: isGlobal,
         isSuspended: !!user.is_suspended,
-        userGroups: groups
+        userGroups: groups,
+        assignedApps: userApps.map(a => a.id)
       },
       assignedApps: userApps,
       selectedApp: resolvedSelectedApp
@@ -446,8 +444,10 @@ router.get('/verify', async (req, res) => {
       }
     }
 
+    const isGlobal = (decoded.username?.toLowerCase() === 'admin' || decoded.userId === 1) && !decoded.isApiKey;
     const userGroups = decoded.userGroups || (decoded.isAdmin ? ['admins'] : ['testers']);
     const isAdmin = Boolean(decoded.isAdmin || userGroups.includes('admins'));
+
     const allApps = await testsDb.prepare(`
       SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
       FROM apps
@@ -455,13 +455,24 @@ router.get('/verify', async (req, res) => {
       ORDER BY id
     `).all();
 
-    const userApps = isAdmin ? allApps : await testsDb.prepare(`
-      SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
-      FROM apps a
-      JOIN user_apps ua ON a.id = ua.app_id
-      WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
-      ORDER BY a.id
-    `).all(decoded.userId);
+    let userApps;
+    if (isGlobal) {
+      userApps = allApps;
+    } else if (decoded.isApiKey && decoded.appId) {
+      userApps = await testsDb.prepare(`
+        SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+        FROM apps a
+        WHERE a.id = ? AND COALESCE(a.is_deleted, 0) = 0
+      `).all(decoded.appId);
+    } else {
+      userApps = await testsDb.prepare(`
+        SELECT a.id, a.name, a.description, COALESCE(a.is_suspended, 0) as is_suspended
+        FROM apps a
+        JOIN user_apps ua ON a.id = ua.app_id
+        WHERE ua.user_id = ? AND COALESCE(a.is_deleted, 0) = 0
+        ORDER BY a.id
+      `).all(decoded.userId);
+    }
 
     res.json({
       valid: true,
@@ -469,13 +480,15 @@ router.get('/verify', async (req, res) => {
         ...decoded,
         id: decoded.userId,
         isAdmin: isAdmin,
+        isGlobalAdmin: isGlobal,
         isSuspended: !!decoded.isSuspended,
         isApiKey: !!decoded.isApiKey,
         apiKeyId: decoded.apiKeyId || null,
-        userGroups
+        userGroups,
+        assignedApps: userApps.map(a => a.id)
       },
       assignedApps: userApps,
-      allApps: isAdmin ? allApps : undefined
+      allApps: isGlobal ? allApps : undefined
     });
   } catch (error) {
     res.status(401).json({ error: error.message || 'Invalid token' });

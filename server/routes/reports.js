@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { testsDb, usersDb } = require('../db/db');
 const { authenticateToken, requireAdmin, requireReportAccess } = require('../middleware/auth');
+const { isGlobalAdminUser, getUserAssignedApps, canUserAccessApp } = require('../utils/appContext');
 
 // Get detailed test results for a user
 router.get('/test/:testId/user/:userId', authenticateToken, requireReportAccess, async (req, res) => {
@@ -164,14 +165,37 @@ function getDateRange(preset) {
 }
 
 function parseAppIds(req) {
+  const isGlobal = isGlobalAdminUser(req.user);
+  const userAssigned = getUserAssignedApps(req.user);
   const raw = req.query.appIds || req.query.appId || req.headers['x-app-id'];
-  if (!raw || raw === 'all') return [];
-  return String(raw).split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+
+  if (isGlobal) {
+    if (!raw || raw === 'all') return [];
+    return String(raw).split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+  }
+
+  // App-scoped users
+  if (!raw || raw === 'all') {
+    return userAssigned.length > 0 ? userAssigned : [0];
+  }
+  const requested = String(raw).split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+  const filtered = requested.filter(id => userAssigned.includes(id));
+  return filtered.length > 0 ? filtered : (userAssigned.length > 0 ? userAssigned : [0]);
 }
 
-async function getAppNamesMap() {
+async function getAppNamesMap(req) {
   try {
-    const apps = await testsDb.prepare('SELECT id, name FROM apps WHERE COALESCE(is_deleted, 0) = 0').all();
+    const isGlobal = isGlobalAdminUser(req ? req.user : null);
+    const userAssigned = req ? getUserAssignedApps(req.user) : [];
+
+    let apps;
+    if (isGlobal || !req || !req.user) {
+      apps = await testsDb.prepare('SELECT id, name FROM apps WHERE COALESCE(is_deleted, 0) = 0').all();
+    } else {
+      if (userAssigned.length === 0) return {};
+      const placeholders = userAssigned.map(() => '?').join(',');
+      apps = await testsDb.prepare(`SELECT id, name FROM apps WHERE id IN (${placeholders}) AND COALESCE(is_deleted, 0) = 0`).all(...userAssigned);
+    }
     return Object.fromEntries(apps.map(a => [a.id, a.name]));
   } catch (e) {
     return { 1: 'TopStor' };
@@ -189,7 +213,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate, and endDate are required' });
@@ -523,7 +547,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
       : [];
 
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -770,7 +794,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
       : [];
     const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -919,7 +943,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       : [];
     const stepId = req.query.stepId ? parseInt(req.query.stepId, 10) : null;
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -1194,7 +1218,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     }
 
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -1577,7 +1601,7 @@ router.get('/points-payments', authenticateToken, requireReportAccess, async (re
   try {
     const userIdsRaw = req.query.userId;
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     let userIds = [];
     if (req.reportScope === 'self') {
@@ -1639,7 +1663,7 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
       ? String(versionIdsRaw).split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id))
       : [];
     const appIds = parseAppIds(req);
-    const appNamesMap = await getAppNamesMap();
+    const appNamesMap = await getAppNamesMap(req);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });

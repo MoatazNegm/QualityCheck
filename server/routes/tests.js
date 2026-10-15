@@ -6,6 +6,7 @@ const XLSX = require('xlsx');
 const { testsDb, bumpRound, getRound, cache } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { saveUploadedFile } = require('../utils/fileStorage');
+const { getAppId, canUserAccessApp, isGlobalAdminUser, getUserAssignedApps } = require('../utils/appContext');
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -24,14 +25,6 @@ const uploadStepAttachment = (req, res, next) => {
   });
 };
 
-// Helper to get active app ID from headers, query, or body
-function getAppId(req) {
-  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId);
-  if (raw === 'all') return 'all';
-  const num = parseInt(raw, 10);
-  return isNaN(num) ? 1 : num;
-}
-
 // Ordered list of tests assigned to a user (loop order = test id ascending)
 async function getAssignedTestsOrdered(userId, appId = 1) {
   if (appId === 'all') {
@@ -41,7 +34,7 @@ async function getAssignedTestsOrdered(userId, appId = 1) {
       INNER JOIN test_assignments ta ON ta.test_id = t.id
       LEFT JOIN apps a ON t.app_id = a.id
       WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
-        AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
+        AND t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?)
         AND (a.is_deleted IS NULL OR a.is_deleted = 0)
       ORDER BY COALESCE(t.app_id, 1), t.id
     `).all(userId, userId);
@@ -52,7 +45,7 @@ async function getAssignedTestsOrdered(userId, appId = 1) {
     FROM tests t
     INNER JOIN test_assignments ta ON ta.test_id = t.id
     LEFT JOIN apps a ON t.app_id = a.id
-    WHERE ta.user_id = ? AND (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
+    WHERE ta.user_id = ? AND t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
     ORDER BY t.id
   `).all(userId, cleanAppId);
 }
@@ -304,13 +297,16 @@ async function getTestTotalPoints(testId) {
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const appId = getAppId(req);
+    if (appId !== 'all' && !canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
     const groups = req.user.userGroups || [];
     const isFullAccess = req.user.isAdmin || groups.includes('developers') || groups.includes('admins');
     let tests;
     if (isFullAccess) {
       let allTests;
       if (appId === 'all') {
-        if (req.user.isAdmin) {
+        if (isGlobalAdminUser(req.user)) {
           allTests = await testsDb.prepare(`
             SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
             FROM tests t
@@ -320,22 +316,28 @@ router.get('/', authenticateToken, async (req, res) => {
             ORDER BY COALESCE(t.app_id, 1), t.id
           `).all();
         } else {
-          allTests = await testsDb.prepare(`
-            SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
-            FROM tests t
-            LEFT JOIN apps a ON t.app_id = a.id
-            WHERE COALESCE(t.is_deleted, 0) = 0
-              AND (t.app_id IN (SELECT app_id FROM user_apps WHERE user_id = ?) OR t.app_id IS NULL)
-              AND (a.is_deleted IS NULL OR a.is_deleted = 0)
-            ORDER BY COALESCE(t.app_id, 1), t.id
-          `).all(req.user.userId);
+          const userAssigned = getUserAssignedApps(req.user);
+          if (userAssigned.length === 0) {
+            allTests = [];
+          } else {
+            const placeholders = userAssigned.map(() => '?').join(',');
+            allTests = await testsDb.prepare(`
+              SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+              FROM tests t
+              LEFT JOIN apps a ON t.app_id = a.id
+              WHERE COALESCE(t.is_deleted, 0) = 0
+                AND t.app_id IN (${placeholders})
+                AND (a.is_deleted IS NULL OR a.is_deleted = 0)
+              ORDER BY COALESCE(t.app_id, 1), t.id
+            `).all(...userAssigned);
+          }
         }
       } else {
         allTests = await testsDb.prepare(`
           SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
           FROM tests t
           LEFT JOIN apps a ON t.app_id = a.id
-          WHERE (t.app_id = ? OR t.app_id IS NULL) AND COALESCE(t.is_deleted, 0) = 0
+          WHERE t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
           ORDER BY t.id
         `).all(appId);
       }
@@ -609,6 +611,11 @@ function isHeaderRow(row0, row1) {
 // Import tests from Excel or CSV file (admin or developer)
 router.post('/import', authenticateToken, requireDeveloper, upload.single('file'), async (req, res) => {
   try {
+    const appId = getAppId(req);
+    if (appId === 'all' || !canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have permission to import tests into this application' });
+    }
+
     let fileBuffer = req.file ? req.file.buffer : null;
     if (!fileBuffer && req.body && req.body.fileData) {
       try {
@@ -725,6 +732,14 @@ router.post('/import', authenticateToken, requireDeveloper, upload.single('file'
 // Rename / update test (admin or developer)
 router.put('/:id', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(req.params.id);
+    if (!test) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
+
     const { name, description } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Test name is required' });
@@ -745,12 +760,39 @@ router.put('/:id', authenticateToken, requireDeveloper, async (req, res) => {
 router.get('/assignments/bulk', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const appId = getAppId(req);
-    const rows = await testsDb.prepare(`
-      SELECT ta.test_id, ta.user_id
-      FROM test_assignments ta
-      JOIN tests t ON ta.test_id = t.id
-      WHERE (t.app_id = ? OR t.app_id IS NULL)
-    `).all(appId);
+    let rows;
+    if (appId === 'all') {
+      if (isGlobalAdminUser(req.user)) {
+        rows = await testsDb.prepare(`
+          SELECT ta.test_id, ta.user_id
+          FROM test_assignments ta
+          JOIN tests t ON ta.test_id = t.id
+        `).all();
+      } else {
+        const userAssigned = getUserAssignedApps(req.user);
+        if (userAssigned.length === 0) {
+          rows = [];
+        } else {
+          const placeholders = userAssigned.map(() => '?').join(',');
+          rows = await testsDb.prepare(`
+            SELECT ta.test_id, ta.user_id
+            FROM test_assignments ta
+            JOIN tests t ON ta.test_id = t.id
+            WHERE t.app_id IN (${placeholders})
+          `).all(...userAssigned);
+        }
+      }
+    } else {
+      if (!canUserAccessApp(req.user, appId)) {
+        return res.status(403).json({ error: 'You do not have access to this application' });
+      }
+      rows = await testsDb.prepare(`
+        SELECT ta.test_id, ta.user_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE t.app_id = ?
+      `).all(appId);
+    }
     const grouped = {};
     for (const r of rows) {
       if (!grouped[r.test_id]) grouped[r.test_id] = [];
@@ -837,6 +879,12 @@ router.patch('/:testId/steps/:stepId/points', authenticateToken, requireDevelope
 // Disable test (soft delete so points and history remain intact while hiding from active loops)
 router.delete('/:id', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(req.params.id);
+    if (!test) return res.status(404).json({ error: 'Test not found' });
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
+
     await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
     cache.invalidatePrefix('stepCount:');
     cache.invalidatePrefix('totalPoints:');
@@ -849,6 +897,12 @@ router.delete('/:id', authenticateToken, requireDeveloper, async (req, res) => {
 
 router.post('/:id/disable', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(req.params.id);
+    if (!test) return res.status(404).json({ error: 'Test not found' });
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
+
     await testsDb.prepare('UPDATE tests SET is_deleted = 1 WHERE id = ?').run(req.params.id);
     cache.invalidatePrefix('stepCount:');
     cache.invalidatePrefix('totalPoints:');
@@ -859,41 +913,64 @@ router.post('/:id/disable', authenticateToken, requireDeveloper, async (req, res
   }
 });
 
-// Re-enable test and assign all non-admin users to it by default
+// Re-enable test and assign users of this app to it by default
 router.post('/:id/enable', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const testId = req.params.id;
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(testId);
+    if (!test) return res.status(404).json({ error: 'Test not found' });
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
+
     await testsDb.prepare('UPDATE tests SET is_deleted = 0 WHERE id = ?').run(testId);
 
-    // Assign all non-admin users (testers) to this test by default
-    const nonAdmins = await testsDb.prepare('SELECT id FROM users WHERE is_admin = 0').all();
-    for (const u of nonAdmins) {
-      await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(testId, u.id);
+    // Assign users of this app (testers) to this test by default
+    const appUsers = await testsDb.prepare(`
+      SELECT ua.user_id
+      FROM user_apps ua
+      JOIN users u ON ua.user_id = u.id
+      WHERE ua.app_id = ? AND u.is_admin = 0
+    `).all(test.app_id || 1);
+
+    for (const u of appUsers) {
+      await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(testId, u.user_id);
     }
 
     cache.invalidatePrefix('stepCount:');
     cache.invalidatePrefix('totalPoints:');
-    res.json({ message: 'Test enabled successfully and assigned to all users' });
+    res.json({ message: 'Test enabled successfully and assigned to app users' });
   } catch (error) {
     console.error('Enable test error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Enable all disabled tests and assign all non-admin users to them by default
+// Enable all disabled tests and assign app users to them by default
 router.post('/enable-all', authenticateToken, requireDeveloper, async (req, res) => {
   try {
-    const disabledTests = await testsDb.prepare('SELECT id FROM tests WHERE is_deleted = 1').all();
-    const nonAdmins = await testsDb.prepare('SELECT id FROM users WHERE is_admin = 0').all();
+    const appId = getAppId(req);
+    if (appId === 'all' || !canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
+
+    const disabledTests = await testsDb.prepare('SELECT id FROM tests WHERE is_deleted = 1 AND app_id = ?').all(appId);
+    const appUsers = await testsDb.prepare(`
+      SELECT ua.user_id
+      FROM user_apps ua
+      JOIN users u ON ua.user_id = u.id
+      WHERE ua.app_id = ? AND u.is_admin = 0
+    `).all(appId);
+
     for (const t of disabledTests) {
       await testsDb.prepare('UPDATE tests SET is_deleted = 0 WHERE id = ?').run(t.id);
-      for (const u of nonAdmins) {
-        await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(t.id, u.id);
+      for (const u of appUsers) {
+        await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(t.id, u.user_id);
       }
     }
     cache.invalidatePrefix('stepCount:');
     cache.invalidatePrefix('totalPoints:');
-    res.json({ message: 'All disabled tests enabled and assigned to all users' });
+    res.json({ message: 'All disabled tests for this application enabled successfully' });
   } catch (error) {
     console.error('Enable all tests error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -982,6 +1059,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
     if (!test) {
       return res.status(404).json({ error: 'Test not found' });
     }
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
     
     const steps = await testsDb.prepare(
       `SELECT id, test_id, step_number, description, success_symptom,
@@ -1024,17 +1104,28 @@ router.get('/:testId/round', authenticateToken, async (req, res) => {
 // Create test (admin or developer)
 router.post('/', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const appId = getAppId(req);
+    if (appId === 'all' || !canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have permission to create tests in this application' });
+    }
     const { name, description } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Test name is required' });
     }
     
     const result = await testsDb.prepare(`
-      INSERT INTO tests (name, description)
-      VALUES (?, ?)
-    `).run(String(name).trim(), description || null);
+      INSERT INTO tests (name, description, app_id)
+      VALUES (?, ?, ?)
+    `).run(String(name).trim(), description || null, appId);
     
-    res.status(201).json({ id: result.lastInsertRowid, name: String(name).trim(), description: description || null });
+    const testId = result.lastInsertRowid;
+    // Auto-assign to app users
+    const appUsers = await testsDb.prepare('SELECT user_id FROM user_apps WHERE app_id = ?').all(appId);
+    for (const u of appUsers) {
+      await testsDb.prepare('INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)').run(testId, u.user_id);
+    }
+
+    res.status(201).json({ id: testId, name: String(name).trim(), description: description || null, app_id: appId });
   } catch (error) {
     console.error('Create test error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -1045,15 +1136,18 @@ router.post('/', authenticateToken, requireDeveloper, async (req, res) => {
 router.post('/:id/steps', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { id } = req.params;
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(id);
+    if (!test) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to this test' });
+    }
+
     const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
     
     if (!description || !String(description).trim()) {
       return res.status(400).json({ error: 'Step description is required' });
-    }
-
-    const test = await testsDb.prepare('SELECT id FROM tests WHERE id = ?').get(id);
-    if (!test) {
-      return res.status(404).json({ error: 'Test not found' });
     }
 
     let nextStepNum = step_number;

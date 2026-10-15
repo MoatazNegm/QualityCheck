@@ -2,20 +2,19 @@ const express = require('express');
 const router = express.Router();
 const { testsDb, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-
-function getAppId(req) {
-  const raw = req.headers['x-app-id'] || req.query.appId || (req.body && req.body.appId);
-  if (raw === 'all') return 'all';
-  const num = parseInt(raw, 10);
-  return isNaN(num) ? 1 : num;
-}
+const { getAppId, canUserAccessApp, isGlobalAdminUser, getUserAssignedApps } = require('../utils/appContext');
 
 // Returns the currently active version for an app (the one users should run tests for).
 // Returns { version: <row> | null }.
 router.get('/current', authenticateToken, async (req, res) => {
   try {
     const appId = getAppId(req);
-    const cleanAppId = appId === 'all' ? 1 : appId;
+    const cleanAppId = appId === 'all' ? (getUserAssignedApps(req.user)[0] || 1) : appId;
+
+    if (!canUserAccessApp(req.user, cleanAppId)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
+
     let version = null;
     const cacheKey = `currentVersionId:${cleanAppId}`;
     const cachedId = cache.get(cacheKey);
@@ -44,9 +43,22 @@ router.get('/', authenticateToken, async (req, res) => {
     const appId = getAppId(req);
     let versions;
     if (appId === 'all') {
-      versions = await testsDb.prepare('SELECT * FROM versions ORDER BY created_at DESC, id DESC').all();
+      if (isGlobalAdminUser(req.user)) {
+        versions = await testsDb.prepare('SELECT * FROM versions ORDER BY created_at DESC, id DESC').all();
+      } else {
+        const userAssigned = getUserAssignedApps(req.user);
+        if (userAssigned.length === 0) {
+          versions = [];
+        } else {
+          const placeholders = userAssigned.map(() => '?').join(',');
+          versions = await testsDb.prepare(`SELECT * FROM versions WHERE app_id IN (${placeholders}) ORDER BY created_at DESC, id DESC`).all(...userAssigned);
+        }
+      }
     } else {
-      versions = await testsDb.prepare('SELECT * FROM versions WHERE (app_id = ? OR app_id IS NULL) ORDER BY created_at DESC, id DESC').all(appId);
+      if (!canUserAccessApp(req.user, appId)) {
+        return res.status(403).json({ error: 'You do not have access to this application' });
+      }
+      versions = await testsDb.prepare('SELECT * FROM versions WHERE app_id = ? ORDER BY created_at DESC, id DESC').all(appId);
     }
     res.json(versions);
   } catch (error) {
@@ -60,6 +72,10 @@ router.get('/', authenticateToken, async (req, res) => {
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const appId = getAppId(req);
+    if (appId === 'all' || !canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have permission to create versions for this application' });
+    }
+
     const { name, note } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Version name is required' });
@@ -90,6 +106,10 @@ router.post('/:id/set-current', authenticateToken, requireAdmin, async (req, res
     }
 
     const appId = version.app_id || 1;
+    if (!canUserAccessApp(req.user, appId)) {
+      return res.status(403).json({ error: 'You do not have permission to modify versions for this application' });
+    }
+
     await testsDb.client.batch([
       { sql: 'UPDATE versions SET is_current = 0 WHERE app_id = ?', args: [appId] },
       { sql: 'UPDATE versions SET is_current = 1 WHERE id = ? AND app_id = ?', args: [id, appId] }

@@ -789,16 +789,25 @@ Deletes a release version (only permitted if no test results or points are attac
 
 ---
 
-### 6.7 Application Management
+### 6.7 Application Management & Multi-Tenant Isolation
+
+> [!IMPORTANT]
+> **Strict Multi-Tenant Application Isolation:**
+> - **Global System Administrator (`admin`)**: Possesses system-wide multi-app privileges. Can list all apps, create new apps, suspend, archive, and view multi-application reports.
+> - **App-Scoped Users & API Keys**: When a key or user is created inside an application, they are permanently locked to that application's scope (`app_id`).
+> - **Zero-Visibility Boundary**: Scoped users and keys have zero visibility into other applications. `GET /api/apps` returns ONLY their assigned apps. Querying or submitting to another application (e.g., via `X-App-Id` or `?appId=`) returns `403 Forbidden: You do not have access to this application`.
+> - **Application Lifecycle**: Only the global administrator can create (`POST /api/apps`), suspend (`PATCH /api/apps/:id/suspend`), or archive (`DELETE /api/apps/:id`) applications.
 
 #### List Applications
 ```http
 GET /api/apps
 ```
-Query parameters:
-- `include_archived=true`: Include soft-deleted/archived applications.
+*Returns all active applications for the global admin, or strictly the caller's assigned applications for app-scoped users and API keys.*
 
-#### Create Application
+Query parameters:
+- `includeArchived=true` or `archived=true`: Include soft-deleted/archived applications (global admin only).
+
+#### Create Application (Global Admin Only)
 ```http
 POST /api/apps
 Content-Type: application/json

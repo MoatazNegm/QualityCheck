@@ -96,7 +96,8 @@ const authenticateToken = async (req, res, next) => {
       req.user = {
         userId: keyRow.user_id,
         username: keyRow.username,
-        isAdmin: !!keyRow.is_admin || role === 'admin',
+        isAdmin: keyRow.key_role === 'admin',
+        isGlobalAdmin: false,
         isSuspended: !!keyRow.is_suspended,
         userGroups: groups,
         apiKeyId: keyRow.key_id,
@@ -107,9 +108,7 @@ const authenticateToken = async (req, res, next) => {
         assignedApps: [keyRow.app_id || 1]
       };
 
-      if (!req.headers['x-app-id'] && keyRow.app_id) {
-        req.headers['x-app-id'] = String(keyRow.app_id);
-      }
+      req.headers['x-app-id'] = String(keyRow.app_id || 1);
 
       // Asynchronously record last_used_at without awaiting
       Promise.resolve(
@@ -177,6 +176,25 @@ const authenticateToken = async (req, res, next) => {
       }
     }
 
+    user.userId = user.userId || user.id;
+    user.id = user.userId;
+
+    const isGlobal = (user.username === 'admin' || user.userId === 1) && !user.isApiKey;
+    user.isGlobalAdmin = isGlobal;
+
+    if (isGlobal) {
+      user.assignedApps = 'all';
+    } else if (user.isApiKey && user.appId) {
+      user.assignedApps = [user.appId];
+    } else {
+      try {
+        const uRows = await testsDb.prepare('SELECT app_id FROM user_apps WHERE user_id = ?').all(user.userId);
+        user.assignedApps = uRows.map(r => r.app_id);
+      } catch (uaErr) {
+        user.assignedApps = user.assignedApps || [];
+      }
+    }
+
     req.user = user;
     next();
   });
@@ -190,6 +208,17 @@ const requireAdmin = (req, res, next) => {
   const isAdmin = !!req.user.isAdmin || req.user.role === 'admin' || groups.includes('admins');
   if (!isAdmin) {
     return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
+
+const requireGlobalAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const isGlobal = (req.user.username === 'admin' || req.user.userId === 1) && !req.user.isApiKey;
+  if (!isGlobal) {
+    return res.status(403).json({ error: 'Global administrator privileges required' });
   }
   next();
 };
@@ -228,6 +257,7 @@ const requireReportAccess = (req, res, next) => {
 module.exports = {
   authenticateToken,
   requireAdmin,
+  requireGlobalAdmin,
   requireDeveloper,
   requireReportAccess
 };

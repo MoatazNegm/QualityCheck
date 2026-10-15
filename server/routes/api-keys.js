@@ -4,11 +4,20 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { testsDb, usersDb } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { isGlobalAdminUser, getUserAssignedApps, canUserAccessApp } = require('../utils/appContext');
 
-// List API keys (Admin only, optionally filtered by appId)
+// List API keys (Admin only, strictly filtered to caller's app scope)
 router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    const isGlobal = isGlobalAdminUser(req.user);
+    const userAssigned = getUserAssignedApps(req.user);
     const filterAppId = req.query.appId && req.query.appId !== 'all' ? parseInt(req.query.appId, 10) : null;
+
+    if (!isGlobal) {
+      if (filterAppId && !userAssigned.includes(filterAppId)) {
+        return res.status(403).json({ error: 'You do not have access to keys for this application' });
+      }
+    }
 
     let sql = `
       SELECT ak.id, ak.name, ak.key_prefix, ak.role, ak.is_active,
@@ -20,11 +29,22 @@ router.get('/', authenticateToken, requireAdmin, async (req, res) => {
       JOIN users u ON ak.user_id = u.id
       LEFT JOIN apps a ON ak.app_id = a.id
     `;
+    const conditions = [];
     const args = [];
 
     if (filterAppId) {
-      sql += ' WHERE ak.app_id = ? ';
+      conditions.push('ak.app_id = ?');
       args.push(filterAppId);
+    } else if (!isGlobal) {
+      if (userAssigned.length === 0) {
+        return res.json([]);
+      }
+      conditions.push(`ak.app_id IN (${userAssigned.map(() => '?').join(',')})`);
+      args.push(...userAssigned);
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     sql += ' ORDER BY ak.created_at DESC';
@@ -47,8 +67,17 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Key name / description is required' });
     }
 
+    const isGlobal = isGlobalAdminUser(req.user);
+    const userAssigned = getUserAssignedApps(req.user);
+    const defaultAppId = userAssigned[0] || 1;
+
     // Determine target app for this key
-    const targetAppId = parseInt(appId || req.headers['x-app-id'], 10) || 1;
+    const targetAppId = parseInt(appId || req.headers['x-app-id'], 10) || defaultAppId;
+
+    if (!isGlobal && !userAssigned.includes(targetAppId)) {
+      return res.status(403).json({ error: 'You do not have permission to create keys for this application' });
+    }
+
     const targetApp = await testsDb.prepare(
       'SELECT id, name, is_deleted, is_suspended FROM apps WHERE id = ?'
     ).get(targetAppId);
@@ -88,16 +117,16 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
         // Ensure user is mapped to this app
         await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(targetUserId, targetAppId);
       } else {
-        // Create a new AI / bot user for this key assigned to THIS APP ONLY
+        // Create a new AI / bot user for this key assigned to THIS APP ONLY.
+        // App-scoped users are NEVER given global admin privileges (is_admin = 0).
         const randomPassword = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await bcrypt.hash(randomPassword, 10);
-        const isAdmin = chosenRole === 'admin' ? 1 : 0;
         const groups = chosenRole === 'admin' ? ['admins'] : chosenRole === 'developer' ? ['developers'] : ['testers'];
 
         const newUserResult = await usersDb.prepare(`
           INSERT INTO users (username, password_hash, is_admin, is_suspended, user_groups)
-          VALUES (?, ?, ?, 0, ?)
-        `).run(finalUsername, hashedPassword, isAdmin, JSON.stringify(groups));
+          VALUES (?, ?, 0, 0, ?)
+        `).run(finalUsername, hashedPassword, JSON.stringify(groups));
 
         targetUserId = newUserResult.lastInsertRowid;
         targetUsername = finalUsername;
@@ -110,7 +139,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
           try {
             const activeAppTests = await testsDb.prepare(`
               SELECT id FROM tests
-              WHERE (app_id = ? OR app_id IS NULL) AND COALESCE(is_deleted, 0) = 0
+              WHERE app_id = ? AND COALESCE(is_deleted, 0) = 0
             `).all(targetAppId);
 
             for (const t of activeAppTests) {
@@ -161,9 +190,13 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 router.patch('/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const key = await testsDb.prepare('SELECT id, is_active FROM api_keys WHERE id = ?').get(id);
+    const key = await testsDb.prepare('SELECT id, is_active, app_id FROM api_keys WHERE id = ?').get(id);
     if (!key) {
       return res.status(404).json({ error: 'API key not found' });
+    }
+
+    if (!canUserAccessApp(req.user, key.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to manage this key' });
     }
 
     const newStatus = key.is_active ? 0 : 1;
@@ -180,9 +213,13 @@ router.patch('/:id/toggle', authenticateToken, requireAdmin, async (req, res) =>
 router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const key = await testsDb.prepare('SELECT id, user_id, name FROM api_keys WHERE id = ?').get(id);
+    const key = await testsDb.prepare('SELECT id, user_id, name, app_id FROM api_keys WHERE id = ?').get(id);
     if (!key) {
       return res.status(404).json({ error: 'API key not found' });
+    }
+
+    if (!canUserAccessApp(req.user, key.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have access to revoke this key' });
     }
 
     // Delete the API key from api_keys table - user account is preserved!
@@ -216,11 +253,13 @@ router.get('/me', authenticateToken, async (req, res) => {
         userId: req.user.userId,
         username: req.user.username,
         isAdmin: req.user.isAdmin,
+        isGlobalAdmin: req.user.isGlobalAdmin || false,
         userGroups: req.user.userGroups || [],
         role: req.user.role || (req.user.isAdmin ? 'admin' : 'tester'),
         isApiKey: !!req.user.isApiKey,
         apiKeyName: req.user.apiKeyName || null,
-        appId: req.user.appId || 1
+        appId: req.user.appId || 1,
+        assignedApps: req.user.assignedApps || [req.user.appId || 1]
       }
     });
   } catch (error) {
@@ -229,3 +268,4 @@ router.get('/me', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+
