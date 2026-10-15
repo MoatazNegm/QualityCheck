@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useApp } from '../context/AppContext';
 
 interface Test {
   id: number;
@@ -27,7 +26,6 @@ interface UserWarning {
 
 const Dashboard: React.FC = () => {
   const { token, user } = useAuth();
-  const { currentApp } = useApp();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
