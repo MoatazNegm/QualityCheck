@@ -60,12 +60,13 @@ router.get('/:testId/next', authenticateToken, async (req, res) => {
     const { testId } = req.params;
     const userId = req.user.userId;
 
-    const test = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+    const test = await testsDb.prepare('SELECT name, app_id FROM tests WHERE id = ?').get(testId);
     if (!test) {
       return res.status(404).json({ error: 'Test not found' });
     }
 
-    const currentRound = await getRound(userId);
+    const testAppId = test.app_id || 1;
+    const currentRound = await getRound(userId, testAppId);
 
     // If the test already failed with a hard stop in the current round, no more steps should be run
     const hardStopFail = await testsDb.prepare(`
@@ -113,12 +114,13 @@ router.get('/user/:userId/test/:testId/next', async (req, res) => {
     const { userId, testId } = req.params;
     
     // Get test name
-    const test = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+    const test = await testsDb.prepare('SELECT name, app_id FROM tests WHERE id = ?').get(testId);
     if (!test) {
       return res.status(404).json({ error: 'Test not found' });
     }
     
-    const currentRound = await getRound(userId);
+    const testAppId = test.app_id || 1;
+    const currentRound = await getRound(userId, testAppId);
 
     // If the test already failed with a hard stop in the current round, no more steps should be run
     const hardStopFail = await testsDb.prepare(`

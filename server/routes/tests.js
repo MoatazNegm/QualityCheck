@@ -1093,7 +1093,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
 router.get('/:testId/round', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const round = await getRound(userId);
+    const test = await testsDb.prepare('SELECT app_id FROM tests WHERE id = ?').get(req.params.testId);
+    const appId = (test && test.app_id) || getAppId(req);
+    const round = await getRound(userId, appId);
     res.json({ round });
   } catch (error) {
     console.error('Get round error:', error);

@@ -307,11 +307,12 @@ async function initDB() {
       assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
       UNIQUE(test_id, user_id)
-    );
     CREATE TABLE IF NOT EXISTS user_loop_state (
-      user_id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      app_id INTEGER NOT NULL DEFAULT 1,
       active_test_id INTEGER,
-      version_id INTEGER
+      version_id INTEGER,
+      PRIMARY KEY (user_id, app_id)
     );
     CREATE TABLE IF NOT EXISTS points_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,8 +331,10 @@ async function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS user_rounds (
-      user_id INTEGER PRIMARY KEY,
-      round_no INTEGER DEFAULT 0
+      user_id INTEGER NOT NULL,
+      app_id INTEGER NOT NULL DEFAULT 1,
+      round_no INTEGER DEFAULT 0,
+      PRIMARY KEY (user_id, app_id)
     );
     CREATE TABLE IF NOT EXISTS test_submissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,7 +443,7 @@ async function initDB() {
 async function getRound(userId, appId = 1) {
   const cleanAppId = parseInt(appId, 10) || 1;
   const row = await testsDb.prepare(
-    'SELECT round_no FROM user_rounds WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+    'SELECT round_no FROM user_rounds WHERE user_id = ? AND app_id = ?'
   ).get(userId, cleanAppId);
   if (row) return row.round_no;
   await testsDb.prepare(
@@ -454,16 +457,16 @@ async function getRound(userId, appId = 1) {
 async function bumpRound(userId, appId = 1) {
   const cleanAppId = parseInt(appId, 10) || 1;
   const existing = await testsDb.prepare(
-    'SELECT round_no FROM user_rounds WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+    'SELECT round_no FROM user_rounds WHERE user_id = ? AND app_id = ?'
   ).get(userId, cleanAppId);
   if (!existing) {
     await testsDb.prepare(
-      'INSERT INTO user_rounds (user_id, app_id, round_no) VALUES (?, ?, 1)'
+      'INSERT INTO user_rounds (user_id, app_id, round_no) VALUES (?, ?, 1) ON CONFLICT(user_id, app_id) DO UPDATE SET round_no = round_no + 1'
     ).run(userId, cleanAppId);
     return 1;
   } else {
     await testsDb.prepare(
-      'UPDATE user_rounds SET round_no = round_no + 1 WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+      'UPDATE user_rounds SET round_no = round_no + 1 WHERE user_id = ? AND app_id = ?'
     ).run(userId, cleanAppId);
     return existing.round_no + 1;
   }
@@ -858,19 +861,55 @@ async function runMigrations() {
     }
     await clientWrapper.execute({ sql: 'UPDATE user_warnings SET app_id = 1 WHERE app_id IS NULL' });
 
-    // 9. Ensure app_id column exists on user_rounds
+    // 9. Ensure app_id column and composite PRIMARY KEY (user_id, app_id) exist on user_rounds
     const urColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_rounds)' })).rows;
-    if (urColsApp.length > 0 && !urColsApp.some(c => c.name === 'app_id')) {
-      await clientWrapper.execute({ sql: 'ALTER TABLE user_rounds ADD COLUMN app_id INTEGER DEFAULT 1' });
-      console.log('[Database] Added app_id column to user_rounds');
+    const isUrComposite = urColsApp.filter(c => c.pk > 0).length > 1;
+    if (!isUrComposite) {
+      await clientWrapper.execute({
+        sql: `CREATE TABLE IF NOT EXISTS user_rounds_new (
+          user_id INTEGER NOT NULL,
+          app_id INTEGER NOT NULL DEFAULT 1,
+          round_no INTEGER DEFAULT 0,
+          PRIMARY KEY (user_id, app_id)
+        )`
+      });
+      await clientWrapper.execute({
+        sql: `INSERT OR IGNORE INTO user_rounds_new (user_id, app_id, round_no)
+              SELECT user_id, COALESCE(app_id, 1), round_no FROM user_rounds`
+      });
+      await clientWrapper.execute({
+        sql: `INSERT OR REPLACE INTO user_rounds_new (user_id, app_id, round_no)
+              SELECT user_id, app_id, COALESCE(MAX(round_id), 0)
+              FROM test_results
+              WHERE app_id IS NOT NULL
+              GROUP BY user_id, app_id`
+      });
+      await clientWrapper.execute({ sql: 'DROP TABLE user_rounds' });
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_rounds_new RENAME TO user_rounds' });
+      console.log('[Database] Migrated user_rounds to composite PRIMARY KEY (user_id, app_id)');
     }
     await clientWrapper.execute({ sql: 'UPDATE user_rounds SET app_id = 1 WHERE app_id IS NULL' });
 
-    // 10. Ensure app_id column exists on user_loop_state
+    // 10. Ensure app_id column and composite PRIMARY KEY (user_id, app_id) exist on user_loop_state
     const ulsColsApp = (await clientWrapper.execute({ sql: 'PRAGMA table_info(user_loop_state)' })).rows;
-    if (ulsColsApp.length > 0 && !ulsColsApp.some(c => c.name === 'app_id')) {
-      await clientWrapper.execute({ sql: 'ALTER TABLE user_loop_state ADD COLUMN app_id INTEGER DEFAULT 1' });
-      console.log('[Database] Added app_id column to user_loop_state');
+    const isUlsComposite = ulsColsApp.filter(c => c.pk > 0).length > 1;
+    if (!isUlsComposite) {
+      await clientWrapper.execute({
+        sql: `CREATE TABLE IF NOT EXISTS user_loop_state_new (
+          user_id INTEGER NOT NULL,
+          app_id INTEGER NOT NULL DEFAULT 1,
+          active_test_id INTEGER,
+          version_id INTEGER,
+          PRIMARY KEY (user_id, app_id)
+        )`
+      });
+      await clientWrapper.execute({
+        sql: `INSERT OR IGNORE INTO user_loop_state_new (user_id, app_id, active_test_id, version_id)
+              SELECT user_id, COALESCE(app_id, 1), active_test_id, version_id FROM user_loop_state`
+      });
+      await clientWrapper.execute({ sql: 'DROP TABLE user_loop_state' });
+      await clientWrapper.execute({ sql: 'ALTER TABLE user_loop_state_new RENAME TO user_loop_state' });
+      console.log('[Database] Migrated user_loop_state to composite PRIMARY KEY (user_id, app_id)');
     }
     await clientWrapper.execute({ sql: 'UPDATE user_loop_state SET app_id = 1 WHERE app_id IS NULL' });
 

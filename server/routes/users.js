@@ -216,7 +216,9 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
     const assignedCount = assigned.length;
     let completedCount = 0;
     let failedHardStopCount = 0;
-    const currentRound = await getRound(userId);
+    const appId = getAppId(req);
+    const cleanAppId = appId === 'all' ? 1 : appId;
+    const currentRound = await getRound(userId, cleanAppId);
 
     for (const row of assigned) {
       const testId = row.test_id;
@@ -260,9 +262,17 @@ router.get('/:id/completed-rounds', authenticateToken, requireAdmin, async (req,
       return res.status(400).json({ error: 'Invalid user id' });
     }
 
-    const row = await testsDb.prepare(
-      'SELECT round_no as completedRounds FROM user_rounds WHERE user_id = ?'
-    ).get(userId);
+    const filterAppId = getAppId(req);
+    let row;
+    if (filterAppId === 'all') {
+      row = await testsDb.prepare(
+        'SELECT MAX(round_no) as completedRounds FROM user_rounds WHERE user_id = ?'
+      ).get(userId);
+    } else {
+      row = await testsDb.prepare(
+        'SELECT round_no as completedRounds FROM user_rounds WHERE user_id = ? AND app_id = ?'
+      ).get(userId, filterAppId);
+    }
 
     res.json({ completedRounds: row ? row.completedRounds : 0 });
   } catch (error) {
@@ -297,7 +307,13 @@ router.get('/:id', authenticateToken, async (req, res) => {
       parsedGroups = user.is_admin ? ['admins'] : ['testers'];
     }
 
-    const roundRow = await testsDb.prepare('SELECT round_no FROM user_rounds WHERE user_id = ?').get(userId);
+    const filterAppId = getAppId(req);
+    let roundRow;
+    if (filterAppId === 'all') {
+      roundRow = await testsDb.prepare('SELECT MAX(round_no) as round_no FROM user_rounds WHERE user_id = ?').get(userId);
+    } else {
+      roundRow = await testsDb.prepare('SELECT round_no FROM user_rounds WHERE user_id = ? AND app_id = ?').get(userId, filterAppId);
+    }
     const assignedRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_assignments WHERE user_id = ?').get(userId);
     const pointsRow = await testsDb.prepare('SELECT COALESCE(SUM(points), 0) as totalPoints FROM points_log WHERE user_id = ?').get(userId);
 

@@ -231,16 +231,16 @@ async function applyBackup(backup, res) {
     // Insert Loop State
     for (const loop of backup.user_loop_state || []) {
       batch.push({
-        sql: 'INSERT INTO user_loop_state (user_id, active_test_id, version_id) VALUES (?, ?, ?)',
-        args: [loop.user_id, loop.active_test_id, loop.version_id ?? null]
+        sql: 'INSERT INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)',
+        args: [loop.user_id, loop.app_id ?? 1, loop.active_test_id, loop.version_id ?? null]
       });
     }
 
     // Insert User Rounds
     for (const r of backup.user_rounds || []) {
       batch.push({
-        sql: 'INSERT OR REPLACE INTO user_rounds (user_id, round_no) VALUES (?, ?)',
-        args: [r.user_id, r.round_no ?? 0]
+        sql: 'INSERT OR REPLACE INTO user_rounds (user_id, app_id, round_no) VALUES (?, ?, ?)',
+        args: [r.user_id, r.app_id ?? 1, r.round_no ?? 0]
       });
     }
 
