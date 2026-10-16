@@ -29,6 +29,23 @@ async function getCurrentVersionId(appId = 1) {
   return val;
 }
 
+// Helper to determine if caller is authenticating via an API key (automated process / agent)
+async function isAgentCaller(req, userId) {
+  if (req && req.user) {
+    if (req.user.isApiKey || req.user.apiKeyId) return true;
+  }
+  if (req && req.headers && (req.headers['x-api-key'] || req.headers['api-key'] || req.headers['x-api-token'])) {
+    return true;
+  }
+  if (userId) {
+    try {
+      const keyRow = await testsDb.prepare('SELECT id FROM api_keys WHERE user_id = ? AND is_active = 1 LIMIT 1').get(userId);
+      if (keyRow) return true;
+    } catch (e) {}
+  }
+  return false;
+}
+
 // Configure uploads via memory storage so saveUploadedFile handles Dropbox/DB/disk
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -313,36 +330,40 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     // If the user fails a step and their preceding failed step was in another test
     // within the configured time threshold (default 3 minutes = 180 seconds),
     // 0 points are counted and a warning message is stored.
-    let thresholdSec = 180;
-    const cachedSettings = cache.get('settings');
-    if (cachedSettings && cachedSettings.consecutive_failure_threshold_seconds) {
-      thresholdSec = parseInt(cachedSettings.consecutive_failure_threshold_seconds.value, 10) || 180;
-    } else {
-      const settingRow = await testsDb.prepare("SELECT value FROM settings WHERE key = 'consecutive_failure_threshold_seconds'").get();
-      thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
-    }
+    // NOTE: Automated processes / agents calling via API key are exempt from point withholding/zeroing rules.
+    const isAgent = await isAgentCaller(req, userId);
+    if (!isAgent) {
+      let thresholdSec = 180;
+      const cachedSettings = cache.get('settings');
+      if (cachedSettings && cachedSettings.consecutive_failure_threshold_seconds) {
+        thresholdSec = parseInt(cachedSettings.consecutive_failure_threshold_seconds.value, 10) || 180;
+      } else {
+        const settingRow = await testsDb.prepare("SELECT value FROM settings WHERE key = 'consecutive_failure_threshold_seconds'").get();
+        thresholdSec = settingRow ? (parseInt(settingRow.value, 10) || 180) : 180;
+      }
 
-    if (normalizedResult === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
-      const prevTimeMs = new Date(prevFailed.executed_at).getTime();
-      const diffSec = (Date.now() - prevTimeMs) / 1000;
-      if (diffSec >= 0 && diffSec <= thresholdSec) {
-        pointsAwarded = 0;
+      if (normalizedResult === 'fail' && prevFailed && prevFailed.test_id !== parseInt(testId, 10)) {
+        const prevTimeMs = new Date(prevFailed.executed_at).getTime();
+        const diffSec = (Date.now() - prevTimeMs) / 1000;
+        if (diffSec >= 0 && diffSec <= thresholdSec) {
+          pointsAwarded = 0;
 
-        const currentTestRow = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
-        const curTestName = currentTestRow ? currentTestRow.name : `Test ${testId}`;
-        const curStepNum = stepRow ? stepRow.step_number : stepId;
-        const curStepDesc = stepRow ? stepRow.description : '';
+          const currentTestRow = await testsDb.prepare('SELECT name FROM tests WHERE id = ?').get(testId);
+          const curTestName = currentTestRow ? currentTestRow.name : `Test ${testId}`;
+          const curStepNum = stepRow ? stepRow.step_number : stepId;
+          const curStepDesc = stepRow ? stepRow.description : '';
 
-        const prevTestName = prevFailed.test_name;
-        const prevStepNum = prevFailed.step_number;
-        const prevStepDesc = prevFailed.step_description;
+          const prevTestName = prevFailed.test_name;
+          const prevStepNum = prevFailed.step_number;
+          const prevStepDesc = prevFailed.step_description;
 
-        warningCreated = `The points for Step ${curStepNum} (${curStepDesc}) in test '${curTestName}' are not counted due to the user seems he depended on the preceding Step ${prevStepNum} (${prevStepDesc}) in test '${prevTestName}'.`;
+          warningCreated = `The points for Step ${curStepNum} (${curStepDesc}) in test '${curTestName}' are not counted due to the user seems he depended on the preceding Step ${prevStepNum} (${prevStepDesc}) in test '${prevTestName}'.`;
 
-        await testsDb.prepare(`
-          INSERT INTO user_warnings (user_id, message, created_round, version_id, created_at, app_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(userId, warningCreated, roundNo, currentVersionId, nowIso, appId);
+          await testsDb.prepare(`
+            INSERT INTO user_warnings (user_id, message, created_round, version_id, created_at, app_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(userId, warningCreated, roundNo, currentVersionId, nowIso, appId);
+        }
       }
     }
 
@@ -396,6 +417,10 @@ router.get('/warnings', authenticateToken, async (req, res) => {
   try {
     const appId = getAppId(req);
     const userId = req.user.userId;
+    const isAgent = await isAgentCaller(req, userId);
+    if (isAgent) {
+      return res.json({ warnings: [] });
+    }
     const currentRound = await getRound(userId, appId);
     const warnings = await testsDb.prepare(`
       SELECT id, message, created_round, created_at

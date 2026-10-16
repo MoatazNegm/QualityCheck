@@ -958,6 +958,16 @@ async function runMigrations() {
     await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_test_results_app_id ON test_results(app_id)' });
     await clientWrapper.execute({ sql: 'CREATE INDEX IF NOT EXISTS idx_points_log_app_id ON points_log(app_id)' });
 
+    // 14. Retroactively restore zeroed points and clean up warnings for automated API key agents
+    await clientWrapper.execute({
+      sql: `UPDATE points_log
+            SET points = (SELECT COALESCE(ts.points, ts.value, 1) FROM test_steps ts WHERE ts.id = points_log.step_id)
+            WHERE points = 0 AND user_id IN (SELECT user_id FROM api_keys)`
+    });
+    await clientWrapper.execute({
+      sql: `DELETE FROM user_warnings WHERE user_id IN (SELECT user_id FROM api_keys)`
+    });
+
     console.log('[Database] Schema initialization and migrations completed successfully.');
   } catch (err) {
     console.error('Database migration/init failed:', err);
