@@ -1174,38 +1174,136 @@ router.post('/:id/steps', authenticateToken, requireDeveloper, async (req, res) 
   }
 });
 
-// Update step (admin or developer)
-router.put('/:testId/steps/:stepId', authenticateToken, requireDeveloper, async (req, res) => {
+// Helper for updating a test step (supports full and partial updates, PUT and PATCH)
+async function updateStepHandler(req, res) {
   try {
-    const { testId, stepId } = req.params;
-    const { step_number, description, success_symptom, value, points, on_failure, attachment_path, attachment_name } = req.body;
-    const pointsVal = points !== undefined ? Number(points) : (value !== undefined ? Number(value) : 0);
-    const successVal = (success_symptom !== undefined && success_symptom !== null && String(success_symptom).trim()) ? String(success_symptom).trim() : 'N/A';
-
-    if (attachment_path !== undefined || attachment_name !== undefined) {
-      await testsDb.prepare(`
-        UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?, attachment_path = ?, attachment_name = ?
-        WHERE id = ? AND test_id = ?
-      `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null, stepId, testId);
-    } else {
-      await testsDb.prepare(`
-        UPDATE test_steps SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?
-        WHERE id = ? AND test_id = ?
-      `).run(step_number, description, successVal, pointsVal, pointsVal, on_failure || 'stop', stepId, testId);
+    const rawStepId = req.params.stepId;
+    const stepId = parseInt(rawStepId, 10);
+    if (isNaN(stepId)) {
+      return res.status(400).json({ error: 'Invalid step ID' });
     }
 
+    let testId = req.params.testId ? parseInt(req.params.testId, 10) : null;
+    let existingStep;
+
+    if (testId && !isNaN(testId)) {
+      const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(testId);
+      if (!test) {
+        return res.status(404).json({ error: 'Test not found' });
+      }
+      if (!canUserAccessApp(req.user, test.app_id || 1)) {
+        return res.status(403).json({ error: 'You do not have permission to modify steps for this application' });
+      }
+      existingStep = await testsDb.prepare('SELECT * FROM test_steps WHERE id = ? AND test_id = ?').get(stepId, testId);
+    } else {
+      existingStep = await testsDb.prepare(`
+        SELECT ts.*, t.app_id
+        FROM test_steps ts
+        JOIN tests t ON ts.test_id = t.id
+        WHERE ts.id = ?
+      `).get(stepId);
+      if (existingStep) {
+        testId = existingStep.test_id;
+        if (!canUserAccessApp(req.user, existingStep.app_id || 1)) {
+          return res.status(403).json({ error: 'You do not have permission to modify steps for this application' });
+        }
+      }
+    }
+
+    if (!existingStep) {
+      return res.status(404).json({ error: 'Step not found' });
+    }
+
+    const rawStepNum = req.body.step_number ?? req.body.stepNumber;
+    const finalStepNumber = (rawStepNum !== undefined && rawStepNum !== null && !isNaN(Number(rawStepNum)))
+      ? Number(rawStepNum)
+      : existingStep.step_number;
+
+    const rawDesc = req.body.description;
+    const finalDescription = (rawDesc !== undefined && rawDesc !== null)
+      ? String(rawDesc).trim()
+      : existingStep.description;
+
+    if (!finalDescription) {
+      return res.status(400).json({ error: 'Step description cannot be empty' });
+    }
+
+    const rawSuccess = req.body.success_symptom ?? req.body.successSymptom;
+    const finalSuccessSymptom = (rawSuccess !== undefined && rawSuccess !== null && String(rawSuccess).trim())
+      ? String(rawSuccess).trim()
+      : (existingStep.success_symptom || 'N/A');
+
+    const rawPoints = req.body.points !== undefined ? req.body.points : (req.body.value !== undefined ? req.body.value : undefined);
+    const finalPoints = (rawPoints !== undefined && rawPoints !== null && !isNaN(Number(rawPoints)))
+      ? Number(rawPoints)
+      : (existingStep.points ?? existingStep.value ?? 0);
+
+    const rawOnFailure = req.body.on_failure ?? req.body.onFailure;
+    const finalOnFailure = (rawOnFailure !== undefined && rawOnFailure !== null)
+      ? String(rawOnFailure).trim()
+      : (existingStep.on_failure || 'stop');
+
+    const rawAttachPath = req.body.attachment_path ?? req.body.attachmentPath;
+    const finalAttachmentPath = (rawAttachPath !== undefined)
+      ? (rawAttachPath || null)
+      : (existingStep.attachment_path || null);
+
+    const rawAttachName = req.body.attachment_name ?? req.body.attachmentName;
+    const finalAttachmentName = (rawAttachName !== undefined)
+      ? (rawAttachName || null)
+      : (existingStep.attachment_name || null);
+
+    await testsDb.prepare(`
+      UPDATE test_steps
+      SET step_number = ?, description = ?, success_symptom = ?, value = ?, points = ?, on_failure = ?, attachment_path = ?, attachment_name = ?
+      WHERE id = ? AND test_id = ?
+    `).run(finalStepNumber, finalDescription, finalSuccessSymptom, finalPoints, finalPoints, finalOnFailure, finalAttachmentPath, finalAttachmentName, stepId, testId);
+
+    cache.invalidate('stepCount:' + testId);
     cache.invalidate('totalPoints:' + testId);
-    res.json({ message: 'Step updated successfully' });
+
+    const updatedStep = {
+      id: stepId,
+      test_id: testId,
+      step_number: finalStepNumber,
+      description: finalDescription,
+      success_symptom: finalSuccessSymptom,
+      value: finalPoints,
+      points: finalPoints,
+      on_failure: finalOnFailure,
+      attachment_path: finalAttachmentPath,
+      attachment_name: finalAttachmentName
+    };
+
+    res.json({
+      message: 'Step updated successfully',
+      step: updatedStep
+    });
   } catch (error) {
     console.error('Update step error:', error);
     res.status(500).json({ error: 'Server error' });
   }
-});
+}
+
+// Update step (admin or developer) — supports PUT and PATCH, full and partial updates
+router.put('/:testId/steps/:stepId', authenticateToken, requireDeveloper, updateStepHandler);
+router.patch('/:testId/steps/:stepId', authenticateToken, requireDeveloper, updateStepHandler);
+router.put('/:testId/steps/:stepId/description', authenticateToken, requireDeveloper, updateStepHandler);
+router.patch('/:testId/steps/:stepId/description', authenticateToken, requireDeveloper, updateStepHandler);
+router.put('/steps/:stepId', authenticateToken, requireDeveloper, updateStepHandler);
+router.patch('/steps/:stepId', authenticateToken, requireDeveloper, updateStepHandler);
+router.put('/steps/:stepId/description', authenticateToken, requireDeveloper, updateStepHandler);
+router.patch('/steps/:stepId/description', authenticateToken, requireDeveloper, updateStepHandler);
 
 // Delete step (admin or developer)
 router.delete('/:testId/steps/:stepId', authenticateToken, requireDeveloper, async (req, res) => {
   try {
     const { testId, stepId } = req.params;
+    const test = await testsDb.prepare('SELECT id, app_id FROM tests WHERE id = ?').get(testId);
+    if (!test) return res.status(404).json({ error: 'Test not found' });
+    if (!canUserAccessApp(req.user, test.app_id || 1)) {
+      return res.status(403).json({ error: 'You do not have permission to delete steps for this application' });
+    }
     
     await testsDb.prepare('DELETE FROM test_steps WHERE id = ? AND test_id = ?').run(stepId, testId);
     cache.invalidate('stepCount:' + testId);

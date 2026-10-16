@@ -307,6 +307,7 @@ async function initDB() {
       assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
       UNIQUE(test_id, user_id)
+    );
     CREATE TABLE IF NOT EXISTS user_loop_state (
       user_id INTEGER NOT NULL,
       app_id INTEGER NOT NULL DEFAULT 1,

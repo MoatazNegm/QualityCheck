@@ -336,8 +336,18 @@ curl -X POST http://localhost:4006/api/tests/5/steps \
   }'
 ```
 
-### 4.3 Update Step (`PUT /api/tests/{testId}/steps/{stepId}`)
+### 4.3 Update Step (`PUT /api/tests/{testId}/steps/{stepId}` or `PATCH /api/tests/{testId}/steps/{stepId}`)
+Supports full updates as well as partial updates (e.g., updating only `description` or `points`). Unspecified fields preserve their existing values. Both `PUT` and `PATCH` methods are supported across `/api/tests/{testId}/steps/{stepId}` and `/api/tests/steps/{stepId}`.
 ```bash
+# Partial update (e.g. updating only the description):
+curl -X PATCH http://localhost:4006/api/tests/53/steps/1069 \
+  -H "X-API-Key: qc_admin_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Updated step description"
+  }'
+
+# Full update:
 curl -X PUT http://localhost:4006/api/tests/5/steps/21 \
   -H "X-API-Key: qc_developer_api_key" \
   -H "Content-Type: application/json" \
