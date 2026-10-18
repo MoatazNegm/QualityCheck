@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const { usersDb, testsDb, getRound } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { dataDir } = require('../utils/dataDir');
-const { isGlobalAdminUser, getUserAssignedApps } = require('../utils/appContext');
+const { isGlobalAdminUser, getUserAssignedApps, getAppId } = require('../utils/appContext');
 const fs = require('fs');
 const path = require('path');
 
@@ -111,26 +111,72 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
     const userIds = nonAdminUsers.map(u => u.id);
     if (userIds.length === 0) return res.json({});
 
-    // Batch: assigned test counts per user
-    const assignedRows = await testsDb.prepare(
-      'SELECT user_id, COUNT(*) AS c FROM test_assignments GROUP BY user_id'
-    ).all();
+    const appId = getAppId(req);
+    const isAll = appId === 'all';
+    const cleanAppId = isAll ? null : (parseInt(appId, 10) || 1);
+
+    // Batch: assigned test counts per user (non-deleted tests, scoped by app)
+    let assignedRows;
+    if (isAll) {
+      assignedRows = await testsDb.prepare(`
+        SELECT ta.user_id, COUNT(*) AS c
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE COALESCE(t.is_deleted, 0) = 0
+        GROUP BY ta.user_id
+      `).all();
+    } else {
+      assignedRows = await testsDb.prepare(`
+        SELECT ta.user_id, COUNT(*) AS c
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE COALESCE(t.is_deleted, 0) = 0 AND t.app_id = ?
+        GROUP BY ta.user_id
+      `).all(cleanAppId);
+    }
     const assignedMap = Object.fromEntries(assignedRows.map(r => [r.user_id, r.c]));
 
-    // Batch: completed rounds per user
-    const roundRows = await testsDb.prepare(
-      'SELECT user_id, round_no FROM user_rounds'
-    ).all();
+    // Batch: completed rounds per user for current app scope
+    let roundRows;
+    if (isAll) {
+      roundRows = await testsDb.prepare(`
+        SELECT user_id, MAX(round_no) as round_no
+        FROM user_rounds
+        GROUP BY user_id
+      `).all();
+    } else {
+      roundRows = await testsDb.prepare(`
+        SELECT user_id, round_no
+        FROM user_rounds
+        WHERE app_id = ?
+      `).all(cleanAppId);
+    }
     const roundsMap = Object.fromEntries(roundRows.map(r => [r.user_id, r.round_no]));
 
-    // Batch: done step counts per user+test for each user's current round
-    const doneRows = await testsDb.prepare(`
-      SELECT tr.user_id, tr.test_id, COUNT(*) AS c
-      FROM test_results tr
-      LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id
-      WHERE COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
-      GROUP BY tr.user_id, tr.test_id
-    `).all();
+    // Batch: done step counts per user+test for each user's current round in current app
+    let doneRows;
+    if (isAll) {
+      doneRows = await testsDb.prepare(`
+        SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+        FROM test_results tr
+        JOIN tests t ON tr.test_id = t.id
+        LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = tr.app_id
+        WHERE COALESCE(t.is_deleted, 0) = 0
+          AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+        GROUP BY tr.user_id, tr.test_id
+      `).all();
+    } else {
+      doneRows = await testsDb.prepare(`
+        SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+        FROM test_results tr
+        JOIN tests t ON tr.test_id = t.id
+        LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = ?
+        WHERE COALESCE(t.is_deleted, 0) = 0
+          AND tr.app_id = ?
+          AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+        GROUP BY tr.user_id, tr.test_id
+      `).all(cleanAppId, cleanAppId);
+    }
     const doneMap = {};
     for (const r of doneRows) {
       if (!doneMap[r.user_id]) doneMap[r.user_id] = {};
@@ -144,24 +190,56 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
     const stepMap = Object.fromEntries(stepRows.map(r => [r.test_id, r.c]));
 
     // Batch: hard-stop failure counts per user+test in the current round
-    const failRows = await testsDb.prepare(`
-      SELECT ts.user_id, ts.test_id, COUNT(*) AS c
-      FROM test_submissions ts
-      JOIN test_steps tstep ON ts.step_id = tstep.id
-      LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id
-      WHERE ts.result = 'fail' AND tstep.on_failure = 'stop' AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
-      GROUP BY ts.user_id, ts.test_id
-    `).all();
+    let failRows;
+    if (isAll) {
+      failRows = await testsDb.prepare(`
+        SELECT ts.user_id, ts.test_id, COUNT(*) AS c
+        FROM test_submissions ts
+        JOIN tests t ON ts.test_id = t.id
+        JOIN test_steps tstep ON ts.step_id = tstep.id
+        LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id AND ur.app_id = ts.app_id
+        WHERE COALESCE(t.is_deleted, 0) = 0
+          AND ts.result = 'fail' AND tstep.on_failure = 'stop'
+          AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
+        GROUP BY ts.user_id, ts.test_id
+      `).all();
+    } else {
+      failRows = await testsDb.prepare(`
+        SELECT ts.user_id, ts.test_id, COUNT(*) AS c
+        FROM test_submissions ts
+        JOIN tests t ON ts.test_id = t.id
+        JOIN test_steps tstep ON ts.step_id = tstep.id
+        LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id AND ur.app_id = ?
+        WHERE COALESCE(t.is_deleted, 0) = 0
+          AND ts.app_id = ?
+          AND ts.result = 'fail' AND tstep.on_failure = 'stop'
+          AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
+        GROUP BY ts.user_id, ts.test_id
+      `).all(cleanAppId, cleanAppId);
+    }
     const failMap = {};
     for (const r of failRows) {
       if (!failMap[r.user_id]) failMap[r.user_id] = {};
       failMap[r.user_id][r.test_id] = r.c;
     }
 
-    // Batch: assignments per user
-    const assignmentRows = await testsDb.prepare(
-      'SELECT user_id, test_id FROM test_assignments'
-    ).all();
+    // Batch: assignments per user (non-deleted tests, scoped by app)
+    let assignmentRows;
+    if (isAll) {
+      assignmentRows = await testsDb.prepare(`
+        SELECT ta.user_id, ta.test_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE COALESCE(t.is_deleted, 0) = 0
+      `).all();
+    } else {
+      assignmentRows = await testsDb.prepare(`
+        SELECT ta.user_id, ta.test_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE COALESCE(t.is_deleted, 0) = 0 AND t.app_id = ?
+      `).all(cleanAppId);
+    }
     const userAssignments = {};
     for (const r of assignmentRows) {
       if (!userAssignments[r.user_id]) userAssignments[r.user_id] = [];
@@ -209,15 +287,30 @@ router.get('/:id/test-summary', authenticateToken, requireAdmin, async (req, res
       return res.status(400).json({ error: 'Invalid user id' });
     }
 
-    const assigned = await testsDb.prepare(
-      'SELECT test_id FROM test_assignments WHERE user_id = ?'
-    ).all(userId);
+    const appId = getAppId(req);
+    const isAll = appId === 'all';
+    const cleanAppId = isAll ? 1 : (parseInt(appId, 10) || 1);
+
+    let assigned;
+    if (isAll) {
+      assigned = await testsDb.prepare(`
+        SELECT ta.test_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
+      `).all(userId);
+    } else {
+      assigned = await testsDb.prepare(`
+        SELECT ta.test_id
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE ta.user_id = ? AND t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
+      `).all(userId, cleanAppId);
+    }
 
     const assignedCount = assigned.length;
     let completedCount = 0;
     let failedHardStopCount = 0;
-    const appId = getAppId(req);
-    const cleanAppId = appId === 'all' ? 1 : appId;
     const currentRound = await getRound(userId, cleanAppId);
 
     for (const row of assigned) {
@@ -314,7 +407,22 @@ router.get('/:id', authenticateToken, async (req, res) => {
     } else {
       roundRow = await testsDb.prepare('SELECT round_no FROM user_rounds WHERE user_id = ? AND app_id = ?').get(userId, filterAppId);
     }
-    const assignedRow = await testsDb.prepare('SELECT COUNT(*) as c FROM test_assignments WHERE user_id = ?').get(userId);
+    let assignedRow;
+    if (filterAppId === 'all') {
+      assignedRow = await testsDb.prepare(`
+        SELECT COUNT(*) as c
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE ta.user_id = ? AND COALESCE(t.is_deleted, 0) = 0
+      `).get(userId);
+    } else {
+      assignedRow = await testsDb.prepare(`
+        SELECT COUNT(*) as c
+        FROM test_assignments ta
+        JOIN tests t ON ta.test_id = t.id
+        WHERE ta.user_id = ? AND t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
+      `).get(userId, filterAppId);
+    }
     const pointsRow = await testsDb.prepare('SELECT COALESCE(SUM(points), 0) as totalPoints FROM points_log WHERE user_id = ?').get(userId);
 
     res.json({

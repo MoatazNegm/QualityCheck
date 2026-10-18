@@ -796,18 +796,26 @@ async function runMigrations() {
           sql: `DELETE FROM test_assignments WHERE user_id = ? AND test_id IN (SELECT id FROM tests WHERE app_id = 1)`,
           args: [uid]
         });
-        // Assign ERP tests
-        for (const tid of [44, 45, 46, 47, 48, 49, 50, 51, 52]) {
+        // Assign active ERP tests (non-deleted only)
+        const erpActiveTests = (await clientWrapper.execute({
+          sql: 'SELECT id FROM tests WHERE app_id = ? AND COALESCE(is_deleted, 0) = 0',
+          args: [erpAppId]
+        })).rows;
+        for (const t of erpActiveTests) {
           await clientWrapper.execute({
             sql: 'INSERT OR IGNORE INTO test_assignments (test_id, user_id) VALUES (?, ?)',
-            args: [tid, uid]
+            args: [Number(t.id), uid]
           });
         }
       }
-      // Remove tests 44..52 from users not in erpAppId
+      // Remove assignments pointing to any deleted/disabled tests
       await clientWrapper.execute({
-        sql: `DELETE FROM test_assignments WHERE test_id IN (44, 45, 46, 47, 48, 49, 50, 51, 52) AND user_id NOT IN (SELECT user_id FROM user_apps WHERE app_id = ?)`,
-        args: [erpAppId]
+        sql: `DELETE FROM test_assignments WHERE test_id IN (SELECT id FROM tests WHERE COALESCE(is_deleted, 0) = 1)`
+      });
+      // Remove tests of erpAppId from users not in erpAppId
+      await clientWrapper.execute({
+        sql: `DELETE FROM test_assignments WHERE test_id IN (SELECT id FROM tests WHERE app_id = ?) AND user_id NOT IN (SELECT user_id FROM user_apps WHERE app_id = ?)`,
+        args: [erpAppId, erpAppId]
       });
       console.log('[Database] NexusERP tests and user isolation migration verified successfully');
     } catch (migErr) {

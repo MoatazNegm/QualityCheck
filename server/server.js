@@ -6,6 +6,13 @@ const fs = require('fs');
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') }); // Explicitly load root .env
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.warn('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Server] Uncaught Exception:', err);
+});
+
 const { dataDir } = require('./utils/dataDir');
 const { testsDb } = require('./db/db');
 
