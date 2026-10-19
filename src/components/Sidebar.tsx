@@ -5,7 +5,7 @@ import { useApp } from '../context/AppContext';
 
 const Sidebar: React.FC = () => {
   const { user } = useAuth();
-  const { apps, currentApp, selectApp, selectAdminPanel, isAdminPanelMode } = useApp();
+  const { apps, currentApp, selectApp, selectAdminPanel, isAdminPanelMode, setIsAdminPanelMode } = useApp();
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -30,19 +30,48 @@ const Sidebar: React.FC = () => {
   const isDevOrAdmin = isAdmin || user?.userGroups?.includes('developers');
 
   const handleAdminPanelClick = () => {
-    selectAdminPanel();
-    localStorage.setItem('qc_last_view', '/admin');
-    navigate('/admin');
+    if (location.pathname === '/admin') {
+      // Toggle between Global Admin Panel and current App Solution
+      if (isAdminPanelMode) {
+        if (currentApp) {
+          selectApp(currentApp.id);
+        }
+      } else {
+        selectAdminPanel();
+      }
+    } else {
+      // Moving from Dashboard/Reports to Admin Panel:
+      // Preserve the same selected app by staying in its solution!
+      if (currentApp) {
+        setIsAdminPanelMode(false);
+      } else {
+        selectAdminPanel();
+      }
+      localStorage.setItem('qc_last_view', '/admin');
+      navigate('/admin');
+    }
   };
 
   const handleAppClick = (app: any) => {
     selectApp(app);
-    if (location.pathname === '/admin') {
-      // Stay on /admin but now scoped to this app solution
-    } else {
+    // If executing a specific test from another app, return to dashboard
+    if (location.pathname.startsWith('/test/')) {
       navigate('/dashboard');
       localStorage.setItem('qc_last_view', '/dashboard');
+    } else {
+      // Stay on the same page: /reports stays on /reports, /dashboard stays on /dashboard, /admin stays on /admin
+      localStorage.setItem('qc_last_view', location.pathname);
     }
+  };
+
+  const handleDashboardClick = () => {
+    setIsAdminPanelMode(false);
+    localStorage.setItem('qc_last_view', '/dashboard');
+  };
+
+  const handleReportsClick = () => {
+    setIsAdminPanelMode(false);
+    localStorage.setItem('qc_last_view', '/reports');
   };
 
   return (
@@ -64,12 +93,12 @@ const Sidebar: React.FC = () => {
         {isAdmin && (
           <button
             onClick={handleAdminPanelClick}
-            className={`sidebar-link sidebar-app-btn ${isAdminPanelMode && location.pathname === '/admin' ? 'active' : ''}`}
-            title='Admin Panel (Global View)'
+            className={`sidebar-link sidebar-app-btn ${location.pathname === '/admin' ? 'active' : ''}`}
+            title={isAdminPanelMode ? 'Admin Panel (Global View)' : (currentApp ? `Admin Panel (${currentApp.name})` : 'Admin Panel')}
             style={{
               cursor: 'pointer',
-              background: isAdminPanelMode && location.pathname === '/admin' ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
-              border: isAdminPanelMode && location.pathname === '/admin' ? '1px solid #6366f1' : '1px solid rgba(255, 255, 255, 0.08)',
+              background: location.pathname === '/admin' ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+              border: location.pathname === '/admin' ? '1px solid #6366f1' : '1px solid rgba(255, 255, 255, 0.08)',
               marginBottom: '0.4rem',
               color: 'inherit'
             }}
@@ -86,7 +115,8 @@ const Sidebar: React.FC = () => {
         {/* Regular navigation links */}
         <NavLink
           to='/dashboard'
-          className={({ isActive }) => `sidebar-link ${isActive && !isAdminPanelMode ? 'active' : ''}`}
+          onClick={handleDashboardClick}
+          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
           title='Dashboard'
         >
           <span className='sidebar-link-icon'>📊</span>
@@ -95,6 +125,7 @@ const Sidebar: React.FC = () => {
 
         <NavLink
           to='/reports'
+          onClick={handleReportsClick}
           className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
           title='Reports'
         >
@@ -140,7 +171,7 @@ const Sidebar: React.FC = () => {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.2rem' }}>
             {apps.map((app) => {
-              const isSelected = !isAdminPanelMode && currentApp?.id === app.id;
+              const isSelected = (!isAdminPanelMode || location.pathname !== '/admin') && currentApp?.id === app.id;
               const isSuspended = !!app.is_suspended;
               return (
                 <button

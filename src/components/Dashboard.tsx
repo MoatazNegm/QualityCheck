@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useApp } from '../context/AppContext';
 
 interface Test {
   id: number;
@@ -26,6 +27,7 @@ interface UserWarning {
 
 const Dashboard: React.FC = () => {
   const { token, user } = useAuth();
+  const { currentApp } = useApp();
   const navigate = useNavigate();
   const [tests, setTests] = useState<Test[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,17 +37,19 @@ const Dashboard: React.FC = () => {
   const [isWarningsExpanded, setIsWarningsExpanded] = useState(false);
 
   const API_BASE = '';
-  const authHeaders = {
+  const targetAppId = currentApp ? currentApp.id : 'all';
+
+  const authHeaders = useMemo(() => ({
     Authorization: `Bearer ${token}`,
-    'x-app-id': 'all'
-  };
+    'x-app-id': String(targetAppId)
+  }), [token, targetAppId]);
 
   useEffect(() => {
     // Check sessionStorage cache to avoid refetching on rapid tab toggles
-    const cacheKeyTests = `qc_dashboard_tests_all`;
-    const cacheKeySummary = `qc_dashboard_summary_all`;
-    const cacheKeyWarnings = `qc_dashboard_warnings_all`;
-    const cacheKeyTime = `qc_dashboard_time_all`;
+    const cacheKeyTests = `qc_dashboard_tests_${targetAppId}`;
+    const cacheKeySummary = `qc_dashboard_summary_${targetAppId}`;
+    const cacheKeyWarnings = `qc_dashboard_warnings_${targetAppId}`;
+    const cacheKeyTime = `qc_dashboard_time_${targetAppId}`;
 
     const cachedTests = sessionStorage.getItem(cacheKeyTests);
     const cachedSummary = sessionStorage.getItem(cacheKeySummary);
@@ -60,24 +64,26 @@ const Dashboard: React.FC = () => {
         if (cachedWarnings !== null) setWarnings(JSON.parse(cachedWarnings));
         setLoading(false);
       } catch {
-        fetchTests();
-        fetchSummary();
-        fetchWarnings();
+        fetchTests(targetAppId);
+        fetchSummary(targetAppId);
+        fetchWarnings(targetAppId);
       }
     } else {
-      fetchTests();
-      fetchSummary();
-      fetchWarnings();
+      setLoading(true);
+      fetchTests(targetAppId);
+      fetchSummary(targetAppId);
+      fetchWarnings(targetAppId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, targetAppId]);
 
   useEffect(() => {
     if (!token) return;
     let mounted = true;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/versions/current?appId=all`, { headers: authHeaders });
+        const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(targetAppId) };
+        const res = await fetch(`${API_BASE}/api/versions/current?appId=${targetAppId}`, { headers });
         if (res.ok && mounted) {
           const data = await res.json();
           const vid = data.version ? data.version.id : null;
@@ -85,12 +91,12 @@ const Dashboard: React.FC = () => {
             setCurrentVersionId(vid);
           }
         }
-        const testsRes = await fetch(`${API_BASE}/api/tests?appId=all`, { headers: authHeaders });
+        const testsRes = await fetch(`${API_BASE}/api/tests?appId=${targetAppId}`, { headers });
         if (testsRes.ok && mounted) {
           const testsData = await testsRes.json();
           setTests(testsData);
-          sessionStorage.setItem(`qc_dashboard_tests_all`, JSON.stringify(testsData));
-          sessionStorage.setItem(`qc_dashboard_time_all`, String(Date.now()));
+          sessionStorage.setItem(`qc_dashboard_tests_${targetAppId}`, JSON.stringify(testsData));
+          sessionStorage.setItem(`qc_dashboard_time_${targetAppId}`, String(Date.now()));
         }
       } catch (err) {
         console.error('Failed to poll current version and tests:', err);
@@ -98,19 +104,20 @@ const Dashboard: React.FC = () => {
     }, 15000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, currentVersionId]);
+  }, [token, currentVersionId, targetAppId]);
 
-  const fetchTests = async () => {
+  const fetchTests = async (appIdToUse = targetAppId) => {
     try {
-      const response = await fetch(`${API_BASE}/api/tests?appId=all`, {
-        headers: authHeaders
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(appIdToUse) };
+      const response = await fetch(`${API_BASE}/api/tests?appId=${appIdToUse}`, {
+        headers
       });
 
       if (response.ok) {
         const data = await response.json();
         setTests(data);
-        sessionStorage.setItem(`qc_dashboard_tests_all`, JSON.stringify(data));
-        sessionStorage.setItem(`qc_dashboard_time_all`, String(Date.now()));
+        sessionStorage.setItem(`qc_dashboard_tests_${appIdToUse}`, JSON.stringify(data));
+        sessionStorage.setItem(`qc_dashboard_time_${appIdToUse}`, String(Date.now()));
       }
     } catch (error) {
       console.error('Error fetching tests:', error);
@@ -119,26 +126,28 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const fetchSummary = async () => {
+  const fetchSummary = async (appIdToUse = targetAppId) => {
     try {
-      const res = await fetch(`${API_BASE}/api/test-results/summary?appId=all`, { headers: authHeaders });
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(appIdToUse) };
+      const res = await fetch(`${API_BASE}/api/test-results/summary?appId=${appIdToUse}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setMonthEarned(data.monthEarned);
-        sessionStorage.setItem(`qc_dashboard_summary_all`, JSON.stringify(data.monthEarned));
+        sessionStorage.setItem(`qc_dashboard_summary_${appIdToUse}`, JSON.stringify(data.monthEarned));
       }
     } catch (error) {
       console.error('Error fetching points summary:', error);
     }
   };
 
-  const fetchWarnings = async () => {
+  const fetchWarnings = async (appIdToUse = targetAppId) => {
     try {
-      const res = await fetch(`${API_BASE}/api/test-results/warnings?appId=all`, { headers: authHeaders });
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(appIdToUse) };
+      const res = await fetch(`${API_BASE}/api/test-results/warnings?appId=${appIdToUse}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setWarnings(data.warnings || []);
-        sessionStorage.setItem(`qc_dashboard_warnings_all`, JSON.stringify(data.warnings || []));
+        sessionStorage.setItem(`qc_dashboard_warnings_${appIdToUse}`, JSON.stringify(data.warnings || []));
       }
     } catch (error) {
       console.error('Error fetching warnings:', error);
@@ -151,7 +160,7 @@ const Dashboard: React.FC = () => {
     return (
       <div className='dashboard-empty'>
         <h2>No Tests Available</h2>
-        <p>There are currently no tests assigned to you.</p>
+        <p>There are currently no tests assigned to you for {currentApp ? currentApp.name : 'this application'}.</p>
         <p>Contact your administrator for test assignments.</p>
       </div>
     );
@@ -174,7 +183,7 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className='dashboard'>
-      <h2>Available Tests</h2>
+      <h2>Available Tests {currentApp ? `— ${currentApp.name}` : ''}</h2>
       <p className='loop-hint'>
         Complete each test in order. Only the current test is unlocked; finish it to unlock the next. The cycle repeats endlessly.
       </p>

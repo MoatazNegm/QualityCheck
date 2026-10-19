@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 
@@ -16,6 +16,7 @@ interface Test {
   name: string;
   description: string;
   is_deleted?: number | boolean;
+  app_id?: number | null;
 }
 
 interface User {
@@ -137,7 +138,20 @@ const ReportsView: React.FC = () => {
 
   const isFullAccess = !!(user?.isAdmin || user?.userGroups?.includes('admins') || user?.userGroups?.includes('developers'));
 
-  const [reportsSubTab, setReportsSubTab] = useState<'user' | 'test' | 'passed' | 'failed' | 'points' | 'payments'>('user');
+  const [reportsSubTab, setReportsSubTabState] = useState<'user' | 'test' | 'passed' | 'failed' | 'points' | 'payments'>(() => {
+    const saved = localStorage.getItem('qc_reports_sub_tab');
+    if (saved && ['user', 'test', 'passed', 'failed', 'points', 'payments'].includes(saved)) {
+      return saved as any;
+    }
+    return 'user';
+  });
+
+  const setReportsSubTab = (tab: 'user' | 'test' | 'passed' | 'failed' | 'points' | 'payments') => {
+    setReportsSubTabState(tab);
+    localStorage.setItem('qc_reports_sub_tab', tab);
+  };
+
+  const hasGeneratedReportRef = useRef<boolean>(sessionStorage.getItem('qc_reports_has_run') === 'true');
 
   // --- App Selection States for Multi-App Reporting ---
   const [reportAppIds, setReportAppIds] = useState<number[]>([]);
@@ -365,6 +379,16 @@ const ReportsView: React.FC = () => {
       setFailedReportAppIds(defaultIds);
       setPointsReportAppIds(defaultIds);
       setPaymentsReportAppIds(defaultIds);
+
+      // Scoped tests for the active app
+      if (tests.length > 0 && !isAdminPanelMode && currentApp) {
+        const appActiveTests = tests.filter(t => !t.is_deleted && (t.app_id || 1) === currentApp.id).map(t => t.id);
+        setPassedReportTestIds(appActiveTests);
+        setFailedReportTestIds(appActiveTests);
+        setPointsReportTestIds(appActiveTests);
+        setTestReportTestIds(appActiveTests);
+      }
+
       if (versions.length > 0) {
         const currVersionIds = getCurrentVersionIdsForApps(defaultIds, versions);
         setReportVersionIds(currVersionIds);
@@ -372,6 +396,23 @@ const ReportsView: React.FC = () => {
         setPassedReportVersionIds(currVersionIds);
         setPointsReportVersionIds(currVersionIds);
         setFailedReportVersionIds(currVersionIds);
+
+        // If the user previously ran/viewed a report, automatically run the SAME report for the newly selected app!
+        if (hasGeneratedReportRef.current) {
+          if (reportsSubTab === 'points') {
+            fetchPointsReport(defaultIds, currVersionIds);
+          } else if (reportsSubTab === 'failed') {
+            fetchFailedReport(defaultIds, currVersionIds);
+          } else if (reportsSubTab === 'passed') {
+            fetchPassedReport(defaultIds, currVersionIds);
+          } else if (reportsSubTab === 'test') {
+            fetchTestReport(defaultIds, currVersionIds);
+          } else if (reportsSubTab === 'user') {
+            fetchUserReport(defaultIds, currVersionIds);
+          } else if (reportsSubTab === 'payments') {
+            fetchPaymentsReport(defaultIds);
+          }
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -391,6 +432,22 @@ const ReportsView: React.FC = () => {
           setPassedReportVersionIds(currVersionIds);
           setPointsReportVersionIds(currVersionIds);
           setFailedReportVersionIds(currVersionIds);
+
+          if (hasGeneratedReportRef.current) {
+            if (reportsSubTab === 'points') {
+              fetchPointsReport(defaultAppIds, currVersionIds);
+            } else if (reportsSubTab === 'failed') {
+              fetchFailedReport(defaultAppIds, currVersionIds);
+            } else if (reportsSubTab === 'passed') {
+              fetchPassedReport(defaultAppIds, currVersionIds);
+            } else if (reportsSubTab === 'test') {
+              fetchTestReport(defaultAppIds, currVersionIds);
+            } else if (reportsSubTab === 'user') {
+              fetchUserReport(defaultAppIds, currVersionIds);
+            } else if (reportsSubTab === 'payments') {
+              fetchPaymentsReport(defaultAppIds);
+            }
+          }
         }
       }
     } catch {
@@ -404,9 +461,13 @@ const ReportsView: React.FC = () => {
       if (res.ok) {
         const data: Test[] = await res.json();
         setTests(data);
-        const activeTestIds = data.filter(t => !t.is_deleted).map(t => t.id);
+        const activeTestIds = (!isAdminPanelMode && currentApp)
+          ? data.filter(t => !t.is_deleted && (t.app_id || 1) === currentApp.id).map(t => t.id)
+          : data.filter(t => !t.is_deleted).map(t => t.id);
         setPassedReportTestIds(activeTestIds);
         setFailedReportTestIds(activeTestIds);
+        setPointsReportTestIds(activeTestIds);
+        setTestReportTestIds(activeTestIds);
       }
     } catch {
       // ignore
@@ -492,20 +553,24 @@ const ReportsView: React.FC = () => {
   };
 
   // User Report
-  const fetchUserReport = async () => {
+  const fetchUserReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     const targetUserIds = isFullAccess ? reportUserIds : (user?.id ? [user.id] : []);
     if (targetUserIds.length === 0 || !reportStartDate || !reportEndDate) return;
     setReportLoading(true);
     setReportError('');
     setReportData(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : reportAppIds;
+      const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : reportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/user-report`, window.location.origin);
       url.searchParams.set('userId', targetUserIds.join(','));
       url.searchParams.set('startDate', reportStartDate);
       url.searchParams.set('endDate', reportEndDate);
-      if (reportVersionIds.length > 0) url.searchParams.set('versionIds', reportVersionIds.join(','));
-      if (reportAppIds.length > 0 && reportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', reportAppIds.join(','));
+      if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -516,6 +581,8 @@ const ReportsView: React.FC = () => {
         setReportError(data.error || 'Failed to load report');
       } else {
         setReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('User report fetch failed:', err);
@@ -576,12 +643,14 @@ const ReportsView: React.FC = () => {
     }
   };
 
-  const fetchTestReport = async () => {
+  const fetchTestReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     if (!testReportStartDate || !testReportEndDate) return;
     setTestReportLoading(true);
     setTestReportError('');
     setTestReportData(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : testReportAppIds;
+      const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : testReportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/test-report`, window.location.origin);
       if (testReportTestIds.length > 0) {
         url.searchParams.set('testId', testReportTestIds.join(','));
@@ -590,10 +659,12 @@ const ReportsView: React.FC = () => {
       }
       url.searchParams.set('startDate', testReportStartDate);
       url.searchParams.set('endDate', testReportEndDate);
-      if (testReportVersionIds.length > 0) url.searchParams.set('versionIds', testReportVersionIds.join(','));
+      if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
       if (testReportSelectedStepId) url.searchParams.set('stepId', String(testReportSelectedStepId));
-      if (testReportAppIds.length > 0 && testReportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', testReportAppIds.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -604,6 +675,8 @@ const ReportsView: React.FC = () => {
         setTestReportError(data.error || 'Failed to load report');
       } else {
         setTestReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('Test report fetch failed:', err);
@@ -614,12 +687,14 @@ const ReportsView: React.FC = () => {
   };
 
   // Passed Steps Report
-  const fetchPassedReport = async () => {
+  const fetchPassedReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     if (!passedReportStartDate || !passedReportEndDate) return;
     setPassedReportLoading(true);
     setPassedReportError('');
     setPassedReportData(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : passedReportAppIds;
+      const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : passedReportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/passed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? passedReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -634,9 +709,11 @@ const ReportsView: React.FC = () => {
       }
       url.searchParams.set('startDate', passedReportStartDate);
       url.searchParams.set('endDate', passedReportEndDate);
-      if (passedReportVersionIds.length > 0) url.searchParams.set('versionIds', passedReportVersionIds.join(','));
-      if (passedReportAppIds.length > 0 && passedReportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', passedReportAppIds.join(','));
+      if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -647,6 +724,8 @@ const ReportsView: React.FC = () => {
         setPassedReportError(data.error || 'Failed to load report');
       } else {
         setPassedReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('Passed report fetch failed:', err);
@@ -656,12 +735,14 @@ const ReportsView: React.FC = () => {
     }
   };
 
-  const fetchFailedReport = async () => {
+  const fetchFailedReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     if (!failedReportStartDate || !failedReportEndDate) return;
     setFailedReportLoading(true);
     setFailedReportError('');
     setFailedReportData(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : failedReportAppIds;
+      const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : failedReportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/failed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? failedReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -676,9 +757,11 @@ const ReportsView: React.FC = () => {
       }
       url.searchParams.set('startDate', failedReportStartDate);
       url.searchParams.set('endDate', failedReportEndDate);
-      if (failedReportVersionIds.length > 0) url.searchParams.set('versionIds', failedReportVersionIds.join(','));
-      if (failedReportAppIds.length > 0 && failedReportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', failedReportAppIds.join(','));
+      if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -689,6 +772,8 @@ const ReportsView: React.FC = () => {
         setFailedReportError(data.error || 'Failed to load report');
       } else {
         setFailedReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('Failed report fetch failed:', err);
@@ -699,19 +784,22 @@ const ReportsView: React.FC = () => {
   };
 
   // Payments Report
-  const fetchPaymentsReport = async () => {
+  const fetchPaymentsReport = async (overrideAppIds?: any) => {
     setPaymentsReportLoading(true);
     setPaymentsReportError('');
     setPaymentsReportData(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : paymentsReportAppIds;
       const url = new URL(`${API_BASE}/api/reports/points-payments`, window.location.origin);
       if (paymentsReportUserIds.length > 0) {
         url.searchParams.set('userId', paymentsReportUserIds.join(','));
       } else {
         url.searchParams.set('userId', 'all');
       }
-      if (paymentsReportAppIds.length > 0 && paymentsReportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', paymentsReportAppIds.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -722,6 +810,8 @@ const ReportsView: React.FC = () => {
         setPaymentsReportError(data.error || 'Failed to load report');
       } else {
         setPaymentsReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('Payments report fetch failed:', err);
@@ -732,7 +822,7 @@ const ReportsView: React.FC = () => {
   };
 
   // Points Report
-  const fetchPointsReport = async () => {
+  const fetchPointsReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     if (!pointsReportStartDate || !pointsReportEndDate) return;
     setPointsReportLoading(true);
     setPointsReportError('');
@@ -740,6 +830,8 @@ const ReportsView: React.FC = () => {
     setUserProgressCache({});
     setExpandedPointsUser(null);
     try {
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : pointsReportAppIds;
+      const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : pointsReportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
       const targetUserIds = isFullAccess ? pointsReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -752,13 +844,15 @@ const ReportsView: React.FC = () => {
       } else {
         url.searchParams.set('testId', 'all');
       }
-      if (pointsReportVersionIds.length > 0) {
-        url.searchParams.set('versionIds', pointsReportVersionIds.join(','));
+      if (versionIdsToUse.length > 0) {
+        url.searchParams.set('versionIds', versionIdsToUse.join(','));
       }
       url.searchParams.set('startDate', pointsReportStartDate);
       url.searchParams.set('endDate', pointsReportEndDate);
-      if (pointsReportAppIds.length > 0 && pointsReportAppIds.length < apps.length) {
-        url.searchParams.set('appIds', pointsReportAppIds.join(','));
+      if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
+        url.searchParams.set('appIds', appIdsToUse.join(','));
+      } else if (appIdsToUse.length === 1) {
+        url.searchParams.set('appIds', String(appIdsToUse[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -769,6 +863,8 @@ const ReportsView: React.FC = () => {
         setPointsReportError(data.error || 'Failed to load points report');
       } else {
         setPointsReportData(data);
+        hasGeneratedReportRef.current = true;
+        sessionStorage.setItem('qc_reports_has_run', 'true');
       }
     } catch (err) {
       console.error('Points report fetch failed:', err);
@@ -1064,7 +1160,7 @@ const ReportsView: React.FC = () => {
 
             <button
               className="btn"
-              onClick={fetchUserReport}
+              onClick={() => fetchUserReport()}
               disabled={reportLoading || (isFullAccess && reportUserIds.length === 0) || reportVersionIds.length === 0 || !reportStartDate || !reportEndDate}
             >
               {reportLoading ? 'Generating...' : 'Generate Report'}
@@ -1432,7 +1528,7 @@ const ReportsView: React.FC = () => {
 
             <button
               className="btn"
-              onClick={fetchTestReport}
+              onClick={() => fetchTestReport()}
               disabled={testReportLoading || testReportVersionIds.length === 0 || !testReportStartDate || !testReportEndDate}
             >
               {testReportLoading ? 'Generating...' : 'Generate Report'}
@@ -1756,7 +1852,7 @@ const ReportsView: React.FC = () => {
               />
             </div>
 
-            <button className="btn" onClick={fetchPassedReport} disabled={passedReportLoading || (isFullAccess && passedReportUserIds.length === 0) || passedReportVersionIds.length === 0 || !passedReportStartDate || !passedReportEndDate}>
+            <button className="btn" onClick={() => fetchPassedReport()} disabled={passedReportLoading || (isFullAccess && passedReportUserIds.length === 0) || passedReportVersionIds.length === 0 || !passedReportStartDate || !passedReportEndDate}>
               {passedReportLoading ? 'Generating...' : 'Generate Report'}
             </button>
           </div>
@@ -2127,7 +2223,7 @@ const ReportsView: React.FC = () => {
 
             <button
               className="btn"
-              onClick={fetchFailedReport}
+              onClick={() => fetchFailedReport()}
               disabled={failedReportLoading || (isFullAccess && failedReportUserIds.length === 0) || !failedReportStartDate || !failedReportEndDate}
             >
               {failedReportLoading ? 'Generating...' : 'Generate Report'}
@@ -2499,7 +2595,7 @@ const ReportsView: React.FC = () => {
               />
             </div>
 
-            <button className="btn" onClick={fetchPointsReport} disabled={pointsReportLoading || (isFullAccess && pointsReportUserIds.length === 0) || pointsReportVersionIds.length === 0 || !pointsReportStartDate || !pointsReportEndDate}>
+            <button className="btn" onClick={() => fetchPointsReport()} disabled={pointsReportLoading || (isFullAccess && pointsReportUserIds.length === 0) || pointsReportVersionIds.length === 0 || !pointsReportStartDate || !pointsReportEndDate}>
               {pointsReportLoading ? 'Generating...' : 'Generate Points Report'}
             </button>
           </div>
@@ -3000,7 +3096,7 @@ const ReportsView: React.FC = () => {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={fetchPaymentsReport}
+              onClick={() => fetchPaymentsReport()}
               disabled={paymentsReportLoading || (isFullAccess && paymentsReportUserIds.length === 0)}
               style={{ alignSelf: 'flex-end', padding: '0.6rem 1.4rem' }}
             >

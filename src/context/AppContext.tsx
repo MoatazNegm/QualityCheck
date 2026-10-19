@@ -29,6 +29,7 @@ interface AppContextType {
   appHeaders: Record<string, string>;
   selectApp: (appOrId: AppItem | number) => void;
   selectAdminPanel: () => void;
+  setIsAdminPanelMode: (val: boolean) => void;
   refreshApps: () => Promise<void>;
   createApp: (name: string, description?: string) => Promise<AppItem>;
   suspendApp: (appId: number, suspend?: boolean) => Promise<{ message: string; is_suspended: boolean }>;
@@ -131,9 +132,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const setAdminPanelMode = (val: boolean) => {
+    setIsAdminPanelMode(val);
+    localStorage.setItem('qc_admin_panel_mode', val ? 'true' : 'false');
+  };
+
   const selectAdminPanel = () => {
-    setIsAdminPanelMode(true);
-    localStorage.setItem('qc_admin_panel_mode', 'true');
+    setAdminPanelMode(true);
   };
 
   const createApp = async (name: string, description?: string): Promise<AppItem> => {
@@ -224,6 +229,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         appHeaders,
         selectApp,
         selectAdminPanel,
+        setIsAdminPanelMode: setAdminPanelMode,
         refreshApps: fetchApps,
         createApp,
         suspendApp,

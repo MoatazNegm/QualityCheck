@@ -388,7 +388,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const user = await usersDb.prepare('SELECT id, username, is_admin, is_suspended, user_groups, created_at FROM users WHERE id = ?').get(userId);
+    const user = await usersDb.prepare('SELECT id, username, is_admin, is_suspended, user_groups FROM users WHERE id = ?').get(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }

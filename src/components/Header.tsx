@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 
@@ -7,7 +7,8 @@ const API_BASE = '';
 
 const Header: React.FC = () => {
   const { user, token, logout, changePassword } = useAuth();
-  const { currentApp, isAdminPanelMode } = useApp();
+  const { currentApp, isAdminPanelMode, setIsAdminPanelMode } = useApp();
+  const location = useLocation();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -84,12 +85,12 @@ const Header: React.FC = () => {
         <div className='header-content'>
           <div className='header-left'>
             <img src='/Q.png' alt='Q logo' className='header-q-logo' />
-            <NavLink to='/dashboard' className='logo'>
+            <NavLink to='/dashboard' className='logo' onClick={() => setIsAdminPanelMode(false)}>
               QualityCheck
             </NavLink>
           </div>
           <div className='header-center' style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            {isAdminPanelMode ? (
+            {isAdminPanelMode && location.pathname === '/admin' ? (
               <span
                 style={{
                   fontSize: '0.85rem',

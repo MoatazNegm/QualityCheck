@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000163**: Persistent Multi-App Reports Navigation, Bidirectional Admin & Dashboard App Context Synchronization, and Dropbox Asset Management:
+  - **Persistent Report Sub-Tabs & Auto-Refresh Across Apps**: Retained active report sub-tab (`qc_reports_sub_tab`) across session navigation and app switching. When switching applications from the sidebar while viewing `/reports`, navigation stays on `/reports` and automatically loads the active report for the newly selected application.
+  - **Bidirectional App Synchronization (Admin Portal ⇄ Dashboard)**: Navigating from Dashboard or Reports to the Admin Panel retains the selected app and opens directly into its App Solution. Navigating from the Admin Panel back to the Dashboard preserves the active app, updating the Header, Sidebar, and Dashboard test suites accordingly.
+  - **App-Scoped Dashboard Retrieval**: Switched Dashboard test loading and statistics to filter by `currentApp.id` instead of hardcoding `appId=all`, ensuring users immediately see the relevant tests and metrics for their selected application.
+  - **Automated Dropbox File Management & Cleanup**: Integrated automated Dropbox sync verification, orphaned file cleanup utilities, and settings route enhancements.
 - **v1.0000162**: Exemption of Automated API Key Agents from Anti-Cheat Point Withholding and Warning Rules, and Point Restoration:
   - **Exempted Automated API Key Agents from Point Withholding**: In `server/routes/test-results.js`, when a caller authenticates via an API key (`X-API-Key`, `api-key`, `Authorization: Bearer qc_...`, or via an account linked to an active API key), they are treated as an automated agent calling the API directly without an interface. The cross-test consecutive failure rule (which zeroes out awarded step points and issues user warnings when consecutive step failures happen across different tests within 180 seconds) is completely bypassed. Agents always receive 100% of awarded step points for all submitted steps.
   - **Exempted Automated API Key Agents from User Warnings**: Automated agents never have entries written to `user_warnings`, and `GET /api/test-results/warnings` returns an empty array for agent callers.

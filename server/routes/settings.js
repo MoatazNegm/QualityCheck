@@ -154,4 +154,30 @@ router.post('/test-dropbox', authenticateToken, requireAdmin, async (req, res) =
   }
 });
 
+// Check Dropbox space usage (Admin only)
+router.get('/dropbox-space', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const space = await dropboxService.getDropboxSpaceUsage();
+    res.json(space);
+  } catch (error) {
+    console.error('Get Dropbox space error:', error);
+    res.status(400).json({ error: error.message || 'Failed to query Dropbox space' });
+  }
+});
+
+// Clean up Dropbox storage: delete month-old files and ensure free space >= 80% (Admin only)
+router.post('/cleanup-dropbox', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { retentionDays = 30, minFreeSpaceRatio = 0.80 } = req.body || {};
+    const result = await dropboxService.cleanupDropboxFiles({
+      retentionDays: Number(retentionDays) || 30,
+      minFreeSpaceRatio: Number(minFreeSpaceRatio) || 0.80
+    });
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Dropbox cleanup error:', error);
+    res.status(400).json({ error: error.message || 'Failed to clean up Dropbox storage' });
+  }
+});
+
 module.exports = router;

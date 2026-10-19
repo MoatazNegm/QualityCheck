@@ -98,8 +98,19 @@ const AdminPanel: React.FC = () => {
   const [importSaveError, setImportSaveError] = useState('');
   const [importSaveSuccess, setImportSaveSuccess] = useState('');
   const [importError, setImportError] = useState('');
-  const [activeTab, setActiveTab] = useState<'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings' | 'api-keys'>('upload');
   const [thresholdMinutes, setThresholdMinutes] = useState<string>('3');
+  const [activeTab, setActiveTabState] = useState<'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings' | 'api-keys'>(() => {
+    const saved = localStorage.getItem('qc_admin_active_tab');
+    if (saved && ['upload', 'assign', 'users', 'manage', 'disabled', 'versions', 'reports', 'test-reports', 'backup', 'settings', 'api-keys'].includes(saved)) {
+      return saved as any;
+    }
+    return 'upload';
+  });
+
+  const setActiveTab = (tab: 'upload' | 'assign' | 'users' | 'manage' | 'disabled' | 'versions' | 'reports' | 'test-reports' | 'backup' | 'settings' | 'api-keys') => {
+    setActiveTabState(tab);
+    localStorage.setItem('qc_admin_active_tab', tab);
+  };
   const [maxMonthlyRounds, setMaxMonthlyRounds] = useState<string>('8');
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
