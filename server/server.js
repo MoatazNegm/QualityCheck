@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const dotenv = require('dotenv');
 const path = require('path');
 const fs = require('fs');
@@ -21,6 +22,10 @@ const PORT = process.env.PORT || 4006;
 
 // CORS Middleware
 app.use(cors({ origin: true, credentials: true }));
+
+// Gzip responses: report payloads are several MB of JSON (~10-20x smaller compressed),
+// and Vercel rejects serverless responses over 4.5 MB.
+app.use(compression());
 
 // Body Middleware
 app.use(express.json({ limit: '100mb' }));

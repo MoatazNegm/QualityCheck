@@ -487,9 +487,31 @@ async function bumpRound(userId, appId = 1) {
   }
 }
 
+// Bump this whenever initDB() or runMigrations() gains a new step. On startup the
+// full migration chain (~110 sequential statements, several of them full-table
+// UPDATEs) only runs when the stored marker differs. Every query awaits dbReady,
+// so on Vercel this used to block the first requests of every cold start.
+const SCHEMA_VERSION = '2026-10-22.1';
+
+async function isSchemaCurrent() {
+  try {
+    const res = await clientWrapper.execute({
+      sql: "SELECT value FROM settings WHERE key = 'schema_version' LIMIT 1"
+    });
+    return res.rows.length > 0 && res.rows[0].value === SCHEMA_VERSION;
+  } catch {
+    return false; // settings table missing -> fresh database
+  }
+}
+
 // Perform migrations asynchronously using clientWrapper to prevent deadlocks
 async function runMigrations() {
   try {
+    if (await isSchemaCurrent()) {
+      console.log(`[Database] Schema ${SCHEMA_VERSION} is current, skipping migrations.`);
+      return;
+    }
+
     await initDB();
 
     const trCols = (await clientWrapper.execute({ sql: 'PRAGMA table_info(test_results)' })).rows;
@@ -988,6 +1010,12 @@ async function runMigrations() {
     });
     await clientWrapper.execute({
       sql: `DELETE FROM user_warnings WHERE user_id IN (SELECT user_id FROM api_keys)`
+    });
+
+    await clientWrapper.execute({
+      sql: `INSERT INTO settings (key, value, description) VALUES ('schema_version', ?, 'Database schema/migration marker (managed automatically)')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      args: [SCHEMA_VERSION]
     });
 
     console.log('[Database] Schema initialization and migrations completed successfully.');

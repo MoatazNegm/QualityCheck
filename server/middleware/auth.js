@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { testsDb } = require('../db/db');
+const { testsDb, cache } = require('../db/db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -188,8 +188,16 @@ const authenticateToken = async (req, res, next) => {
       user.assignedApps = [user.appId];
     } else {
       try {
-        const uRows = await testsDb.prepare('SELECT app_id FROM user_apps WHERE user_id = ?').all(user.userId);
-        user.assignedApps = uRows.map(r => r.app_id);
+        // Cached briefly: this ran on every request and cost a full DB round trip each time.
+        // users.js invalidates 'user_apps:' whenever assignments are removed.
+        const cacheKey = `user_apps:${user.userId}`;
+        let assigned = cache.get(cacheKey);
+        if (!assigned) {
+          const uRows = await testsDb.prepare('SELECT app_id FROM user_apps WHERE user_id = ?').all(user.userId);
+          assigned = uRows.map(r => r.app_id);
+          cache.set(cacheKey, assigned, 30000);
+        }
+        user.assignedApps = assigned;
       } catch (uaErr) {
         user.assignedApps = user.assignedApps || [];
       }

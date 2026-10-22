@@ -567,6 +567,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       { sql: 'DELETE FROM user_warnings WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
     ], 'write');
+    cache.invalidate(`user_apps:${userId}`);
 
     // Remove the user's uploaded files from disk and database.
     let deletedFiles = 0;
@@ -640,6 +641,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
         await testsDb.prepare('DELETE FROM user_apps WHERE user_id = ?').run(id);
         await testsDb.prepare('DELETE FROM test_assignments WHERE user_id = ?').run(id);
       }
+      cache.invalidate(`user_apps:${parseInt(id, 10)}`);
 
       for (const appId of targetAppIds) {
         await testsDb.prepare('INSERT OR IGNORE INTO user_apps (user_id, app_id) VALUES (?, ?)').run(id, appId);

@@ -35,6 +35,9 @@ async function ensureAdminUser() {
       } catch {
         groups = [];
       }
+      if (admin.is_admin && !admin.is_suspended && groups.includes('admins')) {
+        return; // already correct; skip the write on every cold start
+      }
       if (!groups.includes('admins')) {
         groups.push('admins');
       }

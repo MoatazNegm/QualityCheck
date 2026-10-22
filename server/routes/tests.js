@@ -126,25 +126,41 @@ function isApiKeyUser(req) {
 // Returns the currently active (unlocked) test id for a user, skipping monthly-locked tests, 
 // and automatically skipping tests that were already completed or hard-failed in the current round.
 // Automated test processes using an API key are exempt from maximum monthly round limitations.
-async function getActiveTestId(userId, appId = 1, isApiKey = false) {
+// `pre` lets a caller that already loaded these values for the same user/app pass
+// them in, so each one is not fetched from the database a second time.
+async function getActiveTestId(userId, appId = 1, isApiKey = false, pre = null) {
   const cleanAppId = parseInt(appId, 10) || 1;
-  const assigned = await getAssignedTestsOrdered(userId, cleanAppId);
+  const assigned = pre ? pre.assigned : await getAssignedTestsOrdered(userId, cleanAppId);
   if (assigned.length === 0) return null;
 
-  const maxRounds = await getMaxMonthlyTestRounds();
   const testIds = assigned.map(t => t.id);
-  
-  const monthlyRoundsMap = await getBatchMonthlyRounds(userId, testIds);
-  const currentRound = await getRound(userId, cleanAppId);
-  const completionMap = await getBatchCompletionCounts(userId, testIds, currentRound);
-  const stepCountsMap = await getBatchStepCounts(testIds);
+  const placeholders = testIds.map(() => '?').join(',');
 
-  const failRows = await testsDb.prepare(`
-    SELECT DISTINCT ts.test_id 
-    FROM test_results tr
-    JOIN test_steps ts ON tr.step_id = ts.id
-    WHERE tr.user_id = ? AND tr.round_id = ? AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
-  `).all(userId, currentRound);
+  let maxRounds, monthlyRoundsMap, currentRound, stepCountsMap, completionMap;
+  if (pre) {
+    ({ maxRounds, monthlyRoundsMap, currentRound, stepCountsMap, completionMap } = pre);
+  } else {
+    [maxRounds, monthlyRoundsMap, currentRound, stepCountsMap] = await Promise.all([
+      getMaxMonthlyTestRounds(),
+      getBatchMonthlyRounds(userId, testIds),
+      getRound(userId, cleanAppId),
+      getBatchStepCounts(testIds)
+    ]);
+  }
+
+  const [completionRows, failRows, currentVersionId, row] = await Promise.all([
+    completionMap ? null : getBatchCompletionCounts(userId, testIds, currentRound),
+    testsDb.prepare(`
+      SELECT DISTINCT ts.test_id
+      FROM test_results tr
+      JOIN test_steps ts ON tr.step_id = ts.id
+      WHERE tr.user_id = ? AND tr.round_id = ? AND tr.test_id IN (${placeholders})
+        AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
+    `).all(userId, currentRound, ...testIds),
+    getCurrentVersionId(cleanAppId),
+    testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)').get(userId, cleanAppId)
+  ]);
+  if (!completionMap) completionMap = completionRows;
   
   const hardStopMap = {};
   for (const r of failRows) hardStopMap[r.test_id] = true;
@@ -171,17 +187,13 @@ async function getActiveTestId(userId, appId = 1, isApiKey = false) {
 
     // Auto-bump round for this app and restart loop
     await bumpRound(userId, cleanAppId);
-    
-    const currentVersionId = await getCurrentVersionId(cleanAppId);
+
     const firstCandidate = assigned[0];
     await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
       .run(userId, cleanAppId, firstCandidate.id, currentVersionId);
     
     return firstCandidate.id;
   }
-
-  const currentVersionId = await getCurrentVersionId(cleanAppId);
-  const row = await testsDb.prepare('SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)').get(userId, cleanAppId);
 
   if (row) {
     const isValidAndAvailable = availableAssigned.some(t => t.id === row.active_test_id);
@@ -391,15 +403,21 @@ router.get('/', authenticateToken, async (req, res) => {
       }));
     } else {
       const isApiUser = isApiKeyUser(req);
-      const maxRounds = await getMaxMonthlyTestRounds();
-      const assigned = await getAssignedTestsOrdered(req.user.userId, appId);
+      const roundAppId = appId === 'all' ? 1 : appId;
+      const [maxRounds, assigned, currentRound] = await Promise.all([
+        getMaxMonthlyTestRounds(),
+        getAssignedTestsOrdered(req.user.userId, appId),
+        getRound(req.user.userId, roundAppId)
+      ]);
       const testIds = assigned.map(t => t.id);
 
-      // Batch queries instead of N+1 loops
-      const monthlyRoundsMap = await getBatchMonthlyRounds(req.user.userId, testIds);
-      const currentRound = await getRound(req.user.userId, appId === 'all' ? 1 : appId);
-      const completionMap = await getBatchCompletionCounts(req.user.userId, testIds, currentRound);
-      const stepCountsMap = await getBatchStepCounts(testIds);
+      // Batch queries instead of N+1 loops, issued in parallel
+      const [monthlyRoundsMap, completionMap, stepCountsMap, totalPointsMap] = await Promise.all([
+        getBatchMonthlyRounds(req.user.userId, testIds),
+        getBatchCompletionCounts(req.user.userId, testIds, currentRound),
+        getBatchStepCounts(testIds),
+        getBatchTotalPoints(testIds)
+      ]);
 
       // Determine active test using pre-fetched monthly rounds (bypassed for API key users)
       const availableAssigned = isApiUser
@@ -407,10 +425,11 @@ router.get('/', authenticateToken, async (req, res) => {
         : assigned.filter(t => (monthlyRoundsMap[t.id] || 0) < maxRounds);
       let activeTestId = null;
       if (availableAssigned.length > 0) {
-        activeTestId = await getActiveTestId(req.user.userId, appId, isApiUser);
+        // For a single app the data above is exactly what getActiveTestId needs;
+        // 'all' resolves to app 1 inside it, so it must load its own.
+        const pre = appId === 'all' ? null : { assigned, maxRounds, monthlyRoundsMap, currentRound, completionMap, stepCountsMap };
+        activeTestId = await getActiveTestId(req.user.userId, appId, isApiUser, pre);
       }
-
-      const totalPointsMap = await getBatchTotalPoints(testIds);
       tests = assigned.map(t => {
         const mRounds = monthlyRoundsMap[t.id] || 0;
         const isMonthlyLocked = isApiUser ? false : (mRounds >= maxRounds);
