@@ -106,6 +106,59 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Get stats for all apps in a single batched query (avoids N+1 on dashboard and admin panel load)
+router.get('/stats', authenticateToken, async (req, res) => {
+  try {
+    const isGlobal = isGlobalAdminUser(req.user);
+    const assigned = getUserAssignedApps(req.user);
+
+    const appsList = await testsDb.prepare(`
+      SELECT id, name, description, created_at,
+             COALESCE(is_suspended, 0) as is_suspended,
+             COALESCE(is_deleted, 0) as is_deleted
+      FROM apps
+      WHERE COALESCE(is_deleted, 0) = 0
+    `).all();
+
+    const allowedApps = appsList.filter(a => isGlobal || assigned.includes(a.id));
+    if (allowedApps.length === 0) return res.json({});
+
+    const [testsRows, versionsRows, currentVersionsRows, userAppsRows, execRows] = await Promise.all([
+      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM tests WHERE COALESCE(is_deleted, 0) = 0 GROUP BY app_id').all(),
+      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM versions GROUP BY app_id').all(),
+      testsDb.prepare('SELECT app_id, name FROM versions WHERE is_current = 1').all(),
+      testsDb.prepare('SELECT app_id, COUNT(DISTINCT user_id) as c FROM user_apps GROUP BY app_id').all(),
+      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM test_results GROUP BY app_id').all()
+    ]);
+
+    const testsMap = Object.fromEntries(testsRows.map(r => [r.app_id, r.c]));
+    const versionsMap = Object.fromEntries(versionsRows.map(r => [r.app_id, r.c]));
+    const currentVersionMap = Object.fromEntries(currentVersionsRows.map(r => [r.app_id, r.name]));
+    const userAppsMap = Object.fromEntries(userAppsRows.map(r => [r.app_id, r.c]));
+    const execMap = Object.fromEntries(execRows.map(r => [r.app_id, r.c]));
+
+    const result = {};
+    for (const app of allowedApps) {
+      result[app.id] = {
+        id: app.id,
+        name: app.name,
+        description: app.description,
+        is_suspended: !!app.is_suspended,
+        is_deleted: !!app.is_deleted,
+        testsCount: testsMap[app.id] || 0,
+        versionsCount: versionsMap[app.id] || 0,
+        currentVersion: currentVersionMap[app.id] || 'None',
+        usersCount: userAppsMap[app.id] || 0,
+        executionsCount: execMap[app.id] || 0
+      };
+    }
+    res.json(result);
+  } catch (error) {
+    console.error('Batch app stats error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get stats for an app (for Admin overview cards)
 router.get('/:id/stats', authenticateToken, async (req, res) => {
   try {

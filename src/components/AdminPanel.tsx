@@ -308,21 +308,15 @@ const AdminPanel: React.FC = () => {
   const fetchAllAppStats = async () => {
     if (!token || apps.length === 0) return;
     try {
-      const statsObj: Record<number, any> = {};
-      await Promise.all(
-        apps.map(async app => {
-          try {
-            const res = await fetch(`${API_BASE}/api/apps/${app.id}/stats`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (res.ok) {
-              statsObj[app.id] = await res.json();
-            }
-          } catch {}
-        })
-      );
-      setAppStatsMap(statsObj);
-    } catch {}
+      const res = await fetch(`${API_BASE}/api/apps/stats`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setAppStatsMap(await res.json());
+      }
+    } catch (err) {
+      console.error('Failed to fetch batch app stats:', err);
+    }
   };
 
   const fetchAllAppTests = async () => {

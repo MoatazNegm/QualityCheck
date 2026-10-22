@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { testsDb, usersDb } = require('../db/db');
+const { testsDb, usersDb, getRound, cache } = require('../db/db');
 const { authenticateToken, requireAdmin, requireReportAccess } = require('../middleware/auth');
 const { isGlobalAdminUser, getUserAssignedApps, canUserAccessApp } = require('../utils/appContext');
 
@@ -183,7 +183,61 @@ function parseAppIds(req) {
   return filtered.length > 0 ? filtered : (userAssigned.length > 0 ? userAssigned : [0]);
 }
 
+async function getUserNamesMap() {
+  const cached = cache.get('all_user_names_map');
+  if (cached) return cached;
+  const rows = await usersDb.prepare('SELECT id, username FROM users').all();
+  const map = Object.fromEntries(rows.map(u => [u.id, u.username]));
+  cache.set('all_user_names_map', map, 30000);
+  return map;
+}
+
+async function getAllStepCountsMap() {
+  const cached = cache.get('all_test_step_counts_map');
+  if (cached) return cached;
+  const rows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id').all();
+  const map = Object.fromEntries(rows.map(r => [r.test_id, r.c]));
+  cache.set('all_test_step_counts_map', map, 30000);
+  return map;
+}
+
+async function getAllLastStepsMap() {
+  const cached = cache.get('all_test_last_steps_map');
+  if (cached) return cached;
+  const rows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps WHERE COALESCE(points, value, 0) != -1 ORDER BY test_id, step_number ASC').all();
+  const map = {};
+  for (const step of rows) {
+    map[step.test_id] = step.id;
+  }
+  cache.set('all_test_last_steps_map', map, 30000);
+  return map;
+}
+
 async function getAppNamesMap(req) {
+  try {
+    const isGlobal = isGlobalAdminUser(req ? req.user : null);
+    const userAssigned = req ? getUserAssignedApps(req.user) : [];
+
+    let allAppsMap = cache.get('all_app_names_map');
+    if (!allAppsMap) {
+      const apps = await testsDb.prepare('SELECT id, name FROM apps WHERE COALESCE(is_deleted, 0) = 0').all();
+      allAppsMap = Object.fromEntries(apps.map(a => [a.id, a.name]));
+      cache.set('all_app_names_map', allAppsMap, 30000);
+    }
+    if (isGlobal || !req || !req.user) {
+      return allAppsMap;
+    }
+    const filtered = {};
+    for (const aid of userAssigned) {
+      if (allAppsMap[aid]) filtered[aid] = allAppsMap[aid];
+    }
+    return filtered;
+  } catch (e) {
+    return { 1: 'TopStor' };
+  }
+}
+
+async function _old_getAppNamesMap(req) {
   try {
     const isGlobal = isGlobalAdminUser(req ? req.user : null);
     const userAssigned = req ? getUserAssignedApps(req.user) : [];
@@ -291,8 +345,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       nameToTestIdsMap[key].push(t.id);
     }
 
-    const allUsersRows = await usersDb.prepare('SELECT id, username FROM users').all();
-    const userNamesMap = Object.fromEntries(allUsersRows.map(u => [u.id, u.username]));
+    const userNamesMap = await getUserNamesMap();
 
     const roundsMapRows = await testsDb.prepare(
       `SELECT s.test_id, COUNT(DISTINCT s.user_id || '-' || s.round_id) as rounds
@@ -366,8 +419,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       testLevelStats[row.test_id] = { submissions: row.submissions, passes: row.passes || 0, fails: row.fails || 0 };
     }
 
-    const stepCountsRows = await testsDb.prepare('SELECT test_id, COUNT(*) as c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id').all();
-    const stepCountsMap = Object.fromEntries(stepCountsRows.map(r => [r.test_id, r.c]));
+    const stepCountsMap = await getAllStepCountsMap();
 
     // Determine fully passed tests in the selected version and date range from test_submissions
     const passedPerUserRounds = await testsDb.prepare(
@@ -388,11 +440,7 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
     }
 
     // Also check users who completed the last step of the test within the reporting period
-    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps WHERE COALESCE(points, value, 0) != -1 ORDER BY test_id, step_number').all();
-    const lastStepByTest = {};
-    for (const step of allStepsRows) {
-      lastStepByTest[step.test_id] = step.id;
-    }
+    const lastStepByTest = await getAllLastStepsMap();
 
     const lastStepSubmissions = await testsDb.prepare(
       `SELECT s.test_id, s.user_id, s.step_id, s.executed_at
@@ -607,8 +655,7 @@ router.get('/points', authenticateToken, requireReportAccess, async (req, res) =
        ORDER BY pointsEarned DESC`
     ).all(start, end, ...extraArgs);
 
-    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
-    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+    const userNames = await getUserNamesMap();
 
     // Fetch cross-test consecutive failure warnings logged in the date range (filtered by version and app if specified)
     const userWarnFilter = hasUserFilter ? ` AND user_id IN (${userIds.map(() => '?').join(',')}) ` : ' ';
@@ -846,8 +893,7 @@ router.get('/test-report', authenticateToken, requireReportAccess, async (req, r
     ).all(...testIds, start, end, ...versionIds, ...(stepId ? [stepId] : []), ...userScopeArgs);
     const testStats = Object.fromEntries(testStatsRows.map(r => [r.test_id, r]));
 
-    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
-    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+    const userNames = await getUserNamesMap();
 
     const failedSubmissions = await testsDb.prepare(
       `SELECT 
@@ -997,13 +1043,8 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
     const userFilterSub = userIds.length > 0 ? ' AND s.user_id IN (' + userIds.map(() => '?').join(',') + ') ' : ' ';
 
     // Step counts and last step ID per test to evaluate complete pass criteria (excluding section headers)
-    const allStepsRows = await testsDb.prepare('SELECT id, test_id, step_number FROM test_steps WHERE COALESCE(points, value, 0) != -1 ORDER BY test_id, step_number').all();
-    const stepCountsMap = {};
-    const lastStepByTest = {};
-    for (const step of allStepsRows) {
-      stepCountsMap[step.test_id] = (stepCountsMap[step.test_id] || 0) + 1;
-      lastStepByTest[step.test_id] = step.id;
-    }
+    const stepCountsMap = await getAllStepCountsMap();
+    const lastStepByTest = await getAllLastStepsMap();
 
     const testStatsRows = await testsDb.prepare(
       `SELECT s.test_id, COUNT(DISTINCT s.user_id || '-' || s.round_id) as rounds,
@@ -1023,17 +1064,33 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
          AND s.executed_at >= ? AND s.executed_at <= ? ${versionFilterSub} ${userFilterSub}`
     ).all(...testIds, start, end, ...versionIds, ...(userIds.length > 0 ? userIds : []));
 
-    const lastStepCompletionsByTest = {};
-    for (const sub of lastStepSubmissions) {
-      if (lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]) {
-        const needed = stepCountsMap[sub.test_id] || 0;
-        const distinctPassed = await testsDb.prepare(
-          `SELECT COUNT(DISTINCT step_id) as count
-           FROM test_submissions
-           WHERE test_id = ? AND user_id = ? AND result = 'pass' AND executed_at <= ?`
-        ).get(sub.test_id, sub.user_id, sub.executed_at);
+    const lastStepCandidates = lastStepSubmissions.filter(
+      sub => lastStepByTest[sub.test_id] && sub.step_id === lastStepByTest[sub.test_id]
+    );
 
-        if (needed > 0 && (distinctPassed?.count || 0) >= needed) {
+    const lastStepCompletionsByTest = {};
+    if (lastStepCandidates.length > 0) {
+      const candTestIds = [...new Set(lastStepCandidates.map(s => s.test_id))];
+      const tPlaceholders = candTestIds.map(() => '?').join(',');
+      const passHistory = await testsDb.prepare(
+        `SELECT test_id, user_id, step_id, executed_at
+         FROM test_submissions
+         WHERE result = 'pass' AND test_id IN (${tPlaceholders}) ${userFilterSub}`
+      ).all(...candTestIds, ...(userIds.length > 0 ? userIds : []));
+
+      const historyByKey = {};
+      for (const h of passHistory) {
+        const key = h.test_id + ':' + h.user_id;
+        (historyByKey[key] = historyByKey[key] || []).push(h);
+      }
+
+      for (const sub of lastStepCandidates) {
+        const needed = stepCountsMap[sub.test_id] || 0;
+        const distinct = new Set();
+        for (const h of historyByKey[sub.test_id + ':' + sub.user_id] || []) {
+          if (h.executed_at <= sub.executed_at) distinct.add(h.step_id);
+        }
+        if (needed > 0 && distinct.size >= needed) {
           lastStepCompletionsByTest[sub.test_id] = (lastStepCompletionsByTest[sub.test_id] || 0) + 1;
         }
       }
@@ -1073,8 +1130,7 @@ router.get('/passed-report', authenticateToken, requireReportAccess, async (req,
       }
     }
 
-    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
-    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+    const userNames = await getUserNamesMap();
 
     const passedSubmissions = await testsDb.prepare(
       `SELECT 
@@ -1266,18 +1322,41 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       ...(hasAppFilter ? appIds : [])
     );
 
-    // Fetch user's active test from loop state
-    const loopState = await usersDb.prepare(
-      'SELECT active_test_id, version_id FROM user_loop_state WHERE user_id = ?'
-    ).get(userId);
-    const isVersionActive = !loopState || versionIds.length === 0 || (loopState.version_id && versionIds.includes(loopState.version_id));
-    const activeTestId = (loopState && isVersionActive) ? loopState.active_test_id : null;
+    // Determine active app for this user
+    let targetAppId = null;
+    if (appIds.length === 1) {
+      targetAppId = appIds[0];
+    } else {
+      const lastSub = await testsDb.prepare(
+        'SELECT app_id FROM test_submissions WHERE user_id = ? ORDER BY executed_at DESC LIMIT 1'
+      ).get(userId);
+      if (lastSub && lastSub.app_id) {
+        targetAppId = lastSub.app_id;
+      } else {
+        const loopRow = await testsDb.prepare(
+          'SELECT app_id FROM user_loop_state WHERE user_id = ? ORDER BY rowid DESC LIMIT 1'
+        ).get(userId);
+        targetAppId = (loopRow && loopRow.app_id) ? loopRow.app_id : 1;
+      }
+    }
 
-    // Fetch current round number for the user
-    const roundRow = await usersDb.prepare(
-      'SELECT round_no FROM user_rounds WHERE user_id = ?'
-    ).get(userId);
-    const currentRound = roundRow ? roundRow.round_no : 0;
+    // Call getActiveTestId from tests route to determine the exact active test according to actual completion status
+    const testRoutes = require('./tests');
+    const getActiveTestFn = testRoutes.getActiveTestId;
+    let activeTestId = null;
+    if (typeof getActiveTestFn === 'function') {
+      try {
+        activeTestId = await getActiveTestFn(userId, targetAppId);
+      } catch (err) {
+        console.warn('Error determining active test via getActiveTestId:', err.message);
+      }
+    }
+    if (!activeTestId) {
+      const loopState = await testsDb.prepare(
+        'SELECT active_test_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+      ).get(userId, targetAppId);
+      activeTestId = loopState ? loopState.active_test_id : null;
+    }
 
     // Batch: get points earned per test for this user in the date range
     const pointsRows = await usersDb.prepare(
@@ -1476,15 +1555,24 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
     let currentStepDescription = null;
 
     if (activeTestId) {
-      const activeTest = assignedTests.find(t => t.id === activeTestId);
+      let activeTest = assignedTests.find(t => t.id === activeTestId);
+      if (!activeTest) {
+        activeTest = await testsDb.prepare(
+          'SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id = ?'
+        ).get(activeTestId);
+      }
       if (activeTest) {
         activeTestName = activeTest.name;
+        const testAppId = activeTest.app_id || targetAppId || 1;
+        const currentRound = await getRound(userId, testAppId);
+
         // Get all steps for the active test (excluding section headers)
-        const allSteps = await usersDb.prepare(
-          'SELECT id, step_number, description, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number'
+        const allSteps = await testsDb.prepare(
+          'SELECT id, step_number, description, on_failure, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
         ).all(activeTestId);
+
         // Check if active test already hard-failed in current round
-        const hardStopFail = await usersDb.prepare(`
+        const hardStopFail = await testsDb.prepare(`
           SELECT tr.step_id
           FROM test_results tr
           JOIN test_steps ts ON tr.step_id = ts.id
@@ -1494,16 +1582,36 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         `).get(userId, activeTestId, currentRound);
 
         if (!hardStopFail) {
-          // Get step IDs already submitted in the current round
-          const doneRows = await usersDb.prepare(
-            'SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?'
-          ).all(userId, activeTestId, currentRound);
+          // Get step IDs already submitted in the current round across both test_submissions and test_results
+          const doneRows = await testsDb.prepare(`
+            SELECT DISTINCT step_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+            UNION
+            SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+          `).all(userId, activeTestId, currentRound, userId, activeTestId, currentRound);
           const doneStepIds = new Set(doneRows.map(r => r.step_id));
+
           // First step not done
           const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
           if (nextStep) {
             currentStepNumber = nextStep.step_number;
             currentStepDescription = nextStep.description;
+          } else if (allSteps.some(s => Number(s.pts) !== -1)) {
+            // All steps of this test were completed in this round, advance to next test in loop
+            const nextActiveId = typeof getActiveTestFn === 'function' ? await getActiveTestFn(userId, testAppId) : null;
+            if (nextActiveId && nextActiveId !== activeTestId) {
+              const nextTest = await testsDb.prepare('SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id = ?').get(nextActiveId);
+              if (nextTest) {
+                activeTestName = nextTest.name;
+                const nextTestSteps = await testsDb.prepare(
+                  'SELECT id, step_number, description, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
+                ).all(nextTest.id);
+                const firstRealStep = nextTestSteps.find(s => Number(s.pts) !== -1);
+                if (firstRealStep) {
+                  currentStepNumber = firstRealStep.step_number;
+                  currentStepDescription = firstRealStep.description;
+                }
+              }
+            }
           }
         }
       }
@@ -1696,8 +1804,7 @@ router.get('/failed-report', authenticateToken, requireReportAccess, async (req,
     const versionFilter = versionIds.length > 0 ? ' AND s.version_id IN (' + versionIds.map(() => '?').join(',') + ') ' : ' ';
     const appFilterT = hasAppFilter ? ' AND t.app_id IN (' + appIds.map(() => '?').join(',') + ') ' : ' ';
 
-    const userNamesRows = await usersDb.prepare('SELECT id, username FROM users').all();
-    const userNames = Object.fromEntries(userNamesRows.map(u => [u.id, u.username]));
+    const userNames = await getUserNamesMap();
 
     const testsRows = await testsDb.prepare('SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE COALESCE(is_deleted, 0) = 0').all();
     const testMap = Object.fromEntries(testsRows.map(t => [t.id, t]));

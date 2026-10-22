@@ -280,6 +280,41 @@ async function getBatchStepCounts(testIds) {
   return result;
 }
 
+// Batch: get total points awarded for multiple tests at once (cached)
+async function getBatchTotalPoints(testIds) {
+  if (!testIds || testIds.length === 0) return {};
+  const result = {};
+  const uncached = [];
+  for (const id of testIds) {
+    const cached = cache.get(`totalPoints:${id}`);
+    if (cached !== undefined) {
+      result[id] = cached;
+    } else {
+      uncached.push(id);
+    }
+  }
+  if (uncached.length > 0) {
+    const placeholders = uncached.map(() => '?').join(',');
+    const rows = await testsDb.prepare(
+      `SELECT test_id, COALESCE(SUM(CASE WHEN COALESCE(points, value, 0) > 0 THEN COALESCE(points, value, 0) ELSE 0 END), 0) AS total
+       FROM test_steps
+       WHERE test_id IN (${placeholders})
+       GROUP BY test_id`
+    ).all(...uncached);
+    for (const r of rows) {
+      result[r.test_id] = r.total;
+      cache.set(`totalPoints:${r.test_id}`, r.total);
+    }
+    for (const id of uncached) {
+      if (result[id] === undefined) {
+        result[id] = 0;
+        cache.set(`totalPoints:${id}`, 0);
+      }
+    }
+  }
+  return result;
+}
+
 // Total points awarded for a test (sum of its steps' points, excluding section headers)
 async function getTestTotalPoints(testId) {
   const cacheKey = `totalPoints:${testId}`;
@@ -341,17 +376,19 @@ router.get('/', authenticateToken, async (req, res) => {
           ORDER BY t.id
         `).all(appId);
       }
-      tests = await Promise.all(allTests.map(async t => ({
+      const allTestIds = allTests.map(t => t.id);
+      const totalPointsMap = await getBatchTotalPoints(allTestIds);
+      tests = allTests.map(t => ({
         ...t,
         is_deleted: t.is_deleted ? 1 : 0,
         locked: false,
         isActive: false,
         completed: false,
-        totalPoints: await getTestTotalPoints(t.id),
+        totalPoints: totalPointsMap[t.id] || 0,
         monthlyRounds: 0,
         maxMonthlyRounds: 8,
         isMonthlyLocked: false
-      })));
+      }));
     } else {
       const isApiUser = isApiKeyUser(req);
       const maxRounds = await getMaxMonthlyTestRounds();
@@ -373,7 +410,8 @@ router.get('/', authenticateToken, async (req, res) => {
         activeTestId = await getActiveTestId(req.user.userId, appId, isApiUser);
       }
 
-      tests = await Promise.all(assigned.map(async t => {
+      const totalPointsMap = await getBatchTotalPoints(testIds);
+      tests = assigned.map(t => {
         const mRounds = monthlyRoundsMap[t.id] || 0;
         const isMonthlyLocked = isApiUser ? false : (mRounds >= maxRounds);
         const isLocked = isMonthlyLocked || (t.id !== activeTestId);
@@ -386,12 +424,12 @@ router.get('/', authenticateToken, async (req, res) => {
           locked: isLocked,
           isActive: isActive,
           completed: stepCount > 0 && doneCount >= stepCount,
-          totalPoints: await getTestTotalPoints(t.id),
+          totalPoints: totalPointsMap[t.id] || 0,
           monthlyRounds: mRounds,
           maxMonthlyRounds: isApiUser ? null : maxRounds,
           isMonthlyLocked: isMonthlyLocked
         };
-      }));
+      });
     }
     res.json(tests);
   } catch (error) {
@@ -1410,5 +1448,9 @@ router.put('/:testId/steps/reorder', authenticateToken, requireDeveloper, async 
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+router.getActiveTestId = getActiveTestId;
+router.isTestCompleted = isTestCompleted;
+router.getBatchTotalPoints = getBatchTotalPoints;
 
 module.exports = router;

@@ -393,6 +393,30 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
         }
         autoEnded = true;
       }
+    } else {
+      // If all countable steps of the test are now completed, advance loop state to the next test
+      const stepCountRow = await testsDb.prepare(
+        'SELECT COUNT(*) as c FROM test_steps WHERE test_id = ? AND COALESCE(points, value, 0) != -1'
+      ).get(testId);
+      const stepCount = stepCountRow ? stepCountRow.c : 0;
+      if (stepCount > 0) {
+        const doneCountRow = await testsDb.prepare(
+          'SELECT COUNT(DISTINCT step_id) as c FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ? AND COALESCE(result, "") != ""'
+        ).get(userId, testId, roundNo);
+        const doneCount = doneCountRow ? doneCountRow.c : 0;
+        if (doneCount >= stepCount) {
+          const assigned = await getAssignedTestsOrdered(userId, appId);
+          if (assigned.length > 0) {
+            const idx = assigned.findIndex(t => t.id === parseInt(testId, 10));
+            const nextTest = assigned[(idx + 1) % assigned.length];
+            await testsDb.prepare('INSERT OR REPLACE INTO user_loop_state (user_id, app_id, active_test_id, version_id) VALUES (?, ?, ?, ?)')
+              .run(userId, appId, nextTest.id, currentVersionId);
+            if (nextTest.id === assigned[0].id) {
+              await bumpRound(userId, appId);
+            }
+          }
+        }
+      }
     }
 
     res.json({

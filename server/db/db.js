@@ -433,7 +433,21 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)',
     'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_user_apps_user ON user_apps(user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_user_apps_app ON user_apps(app_id)'
+    'CREATE INDEX IF NOT EXISTS idx_user_apps_app ON user_apps(app_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_app_id ON test_submissions(app_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_exec ON test_submissions(executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_user_exec ON test_submissions(user_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_test_exec ON test_submissions(test_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_app_exec ON test_submissions(app_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_submissions_user_test_round ON test_submissions(user_id, test_id, round_id)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_app_id ON points_log(app_id)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_user_earned ON points_log(user_id, earned_at)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_app_earned ON points_log(app_id, earned_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_app_id ON test_results(app_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_user_test_round ON test_results(user_id, test_id, round_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_user_exec ON test_results(user_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_test_results_app_exec ON test_results(app_id, executed_at)',
+    'CREATE INDEX IF NOT EXISTS idx_tests_app_id ON tests(app_id)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }
