@@ -401,7 +401,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
       const stepCount = stepCountRow ? stepCountRow.c : 0;
       if (stepCount > 0) {
         const doneCountRow = await testsDb.prepare(
-          'SELECT COUNT(DISTINCT step_id) as c FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ? AND COALESCE(result, "") != ""'
+          `SELECT COUNT(DISTINCT step_id) as c FROM test_results WHERE user_id = ? AND test_id = ? AND round_id = ? AND COALESCE(result, '') != ''`
         ).get(userId, testId, roundNo);
         const doneCount = doneCountRow ? doneCountRow.c : 0;
         if (doneCount >= stepCount) {
