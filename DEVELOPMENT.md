@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000165**: Version Advance, Build & Service Refresh:
+  - **App Routing & Batch Optimization Deployment**: Verified batched app stats query execution (`GET /api/apps/stats`) and route precedence ordering in `apps.js`.
+  - **Database Indexing & Report Speed**: Deployed composite index enhancements across `test_submissions`, `points_log`, and `test_results` in Turso Cloud.
+  - **Active Test & Step Progression in Points Report**: Fully integrated active test resolution (`getActiveTestId`) and uncompleted step tracking for active rounds.
+  - **Production Build & Server Refresh**: Rebuilt React frontend bundle and restarted production server on Port 4005.
 - **v1.0000164**: Performance Optimization, Database Indexing, Batch Queries, and Accurate Active Test/Step Tracking in Points Report:
   - **Comprehensive Multi-Index Optimization on Large Tables**: Added composite indexes on `test_submissions` (`(user_id, executed_at)`, `(test_id, executed_at)`, `(app_id, executed_at)`, `(user_id, test_id, round_id)`, `(executed_at)`, `app_id`), `points_log` (`(user_id, earned_at)`, `(app_id, earned_at)`, `app_id`), and `test_results` (`(user_id, executed_at)`, `(app_id, executed_at)`, `(user_id, test_id, round_id)`, `app_id`). This completely eliminates full-table scans across 35,000+ submission rows, reducing report query durations by up to 80-90%.
   - **Eliminated N+1 Query in Passed Report**: Replaced the sequential per-submission query loop in `GET /api/reports/passed-report` with a single grouped in-memory historical completion map (`passHistory`), drastically reducing network overhead to Turso Cloud.
