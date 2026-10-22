@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const { usersDb, testsDb, getRound } = require('../db/db');
+const { usersDb, testsDb, getRound, cache } = require('../db/db');
 const { authenticateToken, requireAdmin, requireDeveloper } = require('../middleware/auth');
 const { dataDir } = require('../utils/dataDir');
 const { isGlobalAdminUser, getUserAssignedApps, getAppId } = require('../utils/appContext');
@@ -14,57 +14,87 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
     const isGlobal = isGlobalAdminUser(req.user);
     const callerApps = getUserAssignedApps(req.user);
 
-    const users = await usersDb.prepare(
-      'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
-    ).all();
-    
-    // Batch query active keys for all users
-    let keysByUser = {};
-    try {
-      const allKeys = await testsDb.prepare(
-        'SELECT id, name, key_prefix, role, is_active, user_id, COALESCE(app_id, 1) as app_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC'
-      ).all();
-      for (const k of allKeys) {
-        if (!keysByUser[k.user_id]) keysByUser[k.user_id] = [];
-        keysByUser[k.user_id].push(k);
+    // Fast-path for reporting views, selectors, and dropdowns
+    if (req.query.minimal === 'true') {
+      const cacheKey = `users_minimal_${isGlobal ? 'all' : callerApps.sort().join('_')}`;
+      const cached = cache.get(cacheKey);
+      if (cached) return res.json(cached);
+
+      let query;
+      let params = [];
+      if (isGlobal || callerApps.length === 0) {
+        query = 'SELECT id, username, is_admin, is_suspended, user_groups FROM users ORDER BY id ASC';
+      } else {
+        const placeholders = callerApps.map(() => '?').join(',');
+        query = `
+          SELECT DISTINCT u.id, u.username, u.is_admin, u.is_suspended, u.user_groups
+          FROM users u
+          JOIN user_apps ua ON u.id = ua.user_id
+          WHERE ua.app_id IN (${placeholders})
+          ORDER BY u.id ASC
+        `;
+        params = callerApps;
       }
-    } catch (kErr) {
-      console.warn('Non-fatal: could not query api_keys for users list:', kErr.message);
+      const rawUsers = await usersDb.prepare(query).all(...params);
+      const minimalUsers = rawUsers.map(u => ({
+        id: u.id,
+        username: u.username,
+        is_admin: !!u.is_admin,
+        is_suspended: !!u.is_suspended,
+        user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers']))
+      }));
+      cache.set(cacheKey, minimalUsers, 30000); // 30s TTL
+      return res.json(minimalUsers);
     }
 
-    // Batch query assigned apps for all users
-    let appsByUser = {};
-    try {
-      const allUserApps = await testsDb.prepare(`
+    const fullCacheKey = `users_full_${isGlobal ? 'all' : callerApps.sort().join('_')}`;
+    const cachedFull = cache.get(fullCacheKey);
+    if (cachedFull) return res.json(cachedFull);
+
+    // Concurrently fetch users, keys, apps, and assignments in parallel (Promise.all)
+    const [users, allKeys, allUserApps, allAssignments] = await Promise.all([
+      usersDb.prepare('SELECT id, username, is_admin, is_suspended, user_groups FROM users').all(),
+      testsDb.prepare('SELECT id, name, key_prefix, role, is_active, user_id, COALESCE(app_id, 1) as app_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC').all().catch(kErr => {
+        console.warn('Non-fatal: could not query api_keys for users list:', kErr.message);
+        return [];
+      }),
+      testsDb.prepare(`
         SELECT ua.user_id, a.id, a.name, a.description
         FROM user_apps ua
         JOIN apps a ON ua.app_id = a.id
         ORDER BY a.id
-      `).all();
-      for (const ua of allUserApps) {
-        if (!appsByUser[ua.user_id]) appsByUser[ua.user_id] = [];
-        appsByUser[ua.user_id].push({ id: ua.id, name: ua.name, description: ua.description });
-      }
-    } catch (appErr) {
-      console.warn('Non-fatal: could not query user_apps:', appErr.message);
-    }
-
-    // Batch query test assignments by app for all users
-    let testsByUserAndApp = {};
-    try {
-      const allAssignments = await testsDb.prepare(`
+      `).all().catch(appErr => {
+        console.warn('Non-fatal: could not query user_apps:', appErr.message);
+        return [];
+      }),
+      testsDb.prepare(`
         SELECT ta.user_id, ta.test_id, COALESCE(t.app_id, 1) as app_id
         FROM test_assignments ta
         JOIN tests t ON ta.test_id = t.id
         WHERE COALESCE(t.is_deleted, 0) = 0
-      `).all();
-      for (const ta of allAssignments) {
-        if (!testsByUserAndApp[ta.user_id]) testsByUserAndApp[ta.user_id] = {};
-        if (!testsByUserAndApp[ta.user_id][ta.app_id]) testsByUserAndApp[ta.user_id][ta.app_id] = [];
-        testsByUserAndApp[ta.user_id][ta.app_id].push(ta.test_id);
-      }
-    } catch (testErr) {
-      console.warn('Non-fatal: could not query assignments by app:', testErr.message);
+      `).all().catch(testErr => {
+        console.warn('Non-fatal: could not query assignments by app:', testErr.message);
+        return [];
+      })
+    ]);
+
+    const keysByUser = {};
+    for (const k of allKeys) {
+      if (!keysByUser[k.user_id]) keysByUser[k.user_id] = [];
+      keysByUser[k.user_id].push(k);
+    }
+
+    const appsByUser = {};
+    for (const ua of allUserApps) {
+      if (!appsByUser[ua.user_id]) appsByUser[ua.user_id] = [];
+      appsByUser[ua.user_id].push({ id: ua.id, name: ua.name, description: ua.description });
+    }
+
+    const testsByUserAndApp = {};
+    for (const ta of allAssignments) {
+      if (!testsByUserAndApp[ta.user_id]) testsByUserAndApp[ta.user_id] = {};
+      if (!testsByUserAndApp[ta.user_id][ta.app_id]) testsByUserAndApp[ta.user_id][ta.app_id] = [];
+      testsByUserAndApp[ta.user_id][ta.app_id].push(ta.test_id);
     }
 
     let filteredUsers = users;
@@ -95,7 +125,7 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
       };
     });
     
-    res.json(formatted);
+    cache.set(fullCacheKey, formatted, 15000); res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }

@@ -347,6 +347,22 @@ const ReportsView: React.FC = () => {
     fetchVersions();
     fetchTests();
     if (isFullAccess) {
+      try {
+        const cachedStr = sessionStorage.getItem('qc_reports_cached_users');
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const testers = parsed.filter((u: any) => !u.is_admin);
+            setUsers(testers);
+            const allIds = testers.map((u: any) => u.id);
+            setReportUserIds(allIds);
+            setPassedReportUserIds(allIds);
+            setPointsReportUserIds(allIds);
+            setFailedReportUserIds(allIds);
+            setPaymentsReportUserIds(allIds);
+          }
+        }
+      } catch {}
       fetchUsers();
     } else if (user?.id) {
       setReportUserIds([user.id]);
@@ -476,17 +492,20 @@ const ReportsView: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/users`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/users?minimal=true`, { headers: authHeaders });
       if (res.ok) {
         const data: User[] = await res.json();
         const testers = data.filter(u => !u.is_admin);
         setUsers(testers);
         const allIds = testers.map(u => u.id);
-        setReportUserIds(allIds);
-        setPassedReportUserIds(allIds);
-        setFailedReportUserIds(allIds);
-        setPointsReportUserIds(allIds);
-        setPaymentsReportUserIds(allIds);
+        setReportUserIds(prev => prev.length === 0 ? allIds : prev);
+        setPassedReportUserIds(prev => prev.length === 0 ? allIds : prev);
+        setFailedReportUserIds(prev => prev.length === 0 ? allIds : prev);
+        setPointsReportUserIds(prev => prev.length === 0 ? allIds : prev);
+        setPaymentsReportUserIds(prev => prev.length === 0 ? allIds : prev);
+        try {
+          sessionStorage.setItem('qc_reports_cached_users', JSON.stringify(data));
+        } catch {}
       }
     } catch {
       // ignore

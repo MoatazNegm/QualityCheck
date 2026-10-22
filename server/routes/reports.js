@@ -456,9 +456,9 @@ router.get('/user-report', authenticateToken, requireReportAccess, async (req, r
       const candTestIds = [...new Set(lastStepCandidates.map(s => s.test_id))];
       const tPlaceholders = candTestIds.map(() => '?').join(',');
       const passHistory = await testsDb.prepare(
-        `SELECT test_id, user_id, step_id, executed_at
-         FROM test_submissions
-         WHERE result = 'pass' AND user_id IN (${placeholders}) AND test_id IN (${tPlaceholders})`
+        `SELECT s.test_id, s.user_id, s.step_id, s.executed_at
+         FROM test_submissions s
+         WHERE s.result = 'pass' AND user_id IN (${placeholders}) AND test_id IN (${tPlaceholders})`
       ).all(...userIds, ...candTestIds);
 
       const historyByKey = {};
@@ -1340,22 +1340,116 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
       }
     }
 
-    // Call getActiveTestId from tests route to determine the exact active test according to actual completion status
-    const testRoutes = require('./tests');
-    const getActiveTestFn = testRoutes.getActiveTestId;
+    // Determine active test & step:
+    // 1. Check user's most recent submission across the application
     let activeTestId = null;
-    if (typeof getActiveTestFn === 'function') {
-      try {
-        activeTestId = await getActiveTestFn(userId, targetAppId);
-      } catch (err) {
-        console.warn('Error determining active test via getActiveTestId:', err.message);
+    let activeTestName = null;
+    let currentStepNumber = null;
+    let currentStepDescription = null;
+
+    const latestSub = await testsDb.prepare(`
+      SELECT s.test_id, s.step_id, s.round_id, s.result, s.executed_at,
+             t.name as test_name, COALESCE(t.app_id, 1) as app_id,
+             ts.step_number, ts.description, ts.on_failure
+      FROM test_submissions s
+      JOIN tests t ON s.test_id = t.id
+      JOIN test_steps ts ON s.step_id = ts.id
+      WHERE s.user_id = ? ${hasAppFilter ? 'AND (s.app_id IN (' + appIds.map(() => '?').join(',') + ') OR s.app_id IS NULL)' : ''}
+      ORDER BY s.executed_at DESC, s.id DESC
+      LIMIT 1
+    `).get(userId, ...(hasAppFilter ? appIds : []));
+
+    let resolvedFromLatest = false;
+    if (latestSub) {
+      const subAppId = latestSub.app_id || targetAppId || 1;
+      const subRound = latestSub.round_id != null ? latestSub.round_id : await getRound(userId, subAppId);
+
+      // Check if latest submission was a hard stop failure
+      const isHardStop = (latestSub.result === 'fail' && (latestSub.on_failure == null || latestSub.on_failure === 'stop'));
+
+      if (!isHardStop) {
+        // Query all countable steps of this test
+        const allTestSteps = await testsDb.prepare(
+          'SELECT id, step_number, description, on_failure, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
+        ).all(latestSub.test_id);
+
+        const doneStepRows = await testsDb.prepare(`
+          SELECT DISTINCT step_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+          UNION
+          SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+        `).all(userId, latestSub.test_id, subRound, userId, latestSub.test_id, subRound);
+        const doneSet = new Set(doneStepRows.map(r => r.step_id));
+
+        const nextUnfinishedStep = allTestSteps.find(s => Number(s.pts) !== -1 && !doneSet.has(s.id));
+        if (nextUnfinishedStep) {
+          // The user is actively in the middle of executing this test!
+          activeTestId = latestSub.test_id;
+          activeTestName = latestSub.test_name;
+          currentStepNumber = nextUnfinishedStep.step_number;
+          currentStepDescription = nextUnfinishedStep.description;
+          resolvedFromLatest = true;
+        }
       }
     }
-    if (!activeTestId) {
-      const loopState = await testsDb.prepare(
-        'SELECT active_test_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
-      ).get(userId, targetAppId);
-      activeTestId = loopState ? loopState.active_test_id : null;
+
+    if (!resolvedFromLatest) {
+      // The previous test finished or hard-failed, or user has no prior submissions.
+      // Call getActiveTestId to determine the next test in the assignment loop:
+      const testRoutes = require('./tests');
+      const getActiveTestFn = testRoutes.getActiveTestId;
+      if (typeof getActiveTestFn === 'function') {
+        try {
+          activeTestId = await getActiveTestFn(userId, targetAppId);
+        } catch (err) {
+          console.warn('Error determining active test via getActiveTestId:', err.message);
+        }
+      }
+      if (!activeTestId) {
+        const loopState = await testsDb.prepare(
+          'SELECT active_test_id FROM user_loop_state WHERE user_id = ? AND (app_id = ? OR app_id IS NULL)'
+        ).get(userId, targetAppId);
+        activeTestId = loopState ? loopState.active_test_id : null;
+      }
+      if (!activeTestId && assignedTests.length > 0) {
+        activeTestId = assignedTests[0].id;
+      }
+
+      if (activeTestId) {
+        let activeTest = assignedTests.find(t => t.id === activeTestId);
+        if (!activeTest) {
+          activeTest = await testsDb.prepare(
+            'SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id = ?'
+          ).get(activeTestId);
+        }
+        if (activeTest) {
+          activeTestName = activeTest.name;
+          const testAppId = activeTest.app_id || targetAppId || 1;
+          const currentRound = await getRound(userId, testAppId);
+
+          const allSteps = await testsDb.prepare(
+            'SELECT id, step_number, description, on_failure, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
+          ).all(activeTestId);
+
+          const doneRows = await testsDb.prepare(`
+            SELECT DISTINCT step_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+            UNION
+            SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
+          `).all(userId, activeTestId, currentRound, userId, activeTestId, currentRound);
+          const doneStepIds = new Set(doneRows.map(r => r.step_id));
+
+          const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
+          if (nextStep) {
+            currentStepNumber = nextStep.step_number;
+            currentStepDescription = nextStep.description;
+          } else {
+            const firstCountable = allSteps.find(s => Number(s.pts) !== -1);
+            if (firstCountable) {
+              currentStepNumber = firstCountable.step_number;
+              currentStepDescription = firstCountable.description;
+            }
+          }
+        }
+      }
     }
 
     // Batch: get points earned per test for this user in the date range
@@ -1428,13 +1522,14 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         stepNumber: row.step_number,
         description: row.description,
         result: row.result,
-        executedAt: row.executed_at,
-        comment: row.comment
+        comment: row.comment,
+        executedAt: row.executed_at
       });
 
       if (row.result === 'fail') {
         cycle.hasFail = true;
         cycle.failedSteps.push({
+          stepId: row.step_id,
           stepNumber: row.step_number,
           description: row.description,
           comment: row.comment,
@@ -1442,7 +1537,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         });
 
         if (!failedByTest[row.test_id]) failedByTest[row.test_id] = {};
-        const key = `${row.step_number}-${row.round_id}`;
+        const key = `${row.step_id}_${row.round_id}`;
         if (!failedByTest[row.test_id][key]) {
           failedByTest[row.test_id][key] = {
             stepNumber: row.step_number,
@@ -1477,7 +1572,7 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
             failedSteps: c.failedSteps
           });
 
-          // Test Fail event(s) — date and time that the step failed, step number, description, comment
+          // Test Fail event(s)
           if (c.failedSteps && c.failedSteps.length > 0) {
             for (const fs of c.failedSteps) {
               testExecutions.push({
@@ -1500,13 +1595,11 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
             });
           }
         } else {
-          // A test round only passes if ALL countable steps of the test were executed and passed in this period
           const totalCountable = stepCountsMap[testId] || 0;
           const passedCount = c.passedStepIds ? c.passedStepIds.size : 0;
           const isAllPassed = totalCountable > 0 && passedCount >= totalCountable;
 
           if (isAllPassed) {
-            // Date and time is the pass of the last step:
             const lastStep = lastStepByTest[testId];
             const lastPassedSub = (lastStep ? c.submissions?.find(s => s.stepId === lastStep.id && s.result === 'pass') : null) ||
                                   (c.submissions && c.submissions.length > 0 ? c.submissions[c.submissions.length - 1] : null);
@@ -1519,7 +1612,6 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
               stepsCount: c.stepsCount
             });
 
-            // For test pass: stepNumber is '-', description is '-'
             testExecutions.push({
               executedAt: passTime,
               roundId: c.roundId,
@@ -1532,7 +1624,6 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         }
       }
 
-      // Sort test pass and fail events newest to oldest by date and time
       testExecutions.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
       passedCycles.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
       failedCycles.sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
@@ -1547,74 +1638,6 @@ router.get('/user-progress/:userId', authenticateToken, requireReportAccess, asy
         lastPassedAt: passedCycles[0]?.executedAt || null,
         lastFailedAt: failedCycles[0]?.executedAt || null
       };
-    }
-
-    // Determine active test step: first step not yet submitted in the current round
-    let activeTestName = null;
-    let currentStepNumber = null;
-    let currentStepDescription = null;
-
-    if (activeTestId) {
-      let activeTest = assignedTests.find(t => t.id === activeTestId);
-      if (!activeTest) {
-        activeTest = await testsDb.prepare(
-          'SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id = ?'
-        ).get(activeTestId);
-      }
-      if (activeTest) {
-        activeTestName = activeTest.name;
-        const testAppId = activeTest.app_id || targetAppId || 1;
-        const currentRound = await getRound(userId, testAppId);
-
-        // Get all steps for the active test (excluding section headers)
-        const allSteps = await testsDb.prepare(
-          'SELECT id, step_number, description, on_failure, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
-        ).all(activeTestId);
-
-        // Check if active test already hard-failed in current round
-        const hardStopFail = await testsDb.prepare(`
-          SELECT tr.step_id
-          FROM test_results tr
-          JOIN test_steps ts ON tr.step_id = ts.id
-          WHERE tr.user_id = ? AND tr.test_id = ? AND COALESCE(tr.round_id, 0) = ?
-            AND tr.result = 'fail' AND (ts.on_failure IS NULL OR ts.on_failure = 'stop')
-          LIMIT 1
-        `).get(userId, activeTestId, currentRound);
-
-        if (!hardStopFail) {
-          // Get step IDs already submitted in the current round across both test_submissions and test_results
-          const doneRows = await testsDb.prepare(`
-            SELECT DISTINCT step_id FROM test_submissions WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
-            UNION
-            SELECT DISTINCT step_id FROM test_results WHERE user_id = ? AND test_id = ? AND COALESCE(round_id, 0) = ?
-          `).all(userId, activeTestId, currentRound, userId, activeTestId, currentRound);
-          const doneStepIds = new Set(doneRows.map(r => r.step_id));
-
-          // First step not done
-          const nextStep = allSteps.find(s => Number(s.pts) !== -1 && !doneStepIds.has(s.id));
-          if (nextStep) {
-            currentStepNumber = nextStep.step_number;
-            currentStepDescription = nextStep.description;
-          } else if (allSteps.some(s => Number(s.pts) !== -1)) {
-            // All steps of this test were completed in this round, advance to next test in loop
-            const nextActiveId = typeof getActiveTestFn === 'function' ? await getActiveTestFn(userId, testAppId) : null;
-            if (nextActiveId && nextActiveId !== activeTestId) {
-              const nextTest = await testsDb.prepare('SELECT id, name, COALESCE(app_id, 1) as app_id FROM tests WHERE id = ?').get(nextActiveId);
-              if (nextTest) {
-                activeTestName = nextTest.name;
-                const nextTestSteps = await testsDb.prepare(
-                  'SELECT id, step_number, description, COALESCE(points, value, 0) as pts FROM test_steps WHERE test_id = ? ORDER BY step_number ASC'
-                ).all(nextTest.id);
-                const firstRealStep = nextTestSteps.find(s => Number(s.pts) !== -1);
-                if (firstRealStep) {
-                  currentStepNumber = firstRealStep.step_number;
-                  currentStepDescription = firstRealStep.description;
-                }
-              }
-            }
-          }
-        }
-      }
     }
 
     // Build per-test result array

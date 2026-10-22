@@ -1,6 +1,11 @@
 # QualityCheck App Development Documentation
 
 ## Version History
+- **v1.0000166**: Instant Reports User Retrieval, Session Caching, and Ground-Truth Active Test/Step Tracking:
+  - **Instant Users Retrieval for Reports (`GET /api/users?minimal=true`)**: Added a lightweight, minimal users endpoint that queries users in one single fast query with 30-second TTL in-memory caching. Parallelized full user queries (`Promise.all`) with 15-second TTL caching.
+  - **Client-Side Immediate Readiness**: In `ReportsView.tsx`, cached user lists in `sessionStorage` on initial load and restored them immediately upon component mount, enabling the Generate button instantly with 0ms delay.
+  - **Ground-Truth Active Test & Step Progression in Points Report**: Rewrote active test and step resolution in `GET /api/reports/user-progress/:userId` to check the user's most recent submission across the application. Accurately determines if the user is in the middle of a test and returns their next uncompleted step number and description, or seamlessly advances to the next loop test if the current test hard-stopped or was completed in that round.
+  - **Resolved SQL Alias Error in Passed Report**: Fixed table alias `s.user_id` in `passHistory` batch query in `server/routes/reports.js`.
 - **v1.0000165**: Version Advance, Build & Service Refresh:
   - **App Routing & Batch Optimization Deployment**: Verified batched app stats query execution (`GET /api/apps/stats`) and route precedence ordering in `apps.js`.
   - **Database Indexing & Report Speed**: Deployed composite index enhancements across `test_submissions`, `points_log`, and `test_results` in Turso Cloud.
