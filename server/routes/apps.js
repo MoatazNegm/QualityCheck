@@ -81,31 +81,6 @@ router.get('/archived', authenticateToken, requireGlobalAdmin, async (req, res) 
   }
 });
 
-// Get a single app by ID
-router.get('/:id', authenticateToken, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!canUserAccessApp(req.user, id)) {
-      return res.status(403).json({ error: 'You do not have access to this application' });
-    }
-
-    const app = await testsDb.prepare(`
-      SELECT id, name, description, created_at,
-             COALESCE(is_suspended, 0) as is_suspended,
-             COALESCE(is_deleted, 0) as is_deleted,
-             suspended_at, deleted_at
-      FROM apps WHERE id = ?
-    `).get(id);
-    if (!app) {
-      return res.status(404).json({ error: 'App not found' });
-    }
-    res.json(app);
-  } catch (error) {
-    console.error('Get app error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 // Get stats for all apps in a single batched query (avoids N+1 on dashboard and admin panel load)
 router.get('/stats', authenticateToken, async (req, res) => {
   try {
@@ -155,6 +130,31 @@ router.get('/stats', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Batch app stats error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get a single app by ID
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!canUserAccessApp(req.user, id)) {
+      return res.status(403).json({ error: 'You do not have access to this application' });
+    }
+
+    const app = await testsDb.prepare(`
+      SELECT id, name, description, created_at,
+             COALESCE(is_suspended, 0) as is_suspended,
+             COALESCE(is_deleted, 0) as is_deleted,
+             suspended_at, deleted_at
+      FROM apps WHERE id = ?
+    `).get(id);
+    if (!app) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+    res.json(app);
+  } catch (error) {
+    console.error('Get app error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
