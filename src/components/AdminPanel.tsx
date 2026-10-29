@@ -430,11 +430,23 @@ const AdminPanel: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchTests();
-    fetchUsers();
-    fetchVersions();
-    fetchSettings();
-    fetchApiKeys();
+    // Clear out scoped states from previous app
+    setManagedSteps({});
+    setAssignments({});
+    setUserSummaries({});
+    setImportResult(null);
+    setImportNames({});
+    setImportSaveSuccess('');
+    setImportSaveError('');
+    setVersionMessage('');
+    setVersionError('');
+
+    const aid = (!isAdminPanelMode && currentApp) ? currentApp.id : 'all';
+    fetchTests(aid);
+    fetchUsers(aid);
+    fetchVersions(aid);
+    fetchSettings(aid);
+    fetchApiKeys(aid);
     fetchAllAppTests();
     fetchAllAppStats();
     fetchArchivedApps();
@@ -448,7 +460,7 @@ const AdminPanel: React.FC = () => {
     setPointsStartDate(dates.start);
     setPointsEndDate(dates.end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, currentApp?.id]);
+  }, [token, currentApp?.id, isAdminPanelMode]);
 
   useEffect(() => {
     if (apps.length > 0) {
@@ -461,13 +473,19 @@ const AdminPanel: React.FC = () => {
   }, [apps]);
 
   useEffect(() => {
-    if (!tests.length) return;
+    if (!tests.length) {
+      setManagedSteps({});
+      setAssignments({});
+      return;
+    }
     // Batch fetch all steps and assignments in two calls instead of 2N calls
     const fetchAllStepsAndAssignments = async () => {
       try {
+        const aid = !isAdminPanelMode && currentApp ? currentApp.id : 'all';
+        const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
         const [stepsRes, assignRes] = await Promise.all([
-          fetch(`${API_BASE}/api/tests/steps?testIds=all`, { headers: authHeaders }),
-          fetch(`${API_BASE}/api/tests/assignments/bulk`, { headers: authHeaders })
+          fetch(`${API_BASE}/api/tests/steps?testIds=all&appId=${aid}`, { headers }),
+          fetch(`${API_BASE}/api/tests/assignments/bulk?appId=${aid}`, { headers })
         ]);
         if (stepsRes.ok) {
           const stepsData = await stepsRes.json();
@@ -475,7 +493,7 @@ const AdminPanel: React.FC = () => {
           for (const entry of stepsData) {
             stepsMap[entry.testId] = entry.steps || [];
           }
-          setManagedSteps(prev => ({ ...prev, ...stepsMap }));
+          setManagedSteps(stepsMap);
         }
         if (assignRes.ok) {
           const assignData = await assignRes.json();
@@ -491,7 +509,7 @@ const AdminPanel: React.FC = () => {
     };
     fetchAllStepsAndAssignments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tests]);
+  }, [tests, currentApp?.id, isAdminPanelMode]);
 
   useEffect(() => {
     if (testReportInitialMount.current) {
@@ -511,11 +529,15 @@ const AdminPanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passedReportTestIds]);
 
-  const fetchVersions = async () => {
+  const fetchVersions = async (appIdToUse?: any) => {
     try {
+      const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+        ? appIdToUse
+        : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
       const [allRes, curRes] = await Promise.all([
-        fetch(`${API_BASE}/api/versions`, { headers: authHeaders }),
-        fetch(`${API_BASE}/api/versions/current`, { headers: authHeaders })
+        fetch(`${API_BASE}/api/versions?appId=${aid}`, { headers }),
+        fetch(`${API_BASE}/api/versions/current?appId=${aid}`, { headers })
       ]);
       if (allRes.ok) setVersions(await allRes.json());
       if (curRes.ok) {
@@ -608,26 +630,38 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const fetchTests = async () => {
-    const res = await fetch(`${API_BASE}/api/tests`, { headers: authHeaders });
+  const fetchTests = async (appIdToUse?: any) => {
+    const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+      ? appIdToUse
+      : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+    const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+    const res = await fetch(`${API_BASE}/api/tests?appId=${aid}`, { headers });
     if (res.ok) setTests(await res.json());
   };
 
-  const fetchUsers = async () => {
-    const res = await fetch(`${API_BASE}/api/users`, { headers: authHeaders });
+  const fetchUsers = async (appIdToUse?: any) => {
+    const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+      ? appIdToUse
+      : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+    const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+    const res = await fetch(`${API_BASE}/api/users?appId=${aid}`, { headers });
     if (res.ok) {
       const data = await res.json();
       setUsers(data);
       if (data.length) {
-        fetchUserSummaries(data.map((u: User) => u.id));
+        fetchUserSummaries(data.map((u: User) => u.id), aid);
       }
     }
   };
 
-  const fetchUserSummaries = async (_userIds?: number[]) => {
+  const fetchUserSummaries = async (_userIds?: number[], appIdToUse?: any) => {
     setUserSummariesLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/users/summaries`, { headers: authHeaders });
+      const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+        ? appIdToUse
+        : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+      const res = await fetch(`${API_BASE}/api/users/summaries?appId=${aid}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setUserSummaries(data);
@@ -1660,10 +1694,14 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const fetchSettings = async () => {
+  const fetchSettings = async (appIdToUse?: any) => {
     setSettingsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/settings`, { headers: authHeaders });
+      const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+        ? appIdToUse
+        : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+      const res = await fetch(`${API_BASE}/api/settings?appId=${aid}`, { headers });
       if (res.ok) {
         const data = await res.json();
         const thresh = data['consecutive_failure_threshold_seconds'];
@@ -1879,13 +1917,17 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  const fetchApiKeys = async () => {
+  const fetchApiKeys = async (appIdToUse?: any) => {
     setApiKeysLoading(true);
     try {
-      const url = (!isAdminPanelMode && currentApp)
-        ? `${API_BASE}/api/api-keys?appId=${currentApp.id}`
+      const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
+        ? appIdToUse
+        : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
+      const url = (aid !== 'all')
+        ? `${API_BASE}/api/api-keys?appId=${aid}`
         : `${API_BASE}/api/api-keys`;
-      const res = await fetch(url, { headers: authHeaders });
+      const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+      const res = await fetch(url, { headers });
       if (res.ok) {
         const data = await res.json();
         setApiKeys(Array.isArray(data) ? data : []);

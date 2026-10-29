@@ -397,13 +397,41 @@ const ReportsView: React.FC = () => {
       setPaymentsReportAppIds(defaultIds);
 
       // Scoped tests for the active app
-      if (tests.length > 0 && !isAdminPanelMode && currentApp) {
-        const appActiveTests = tests.filter(t => !t.is_deleted && (t.app_id || 1) === currentApp.id).map(t => t.id);
-        setPassedReportTestIds(appActiveTests);
-        setFailedReportTestIds(appActiveTests);
-        setPointsReportTestIds(appActiveTests);
-        setTestReportTestIds(appActiveTests);
+      const appActiveTests = (!isAdminPanelMode && currentApp)
+        ? tests.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
+        : tests.filter(t => !t.is_deleted).map(t => t.id);
+
+      setPassedReportTestIds(appActiveTests);
+      setFailedReportTestIds(appActiveTests);
+      setPointsReportTestIds(appActiveTests);
+      setTestReportTestIds(appActiveTests);
+
+      // Reset step search & selected step for test report
+      setTestReportSelectedStepId(null);
+      setTestReportStepSearch('');
+      if (appActiveTests.length > 0) {
+        fetchTestReportSteps(appActiveTests);
+      } else {
+        setTestReportSteps([]);
       }
+
+      // Reset expand / drill-down caches
+      setUserProgressCache({});
+      setExpandedPointsUser(null);
+      setExpandedFailedStep(null);
+      setExpandedPassedTests(new Set());
+      setExpandedTests(new Set());
+      setExpandedReportSteps(new Set());
+      setExpandedWarningUsers({});
+      setExpandedTestHistory(new Set());
+
+      // Clear report data for subtabs that are not active so old app data doesn't persist
+      if (reportsSubTab !== 'user') setReportData(null);
+      if (reportsSubTab !== 'test') setTestReportData(null);
+      if (reportsSubTab !== 'passed') setPassedReportData(null);
+      if (reportsSubTab !== 'failed') setFailedReportData(null);
+      if (reportsSubTab !== 'points') setPointsReportData(null);
+      if (reportsSubTab !== 'payments') setPaymentsReportData(null);
 
       if (versions.length > 0) {
         const currVersionIds = getCurrentVersionIdsForApps(defaultIds, versions);
@@ -416,13 +444,13 @@ const ReportsView: React.FC = () => {
         // If the user previously ran/viewed a report, automatically run the SAME report for the newly selected app!
         if (hasGeneratedReportRef.current) {
           if (reportsSubTab === 'points') {
-            fetchPointsReport(defaultIds, currVersionIds);
+            fetchPointsReport(defaultIds, currVersionIds, appActiveTests);
           } else if (reportsSubTab === 'failed') {
-            fetchFailedReport(defaultIds, currVersionIds);
+            fetchFailedReport(defaultIds, currVersionIds, appActiveTests);
           } else if (reportsSubTab === 'passed') {
-            fetchPassedReport(defaultIds, currVersionIds);
+            fetchPassedReport(defaultIds, currVersionIds, appActiveTests);
           } else if (reportsSubTab === 'test') {
-            fetchTestReport(defaultIds, currVersionIds);
+            fetchTestReport(defaultIds, currVersionIds, appActiveTests, null);
           } else if (reportsSubTab === 'user') {
             fetchUserReport(defaultIds, currVersionIds);
           } else if (reportsSubTab === 'payments') {
@@ -450,14 +478,18 @@ const ReportsView: React.FC = () => {
           setFailedReportVersionIds(currVersionIds);
 
           if (hasGeneratedReportRef.current) {
+            const activeTestIds = (!isAdminPanelMode && currentApp)
+              ? tests.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
+              : tests.filter(t => !t.is_deleted).map(t => t.id);
+
             if (reportsSubTab === 'points') {
-              fetchPointsReport(defaultAppIds, currVersionIds);
+              fetchPointsReport(defaultAppIds, currVersionIds, activeTestIds);
             } else if (reportsSubTab === 'failed') {
-              fetchFailedReport(defaultAppIds, currVersionIds);
+              fetchFailedReport(defaultAppIds, currVersionIds, activeTestIds);
             } else if (reportsSubTab === 'passed') {
-              fetchPassedReport(defaultAppIds, currVersionIds);
+              fetchPassedReport(defaultAppIds, currVersionIds, activeTestIds);
             } else if (reportsSubTab === 'test') {
-              fetchTestReport(defaultAppIds, currVersionIds);
+              fetchTestReport(defaultAppIds, currVersionIds, activeTestIds, null);
             } else if (reportsSubTab === 'user') {
               fetchUserReport(defaultAppIds, currVersionIds);
             } else if (reportsSubTab === 'payments') {
@@ -478,12 +510,28 @@ const ReportsView: React.FC = () => {
         const data: Test[] = await res.json();
         setTests(data);
         const activeTestIds = (!isAdminPanelMode && currentApp)
-          ? data.filter(t => !t.is_deleted && (t.app_id || 1) === currentApp.id).map(t => t.id)
+          ? data.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
           : data.filter(t => !t.is_deleted).map(t => t.id);
         setPassedReportTestIds(activeTestIds);
         setFailedReportTestIds(activeTestIds);
         setPointsReportTestIds(activeTestIds);
         setTestReportTestIds(activeTestIds);
+
+        fetchTestReportSteps(activeTestIds);
+
+        if (hasGeneratedReportRef.current && versions.length > 0) {
+          const defaultAppIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
+          const currVersionIds = getCurrentVersionIdsForApps(defaultAppIds, versions);
+          if (reportsSubTab === 'points') {
+            fetchPointsReport(defaultAppIds, currVersionIds, activeTestIds);
+          } else if (reportsSubTab === 'failed') {
+            fetchFailedReport(defaultAppIds, currVersionIds, activeTestIds);
+          } else if (reportsSubTab === 'passed') {
+            fetchPassedReport(defaultAppIds, currVersionIds, activeTestIds);
+          } else if (reportsSubTab === 'test') {
+            fetchTestReport(defaultAppIds, currVersionIds, activeTestIds, null);
+          }
+        }
       }
     } catch {
       // ignore
@@ -640,9 +688,11 @@ const ReportsView: React.FC = () => {
   };
 
   // Test Report
-  const fetchTestReportSteps = async () => {
+  const fetchTestReportSteps = async (overrideTestIds?: number[]) => {
     try {
-      const targetTests = testReportTestIds.length > 0 ? testReportTestIds : tests.map(t => t.id);
+      const targetTests = Array.isArray(overrideTestIds)
+        ? overrideTestIds
+        : (testReportTestIds.length > 0 ? testReportTestIds : tests.map(t => t.id));
       const results = await Promise.all(
         targetTests.map(tid =>
           fetch(`${API_BASE}/api/tests/${tid}`, { headers: authHeaders })
@@ -662,7 +712,7 @@ const ReportsView: React.FC = () => {
     }
   };
 
-  const fetchTestReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
+  const fetchTestReport = async (overrideAppIds?: any, overrideVersionIds?: any, overrideTestIds?: any, overrideStepId?: any) => {
     if (!testReportStartDate || !testReportEndDate) return;
     setTestReportLoading(true);
     setTestReportError('');
@@ -670,16 +720,19 @@ const ReportsView: React.FC = () => {
     try {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : testReportAppIds;
       const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : testReportVersionIds;
+      const testIdsToUse = Array.isArray(overrideTestIds) ? overrideTestIds : testReportTestIds;
+      const stepIdToUse = overrideStepId !== undefined ? overrideStepId : testReportSelectedStepId;
+
       const url = new URL(`${API_BASE}/api/reports/test-report`, window.location.origin);
-      if (testReportTestIds.length > 0) {
-        url.searchParams.set('testId', testReportTestIds.join(','));
+      if (testIdsToUse.length > 0) {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
         url.searchParams.set('testId', 'all');
       }
       url.searchParams.set('startDate', testReportStartDate);
       url.searchParams.set('endDate', testReportEndDate);
       if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
-      if (testReportSelectedStepId) url.searchParams.set('stepId', String(testReportSelectedStepId));
+      if (stepIdToUse) url.searchParams.set('stepId', String(stepIdToUse));
       if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
         url.searchParams.set('appIds', appIdsToUse.join(','));
       } else if (appIdsToUse.length === 1) {
@@ -706,7 +759,7 @@ const ReportsView: React.FC = () => {
   };
 
   // Passed Steps Report
-  const fetchPassedReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
+  const fetchPassedReport = async (overrideAppIds?: any, overrideVersionIds?: any, overrideTestIds?: any) => {
     if (!passedReportStartDate || !passedReportEndDate) return;
     setPassedReportLoading(true);
     setPassedReportError('');
@@ -714,6 +767,8 @@ const ReportsView: React.FC = () => {
     try {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : passedReportAppIds;
       const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : passedReportVersionIds;
+      const testIdsToUse = Array.isArray(overrideTestIds) ? overrideTestIds : passedReportTestIds;
+
       const url = new URL(`${API_BASE}/api/reports/passed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? passedReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -721,8 +776,8 @@ const ReportsView: React.FC = () => {
       } else {
         url.searchParams.set('userId', 'all');
       }
-      if (passedReportTestIds.length > 0) {
-        url.searchParams.set('testId', passedReportTestIds.join(','));
+      if (testIdsToUse.length > 0) {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
         url.searchParams.set('testId', 'all');
       }
@@ -754,7 +809,7 @@ const ReportsView: React.FC = () => {
     }
   };
 
-  const fetchFailedReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
+  const fetchFailedReport = async (overrideAppIds?: any, overrideVersionIds?: any, overrideTestIds?: any) => {
     if (!failedReportStartDate || !failedReportEndDate) return;
     setFailedReportLoading(true);
     setFailedReportError('');
@@ -762,6 +817,8 @@ const ReportsView: React.FC = () => {
     try {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : failedReportAppIds;
       const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : failedReportVersionIds;
+      const testIdsToUse = Array.isArray(overrideTestIds) ? overrideTestIds : failedReportTestIds;
+
       const url = new URL(`${API_BASE}/api/reports/failed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? failedReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -769,8 +826,8 @@ const ReportsView: React.FC = () => {
       } else {
         url.searchParams.set('userId', 'all');
       }
-      if (failedReportTestIds.length > 0) {
-        url.searchParams.set('testId', failedReportTestIds.join(','));
+      if (testIdsToUse.length > 0) {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
         url.searchParams.set('testId', 'all');
       }
@@ -841,7 +898,7 @@ const ReportsView: React.FC = () => {
   };
 
   // Points Report
-  const fetchPointsReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
+  const fetchPointsReport = async (overrideAppIds?: any, overrideVersionIds?: any, overrideTestIds?: any) => {
     if (!pointsReportStartDate || !pointsReportEndDate) return;
     setPointsReportLoading(true);
     setPointsReportError('');
@@ -851,6 +908,8 @@ const ReportsView: React.FC = () => {
     try {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : pointsReportAppIds;
       const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : pointsReportVersionIds;
+      const testIdsToUse = Array.isArray(overrideTestIds) ? overrideTestIds : pointsReportTestIds;
+
       const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
       const targetUserIds = isFullAccess ? pointsReportUserIds : (user?.id ? [user.id] : []);
       if (targetUserIds.length > 0) {
@@ -858,8 +917,8 @@ const ReportsView: React.FC = () => {
       } else {
         url.searchParams.set('userId', 'all');
       }
-      if (pointsReportTestIds.length > 0) {
-        url.searchParams.set('testId', pointsReportTestIds.join(','));
+      if (testIdsToUse.length > 0) {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
         url.searchParams.set('testId', 'all');
       }
@@ -955,13 +1014,38 @@ const ReportsView: React.FC = () => {
     });
   };
 
+  const handleSelectSubTab = (tab: 'user' | 'test' | 'passed' | 'failed' | 'points' | 'payments') => {
+    setReportsSubTab(tab);
+    if (hasGeneratedReportRef.current) {
+      const defaultIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
+      const currVersionIds = getCurrentVersionIdsForApps(defaultIds, versions);
+      const activeTestIds = (!isAdminPanelMode && currentApp)
+        ? tests.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
+        : tests.filter(t => !t.is_deleted).map(t => t.id);
+
+      if (tab === 'points' && !pointsReportData) {
+        fetchPointsReport(defaultIds, currVersionIds, activeTestIds);
+      } else if (tab === 'failed' && !failedReportData) {
+        fetchFailedReport(defaultIds, currVersionIds, activeTestIds);
+      } else if (tab === 'passed' && !passedReportData) {
+        fetchPassedReport(defaultIds, currVersionIds, activeTestIds);
+      } else if (tab === 'test' && !testReportData) {
+        fetchTestReport(defaultIds, currVersionIds, activeTestIds, null);
+      } else if (tab === 'user' && !reportData) {
+        fetchUserReport(defaultIds, currVersionIds);
+      } else if (tab === 'payments' && !paymentsReportData) {
+        fetchPaymentsReport(defaultIds);
+      }
+    }
+  };
+
   return (
     <div className="admin-section">
       <div className="report-sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'user' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('user')}
+          onClick={() => handleSelectSubTab('user')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           User Reports
@@ -969,7 +1053,7 @@ const ReportsView: React.FC = () => {
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'test' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('test')}
+          onClick={() => handleSelectSubTab('test')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Test Reports
@@ -977,7 +1061,7 @@ const ReportsView: React.FC = () => {
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'passed' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('passed')}
+          onClick={() => handleSelectSubTab('passed')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Passed Steps
@@ -985,7 +1069,7 @@ const ReportsView: React.FC = () => {
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'failed' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('failed')}
+          onClick={() => handleSelectSubTab('failed')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Failed Steps
@@ -993,7 +1077,7 @@ const ReportsView: React.FC = () => {
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'points' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('points')}
+          onClick={() => handleSelectSubTab('points')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Points
@@ -1001,7 +1085,7 @@ const ReportsView: React.FC = () => {
         <button
           type="button"
           className={`tab-btn ${reportsSubTab === 'payments' ? 'active' : ''}`}
-          onClick={() => setReportsSubTab('payments')}
+          onClick={() => handleSelectSubTab('payments')}
           style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}
         >
           Points Payments History
@@ -1080,6 +1164,9 @@ const ReportsView: React.FC = () => {
                   setReportData(null);
                   const newVersions = getCurrentVersionIdsForApps(ids, versions);
                   setReportVersionIds(newVersions);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchUserReport(ids, newVersions);
+                  }
                 }}
               />
 
@@ -1448,6 +1535,15 @@ const ReportsView: React.FC = () => {
                   setTestReportData(null);
                   const newVersions = getCurrentVersionIdsForApps(ids, versions);
                   setTestReportVersionIds(newVersions);
+                  const newTests = ids.length === 0 || ids.length === apps.length
+                    ? tests.filter(t => !t.is_deleted).map(t => t.id)
+                    : tests.filter(t => !t.is_deleted && ids.includes(Number(t.app_id || 1))).map(t => t.id);
+                  setTestReportTestIds(newTests);
+                  setTestReportSelectedStepId(null);
+                  fetchTestReportSteps(newTests);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchTestReport(ids, newVersions, newTests, null);
+                  }
                 }}
               />
 
@@ -1774,6 +1870,13 @@ const ReportsView: React.FC = () => {
                   setPassedReportData(null);
                   const newVersions = getCurrentVersionIdsForApps(ids, versions);
                   setPassedReportVersionIds(newVersions);
+                  const newTests = ids.length === 0 || ids.length === apps.length
+                    ? tests.filter(t => !t.is_deleted).map(t => t.id)
+                    : tests.filter(t => !t.is_deleted && ids.includes(Number(t.app_id || 1))).map(t => t.id);
+                  setPassedReportTestIds(newTests);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchPassedReport(ids, newVersions, newTests);
+                  }
                 }}
               />
 
@@ -2143,6 +2246,14 @@ const ReportsView: React.FC = () => {
                   setFailedReportData(null);
                   const newVersions = getCurrentVersionIdsForApps(ids, versions);
                   setFailedReportVersionIds(newVersions);
+                  const newTests = ids.length === 0 || ids.length === apps.length
+                    ? tests.filter(t => !t.is_deleted).map(t => t.id)
+                    : tests.filter(t => !t.is_deleted && ids.includes(Number(t.app_id || 1))).map(t => t.id);
+                  setFailedReportTestIds(newTests);
+                  setExpandedFailedStep(null);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchFailedReport(ids, newVersions, newTests);
+                  }
                 }}
               />
 
@@ -2513,6 +2624,13 @@ const ReportsView: React.FC = () => {
                   setExpandedPointsUser(null);
                   const newVersions = getCurrentVersionIdsForApps(ids, versions);
                   setPointsReportVersionIds(newVersions);
+                  const newTests = ids.length === 0 || ids.length === apps.length
+                    ? tests.filter(t => !t.is_deleted).map(t => t.id)
+                    : tests.filter(t => !t.is_deleted && ids.includes(Number(t.app_id || 1))).map(t => t.id);
+                  setPointsReportTestIds(newTests);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchPointsReport(ids, newVersions, newTests);
+                  }
                 }}
               />
 
@@ -3108,6 +3226,9 @@ const ReportsView: React.FC = () => {
                 onChange={ids => {
                   setPaymentsReportAppIds(ids);
                   setPaymentsReportData(null);
+                  if (hasGeneratedReportRef.current && ids.length > 0) {
+                    fetchPaymentsReport(ids);
+                  }
                 }}
               />
             </div>
