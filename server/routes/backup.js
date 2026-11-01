@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { usersDb, testsDb } = require('../db/db');
+const { usersDb, testsDb, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { dataDir } = require('../utils/dataDir');
 
@@ -141,9 +141,13 @@ async function applyBackup(backup, res) {
     // Insert Users
     for (const user of backup.users) {
       const passwordHash = user.password_hash || bcrypt.hashSync('changeme', 10);
+      const isSuspendedVal = (user.is_suspended ?? user.isSuspended) ? 1 : 0;
+      const groupsVal = typeof user.user_groups === 'string'
+        ? user.user_groups
+        : JSON.stringify(user.user_groups || (user.is_admin ? ['admins'] : ['testers']));
       batch.push({
-        sql: 'INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)',
-        args: [user.id, user.username, passwordHash, user.is_admin ? 1 : 0]
+        sql: 'INSERT INTO users (id, username, password_hash, is_admin, is_suspended, user_groups) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [user.id, user.username, passwordHash, user.is_admin ? 1 : 0, isSuspendedVal, groupsVal]
       });
     }
 
@@ -311,6 +315,7 @@ async function applyBackup(backup, res) {
       }
     }
 
+    cache.clear();
     res.json({ message: 'Restore completed successfully', restoredFiles: restoredFiles.length });
   } catch (error) {
     console.error('Backup apply error:', error);

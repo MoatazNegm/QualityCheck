@@ -17,6 +17,7 @@ interface User {
   username: string;
   is_admin: boolean;
   isSuspended: boolean;
+  is_suspended?: boolean | number;
   user_groups?: string[];
   api_keys?: ApiKeyItem[];
   assigned_apps?: number[];
@@ -646,7 +647,14 @@ const AdminPanel: React.FC = () => {
     const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
     const res = await fetch(`${API_BASE}/api/users?appId=${aid}`, { headers });
     if (res.ok) {
-      const data = await res.json();
+      const rawData = await res.json();
+      const data = Array.isArray(rawData)
+        ? rawData.map((u: any) => ({
+            ...u,
+            is_suspended: Boolean(u.is_suspended ?? u.isSuspended),
+            isSuspended: Boolean(u.isSuspended ?? u.is_suspended)
+          }))
+        : [];
       setUsers(data);
       if (data.length) {
         fetchUserSummaries(data.map((u: User) => u.id), aid);
@@ -1123,18 +1131,20 @@ const AdminPanel: React.FC = () => {
   };
 
   const toggleSuspension = async (user: User) => {
+    const currentlySuspended = Boolean(user.isSuspended ?? user.is_suspended);
+    const nextSuspended = !currentlySuspended;
     try {
       const res = await fetch(`${API_BASE}/api/users/${user.id}/suspend`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_suspended: !user.isSuspended })
+        body: JSON.stringify({ is_suspended: nextSuspended, isSuspended: nextSuspended })
       });
       const data = await res.json();
       if (!res.ok) {
         setUserError(data.error || 'Failed to update suspension');
       } else {
-        setUsers(prev => prev.map(u => u.id === user.id ? { ...u, isSuspended: !user.isSuspended } : u));
-        setUserSuccess(`User ${user.username} ${!user.isSuspended ? 'suspended' : 'unsuspended'} successfully.`);
+        setUsers(prev => prev.map(u => u.id === user.id ? { ...u, isSuspended: nextSuspended, is_suspended: nextSuspended } : u));
+        setUserSuccess(`User ${user.username} ${nextSuspended ? 'suspended' : 'unsuspended'} successfully.`);
       }
     } catch {
       setUserError('Network error');
@@ -2942,10 +2952,19 @@ const AdminPanel: React.FC = () => {
                       : apiKeys.filter(k => k.user_id === u.id && k.is_active);
                     const hasActiveKey = userActiveKeys.length > 0;
 
+                    const isUserSuspended = Boolean(u.isSuspended ?? u.is_suspended);
+
                     return (
-                      <div key={u.id} className="user-row" style={{ flexWrap: 'wrap' }}>
+                      <div key={u.id} className="user-row" style={{ flexWrap: 'wrap', borderColor: isUserSuspended ? 'rgba(245, 158, 11, 0.5)' : undefined }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                          <span className="user-row-name" style={{ fontWeight: 600, fontSize: '1rem' }}>{u.username}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="user-row-name" style={{ fontWeight: 600, fontSize: '1rem' }}>{u.username}</span>
+                            {isUserSuspended && (
+                              <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.45rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.18)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', fontWeight: 600 }}>
+                                🚫 Suspended
+                              </span>
+                            )}
+                          </div>
                           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                             {['testers', 'admins', 'developers'].map(g => {
                               const isMember = currentGroups.includes(g);
@@ -3039,13 +3058,15 @@ const AdminPanel: React.FC = () => {
                               {hasActiveKey ? "New Key" : "+ Key"}
                             </button>
                           )}
-                          <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
+                          <label className="suspend-toggle" title={isUserSuspended ? 'Unsuspend user' : 'Suspend user'}>
                             <input
                               type="checkbox"
-                              checked={!!u.isSuspended}
+                              checked={isUserSuspended}
                               onChange={() => toggleSuspension(u)}
                             />
-                            <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
+                            <span style={{ color: isUserSuspended ? '#f87171' : '#48bb78', fontWeight: 600 }}>
+                              {isUserSuspended ? 'Suspended' : 'Active'}
+                            </span>
                           </label>
                           <button
                             className="btn-icon"
@@ -3444,10 +3465,19 @@ const AdminPanel: React.FC = () => {
                   : apiKeys.filter(k => k.user_id === u.id && k.is_active);
                 const hasActiveKey = userActiveKeys.length > 0;
 
+                const isUserSuspended = Boolean(u.isSuspended ?? u.is_suspended);
+
                 return (
-                  <div key={u.id} className="user-row" style={{ flexWrap: 'wrap' }}>
+                  <div key={u.id} className="user-row" style={{ flexWrap: 'wrap', borderColor: isUserSuspended ? 'rgba(245, 158, 11, 0.5)' : undefined }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                      <span className="user-row-name">{u.username}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span className="user-row-name">{u.username}</span>
+                        {isUserSuspended && (
+                          <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.45rem', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.18)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', fontWeight: 600 }}>
+                            🚫 Suspended
+                          </span>
+                        )}
+                      </div>
                       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                         {['testers', 'admins', 'developers'].map(g => {
                           const isMember = currentGroups.includes(g);
@@ -3532,13 +3562,15 @@ const AdminPanel: React.FC = () => {
                           {hasActiveKey ? "New Key" : "+ Key"}
                         </button>
                       )}
-                      <label className="suspend-toggle" title={u.isSuspended ? 'Unsuspend user' : 'Suspend user'}>
+                      <label className="suspend-toggle" title={isUserSuspended ? 'Unsuspend user' : 'Suspend user'}>
                         <input
                           type="checkbox"
-                          checked={!!u.isSuspended}
+                          checked={isUserSuspended}
                           onChange={() => toggleSuspension(u)}
                         />
-                        <span>{u.isSuspended ? 'Suspended' : 'Active'}</span>
+                        <span style={{ color: isUserSuspended ? '#f87171' : '#48bb78', fontWeight: 600 }}>
+                          {isUserSuspended ? 'Suspended' : 'Active'}
+                        </span>
                       </label>
                       {!u.is_admin && (
                         <button

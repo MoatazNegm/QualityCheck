@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const { testsDb, usersDb } = require('../db/db');
+const { testsDb, usersDb, cache } = require('../db/db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { isGlobalAdminUser, getUserAssignedApps, canUserAccessApp } = require('../utils/appContext');
 
@@ -164,6 +164,8 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       VALUES (?, ?, ?, ?, ?, 1, ?)
     `).run(String(name).trim(), keyHash, keyPrefix, targetUserId, chosenRole, targetAppId);
 
+    cache.invalidatePrefix('users_');
+
     res.status(201).json({
       message: 'API key created successfully. Please copy it now as it will not be displayed again.',
       key: rawApiKey,
@@ -201,6 +203,7 @@ router.patch('/:id/toggle', authenticateToken, requireAdmin, async (req, res) =>
 
     const newStatus = key.is_active ? 0 : 1;
     await testsDb.prepare('UPDATE api_keys SET is_active = ? WHERE id = ?').run(newStatus, id);
+    cache.invalidatePrefix('users_');
 
     res.json({ message: `API key ${newStatus ? 'activated' : 'deactivated'} successfully`, is_active: newStatus });
   } catch (error) {
@@ -224,6 +227,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
 
     // Delete the API key from api_keys table - user account is preserved!
     await testsDb.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
+    cache.invalidatePrefix('users_');
 
     // Invalidate active sessions for this user so they cannot remain logged in via the revoked key
     if (key.user_id) {

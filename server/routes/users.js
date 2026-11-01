@@ -40,7 +40,9 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
         id: u.id,
         username: u.username,
         is_admin: !!u.is_admin,
+        isAdmin: !!u.is_admin,
         is_suspended: !!u.is_suspended,
+        isSuspended: !!u.is_suspended,
         user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers']))
       }));
       cache.set(cacheKey, minimalUsers, 30000); // 30s TTL
@@ -115,8 +117,13 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
           allowedTestsByApp[aid] = testsByUserAndApp[u.id][aid];
         }
       }
+      const isSuspended = !!u.is_suspended;
       return {
         ...u,
+        is_admin: !!u.is_admin,
+        isAdmin: !!u.is_admin,
+        is_suspended: isSuspended,
+        isSuspended: isSuspended,
         user_groups: typeof u.user_groups === 'string' ? JSON.parse(u.user_groups) : (u.user_groups || (u.is_admin ? ['admins'] : ['testers'])),
         api_keys: (keysByUser[u.id] || []).filter(k => isGlobal || callerApps.includes(k.app_id || 1)),
         assigned_apps: allowedAppIds,
@@ -459,7 +466,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
       id: user.id,
       username: user.username,
       is_admin: !!user.is_admin,
+      isAdmin: !!user.is_admin,
       is_suspended: !!user.is_suspended,
+      isSuspended: !!user.is_suspended,
       user_groups: parsedGroups,
       created_at: user.created_at || null,
       stats: {
@@ -519,7 +528,8 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
       }
     }
 
-    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0, user_groups: groups, appIds: selectedAppIds });
+    cache.invalidatePrefix('users_');
+    res.json({ id: newUserId, username, is_admin: isAdmin ? 1 : 0, is_suspended: false, isSuspended: false, user_groups: groups, appIds: selectedAppIds });
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Username already exists' });
@@ -568,6 +578,8 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
       { sql: 'DELETE FROM users WHERE id = ?', args: [userId] }
     ], 'write');
     cache.invalidate(`user_apps:${userId}`);
+    cache.invalidate(`user_suspended:${userId}`);
+    cache.invalidatePrefix('users_');
 
     // Remove the user's uploaded files from disk and database.
     let deletedFiles = 0;
@@ -660,6 +672,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       }
     }
     
+    cache.invalidatePrefix('users_');
     res.json({ message: 'User updated successfully', user_groups: groups, is_admin: isAdminCalc ? 1 : 0 });
   } catch (error) {
     console.error('Update user error:', error);
@@ -671,13 +684,30 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
 router.put('/:id/suspend', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_suspended } = req.body;
+    const userId = parseInt(id, 10);
+    const rawSuspend = req.body.is_suspended !== undefined ? req.body.is_suspended : req.body.isSuspended;
+    const suspendedInt = rawSuspend ? 1 : 0;
     
     await usersDb.prepare(
       'UPDATE users SET is_suspended = ? WHERE id = ?'
-    ).run(is_suspended ? 1 : 0, id);
+    ).run(suspendedInt, userId);
+
+    if (suspendedInt === 1) {
+      try {
+        await usersDb.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+      } catch (sessErr) {
+        console.warn('Non-fatal: failed to clear sessions for suspended user:', sessErr.message);
+      }
+    }
+
+    cache.invalidate(`user_suspended:${userId}`);
+    cache.invalidatePrefix('users_');
     
-    res.json({ message: 'User suspension updated successfully' });
+    res.json({
+      message: 'User suspension updated successfully',
+      is_suspended: Boolean(suspendedInt),
+      isSuspended: Boolean(suspendedInt)
+    });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -782,6 +812,8 @@ router.post('/:id/generate-key', authenticateToken, requireAdmin, async (req, re
       VALUES (?, ?, ?, ?, ?, 1, ?)
     `).run(keyName, keyHash, keyPrefix, user.id, chosenRole, targetAppId);
 
+    cache.invalidatePrefix('users_');
+
     res.status(201).json({
       message: `API key generated successfully for user "${user.username}".`,
       key: rawApiKey,
@@ -821,6 +853,8 @@ router.delete('/:id/revoke-key', authenticateToken, requireAdmin, async (req, re
     } catch (sessErr) {
       console.warn('Non-fatal: session cleanup failed:', sessErr.message);
     }
+
+    cache.invalidatePrefix('users_');
 
     res.json({
       message: `Generated key(s) revoked successfully for user "${user.username}". The user account has been preserved and can be issued a new key later.`,

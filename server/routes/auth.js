@@ -447,9 +447,26 @@ router.get('/verify', async (req, res) => {
       }
     }
 
-    const isGlobal = (decoded.username?.toLowerCase() === 'admin' || decoded.userId === 1) && !decoded.isApiKey;
-    const userGroups = decoded.userGroups || (decoded.isAdmin ? ['admins'] : ['testers']);
-    const isAdmin = Boolean(decoded.isAdmin || userGroups.includes('admins'));
+    // Check live user record so suspension / unsuspension takes effect immediately
+    const liveUser = await usersDb.prepare(
+      'SELECT id, username, is_admin, is_suspended, user_groups FROM users WHERE id = ?'
+    ).get(decoded.userId);
+    if (!liveUser) {
+      return res.status(401).json({ error: 'User account no longer exists' });
+    }
+    if (liveUser.is_suspended) {
+      return res.status(403).json({ error: 'Account is suspended. Please contact administrator.' });
+    }
+
+    const isGlobal = (liveUser.username?.toLowerCase() === 'admin' || liveUser.id === 1) && !decoded.isApiKey;
+    let liveGroups = [];
+    try {
+      liveGroups = typeof liveUser.user_groups === 'string' ? JSON.parse(liveUser.user_groups) : (liveUser.user_groups || []);
+    } catch {
+      liveGroups = [];
+    }
+    const userGroups = liveGroups.length > 0 ? liveGroups : (decoded.userGroups || (liveUser.is_admin ? ['admins'] : ['testers']));
+    const isAdmin = Boolean(liveUser.is_admin || decoded.isAdmin || userGroups.includes('admins'));
 
     const allApps = await testsDb.prepare(`
       SELECT id, name, description, COALESCE(is_suspended, 0) as is_suspended
@@ -481,10 +498,13 @@ router.get('/verify', async (req, res) => {
       valid: true,
       user: {
         ...decoded,
-        id: decoded.userId,
+        id: liveUser.id,
+        username: liveUser.username,
         isAdmin: isAdmin,
+        is_admin: isAdmin,
         isGlobalAdmin: isGlobal,
-        isSuspended: !!decoded.isSuspended,
+        isSuspended: !!liveUser.is_suspended,
+        is_suspended: !!liveUser.is_suspended,
         isApiKey: !!decoded.isApiKey,
         apiKeyId: decoded.apiKeyId || null,
         userGroups,

@@ -179,6 +179,23 @@ const authenticateToken = async (req, res, next) => {
     user.userId = user.userId || user.id;
     user.id = user.userId;
 
+    // Check live suspension status (cached briefly, invalidated immediately on PUT /api/users/:id/suspend)
+    try {
+      const suspCacheKey = `user_suspended:${user.userId}`;
+      let isSusp = cache.get(suspCacheKey);
+      if (isSusp === undefined) {
+        const uRow = await testsDb.prepare('SELECT is_suspended FROM users WHERE id = ?').get(user.userId);
+        isSusp = uRow ? !!uRow.is_suspended : false;
+        cache.set(suspCacheKey, isSusp, 30000);
+      }
+      if (isSusp) {
+        return res.status(403).json({ error: 'Account is suspended. Please contact administrator.' });
+      }
+      user.isSuspended = false;
+    } catch (suspErr) {
+      // non-fatal
+    }
+
     const isGlobal = (user.username === 'admin' || user.userId === 1) && !user.isApiKey;
     user.isGlobalAdmin = isGlobal;
 
