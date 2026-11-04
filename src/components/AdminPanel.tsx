@@ -323,7 +323,7 @@ const AdminPanel: React.FC = () => {
   const fetchAllAppTests = async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/api/tests?appId=all`, {
+      const res = await fetch(`${API_BASE}/api/tests?appId=all&minimal=true`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -387,6 +387,9 @@ const AdminPanel: React.FC = () => {
   };
 
   const openEditUserAssignments = (u: User) => {
+    if (Object.keys(allAppTests).length === 0) {
+      fetchAllAppTests();
+    }
     setEditingUserAssignments(u);
     const assignedIds = (u.assigned_apps || [])
       .map((a: any) => typeof a === 'object' && a !== null ? Number(a.id) : Number(a))
@@ -432,6 +435,9 @@ const AdminPanel: React.FC = () => {
 
   useEffect(() => {
     // Clear out scoped states from previous app
+    setTests([]);
+    setUsers([]);
+    setVersions([]);
     setManagedSteps({});
     setAssignments({});
     setUserSummaries({});
@@ -442,15 +448,6 @@ const AdminPanel: React.FC = () => {
     setVersionMessage('');
     setVersionError('');
 
-    const aid = (!isAdminPanelMode && currentApp) ? currentApp.id : 'all';
-    fetchTests(aid);
-    fetchUsers(aid);
-    fetchVersions(aid);
-    fetchSettings(aid);
-    fetchApiKeys(aid);
-    fetchAllAppTests();
-    fetchAllAppStats();
-    fetchArchivedApps();
     const dates = getDefaultReportDates('current_month');
     setReportStartDate(dates.start);
     setReportEndDate(dates.end);
@@ -464,53 +461,90 @@ const AdminPanel: React.FC = () => {
   }, [token, currentApp?.id, isAdminPanelMode]);
 
   useEffect(() => {
-    if (apps.length > 0) {
-      fetchAllAppStats();
-      if (newUserAppIds.length === 0) {
-        setNewUserAppIds(apps.map(a => a.id));
-      }
+    if (apps.length > 0 && newUserAppIds.length === 0) {
+      setNewUserAppIds(apps.map(a => a.id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apps]);
 
+  // Only fetch data required by the currently active tab to avoid starving Reports or other views
   useEffect(() => {
-    if (!tests.length) {
-      setManagedSteps({});
-      setAssignments({});
+    if (!token) return;
+    const aid = (!isAdminPanelMode && currentApp) ? currentApp.id : 'all';
+
+    if (isAdminPanelMode) {
+      if (globalTab === 'apps') {
+        fetchAllAppStats();
+        fetchArchivedApps();
+      } else if (globalTab === 'users') {
+        fetchUsers('all', true);
+        fetchAllAppTests();
+      } else if (globalTab === 'storage') {
+        fetchSettings('all');
+      } else if (globalTab === 'api-keys') {
+        fetchApiKeys('all');
+        fetchUsers('all', false);
+      }
+      // globalTab === 'reports' is handled entirely by <ReportsView />
       return;
     }
-    // Batch fetch all steps and assignments in two calls instead of 2N calls
-    const fetchAllStepsAndAssignments = async () => {
-      try {
-        const aid = !isAdminPanelMode && currentApp ? currentApp.id : 'all';
-        const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
-        const [stepsRes, assignRes] = await Promise.all([
-          fetch(`${API_BASE}/api/tests/steps?testIds=all&appId=${aid}`, { headers }),
-          fetch(`${API_BASE}/api/tests/assignments/bulk?appId=${aid}`, { headers })
-        ]);
-        if (stepsRes.ok) {
-          const stepsData = await stepsRes.json();
-          const stepsMap: Record<number, TestStepAdmin[]> = {};
-          for (const entry of stepsData) {
-            stepsMap[entry.testId] = entry.steps || [];
-          }
-          setManagedSteps(stepsMap);
-        }
-        if (assignRes.ok) {
-          const assignData = await assignRes.json();
-          setAssignments(assignData);
-        }
-      } catch {
-        // Fallback: fetch individually if bulk fails
-        tests.forEach(t => {
-          fetchTestSteps(t.id);
-          fetchAssignmentsForTest(t.id);
-        });
-      }
-    };
-    fetchAllStepsAndAssignments();
+
+    // App-scoped mode (!isAdminPanelMode)
+    if (activeTab === 'reports') {
+      // Handled entirely by <ReportsView />
+      return;
+    }
+    if (activeTab === 'upload') {
+      fetchTests(aid);
+    } else if (activeTab === 'assign') {
+      fetchTests(aid);
+      fetchUsers(aid, false);
+    } else if (activeTab === 'users') {
+      fetchUsers(aid, true);
+      fetchAllAppTests();
+    } else if (activeTab === 'manage' || activeTab === 'disabled') {
+      fetchTests(aid);
+    } else if (activeTab === 'versions') {
+      fetchVersions(aid);
+    } else if (activeTab === 'settings') {
+      fetchSettings(aid);
+    } else if (activeTab === 'api-keys') {
+      fetchApiKeys(aid);
+      fetchUsers(aid, false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tests, currentApp?.id, isAdminPanelMode]);
+  }, [token, currentApp?.id, isAdminPanelMode, activeTab, globalTab, apps.length]);
+
+  useEffect(() => {
+    if (isAdminPanelMode || !tests.length) {
+      return;
+    }
+    const aid = currentApp ? currentApp.id : 'all';
+    const headers = { Authorization: `Bearer ${token}`, 'x-app-id': String(aid) };
+
+    if (activeTab === 'manage' && Object.keys(managedSteps).length === 0) {
+      fetch(`${API_BASE}/api/tests/steps?testIds=all&appId=${aid}`, { headers })
+        .then(r => r.ok ? r.json() : null)
+        .then(stepsData => {
+          if (Array.isArray(stepsData)) {
+            const stepsMap: Record<number, TestStepAdmin[]> = {};
+            for (const entry of stepsData) {
+              stepsMap[entry.testId] = entry.steps || [];
+            }
+            setManagedSteps(stepsMap);
+          }
+        })
+        .catch(() => {});
+    } else if (activeTab === 'assign' && Object.keys(assignments).length === 0) {
+      fetch(`${API_BASE}/api/tests/assignments/bulk?appId=${aid}`, { headers })
+        .then(r => r.ok ? r.json() : null)
+        .then(assignData => {
+          if (assignData) setAssignments(assignData);
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tests, currentApp?.id, isAdminPanelMode, activeTab]);
 
   useEffect(() => {
     if (testReportInitialMount.current) {
@@ -640,7 +674,7 @@ const AdminPanel: React.FC = () => {
     if (res.ok) setTests(await res.json());
   };
 
-  const fetchUsers = async (appIdToUse?: any) => {
+  const fetchUsers = async (appIdToUse?: any, includeSummaries: boolean = true) => {
     const aid = (typeof appIdToUse === 'number' || typeof appIdToUse === 'string')
       ? appIdToUse
       : (!isAdminPanelMode && currentApp ? currentApp.id : 'all');
@@ -656,7 +690,7 @@ const AdminPanel: React.FC = () => {
           }))
         : [];
       setUsers(data);
-      if (data.length) {
+      if (data.length && includeSummaries) {
         fetchUserSummaries(data.map((u: User) => u.id), aid);
       }
     }

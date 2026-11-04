@@ -349,19 +349,35 @@ router.get('/', authenticateToken, async (req, res) => {
     }
     const groups = req.user.userGroups || [];
     const isFullAccess = req.user.isAdmin || groups.includes('developers') || groups.includes('admins');
+    const isMinimal = req.query.minimal === 'true';
+    const selectCols = isMinimal ? 't.id, t.name, t.app_id, t.is_deleted' : 't.*';
     let tests;
     if (isFullAccess) {
       let allTests;
       if (appId === 'all') {
         if (isGlobalAdminUser(req.user)) {
+          const minCacheKey = isMinimal ? 'stepCount:tests_minimal_all' : null;
+          const cachedMin = minCacheKey ? cache.get(minCacheKey) : null;
+          if (cachedMin) return res.json(cachedMin);
           allTests = await testsDb.prepare(`
-            SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+            SELECT ${selectCols}, COALESCE(a.name, 'TopStor') as app_name
             FROM tests t
             LEFT JOIN apps a ON t.app_id = a.id
             WHERE COALESCE(t.is_deleted, 0) = 0
               AND (a.is_deleted IS NULL OR a.is_deleted = 0)
             ORDER BY COALESCE(t.app_id, 1), t.id
           `).all();
+          if (isMinimal) {
+            const mapped = allTests.map(t => ({
+              id: t.id,
+              name: t.name,
+              app_id: t.app_id,
+              app_name: t.app_name,
+              is_deleted: t.is_deleted ? 1 : 0
+            }));
+            cache.set(minCacheKey, mapped, 60000);
+            return res.json(mapped);
+          }
         } else {
           const userAssigned = getUserAssignedApps(req.user);
           if (userAssigned.length === 0) {
@@ -369,7 +385,7 @@ router.get('/', authenticateToken, async (req, res) => {
           } else {
             const placeholders = userAssigned.map(() => '?').join(',');
             allTests = await testsDb.prepare(`
-              SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+              SELECT ${selectCols}, COALESCE(a.name, 'TopStor') as app_name
               FROM tests t
               LEFT JOIN apps a ON t.app_id = a.id
               WHERE COALESCE(t.is_deleted, 0) = 0
@@ -381,12 +397,21 @@ router.get('/', authenticateToken, async (req, res) => {
         }
       } else {
         allTests = await testsDb.prepare(`
-          SELECT t.*, COALESCE(a.name, 'TopStor') as app_name
+          SELECT ${selectCols}, COALESCE(a.name, 'TopStor') as app_name
           FROM tests t
           LEFT JOIN apps a ON t.app_id = a.id
           WHERE t.app_id = ? AND COALESCE(t.is_deleted, 0) = 0
           ORDER BY t.id
         `).all(appId);
+      }
+      if (isMinimal) {
+        return res.json(allTests.map(t => ({
+          id: t.id,
+          name: t.name,
+          app_id: t.app_id,
+          app_name: t.app_name,
+          is_deleted: t.is_deleted ? 1 : 0
+        })));
       }
       const allTestIds = allTests.map(t => t.id);
       const totalPointsMap = await getBatchTotalPoints(allTestIds);
@@ -401,6 +426,15 @@ router.get('/', authenticateToken, async (req, res) => {
         maxMonthlyRounds: 8,
         isMonthlyLocked: false
       }));
+    } else if (isMinimal) {
+      const assigned = await getAssignedTestsOrdered(req.user.userId, appId);
+      return res.json(assigned.map(t => ({
+        id: t.id,
+        name: t.name,
+        app_id: t.app_id,
+        app_name: t.app_name,
+        is_deleted: t.is_deleted ? 1 : 0
+      })));
     } else {
       const isApiUser = isApiKeyUser(req);
       const roundAppId = appId === 'all' ? 1 : appId;
@@ -1037,14 +1071,53 @@ router.post('/enable-all', authenticateToken, requireDeveloper, async (req, res)
 router.get('/steps', authenticateToken, async (req, res) => {
   try {
     const testIdsRaw = req.query.testIds;
-    let testIds = [];
+    const appId = getAppId(req);
     let tests;
+    let steps;
 
     if (testIdsRaw === 'all' || !testIdsRaw) {
-      tests = await testsDb.prepare('SELECT id, name FROM tests ORDER BY id').all();
-      testIds = tests.map(t => t.id);
+      if (appId !== 'all') {
+        if (!canUserAccessApp(req.user, appId)) {
+          return res.status(403).json({ error: 'You do not have access to this application' });
+        }
+        [tests, steps] = await testsDb.batchRead([
+          {
+            sql: 'SELECT id, name FROM tests WHERE app_id = ? ORDER BY id',
+            args: [appId]
+          },
+          {
+            sql: `SELECT ts.test_id, ts.id, ts.step_number, ts.description, ts.success_symptom,
+                         COALESCE(ts.points, ts.value, 0) AS points,
+                         COALESCE(ts.value, ts.points, 0) AS value,
+                         COALESCE(ts.on_failure, 'stop') AS on_failure,
+                         ts.attachment_path, ts.attachment_name
+                  FROM test_steps ts
+                  JOIN tests t ON t.id = ts.test_id
+                  WHERE t.app_id = ?
+                  ORDER BY ts.test_id, ts.step_number`,
+            args: [appId]
+          }
+        ]);
+      } else {
+        [tests, steps] = await testsDb.batchRead([
+          {
+            sql: 'SELECT id, name FROM tests ORDER BY id',
+            args: []
+          },
+          {
+            sql: `SELECT test_id, id, step_number, description, success_symptom,
+                         COALESCE(points, value, 0) AS points,
+                         COALESCE(value, points, 0) AS value,
+                         COALESCE(on_failure, 'stop') AS on_failure,
+                         attachment_path, attachment_name
+                  FROM test_steps
+                  ORDER BY test_id, step_number`,
+            args: []
+          }
+        ]);
+      }
     } else {
-      testIds = String(testIdsRaw)
+      const testIds = String(testIdsRaw)
         .split(',')
         .map(id => parseInt(id, 10))
         .filter(id => !isNaN(id));
@@ -1054,24 +1127,28 @@ router.get('/steps', authenticateToken, async (req, res) => {
       }
 
       const placeholders = testIds.map(() => '?').join(',');
-      tests = await testsDb.prepare(`SELECT id, name FROM tests WHERE id IN (${placeholders})`).all(...testIds);
+      [tests, steps] = await testsDb.batchRead([
+        {
+          sql: `SELECT id, name FROM tests WHERE id IN (${placeholders})`,
+          args: testIds
+        },
+        {
+          sql: `SELECT test_id, id, step_number, description, success_symptom,
+                       COALESCE(points, value, 0) AS points,
+                       COALESCE(value, points, 0) AS value,
+                       COALESCE(on_failure, 'stop') AS on_failure,
+                       attachment_path, attachment_name
+                FROM test_steps
+                WHERE test_id IN (${placeholders})
+                ORDER BY test_id, step_number`,
+          args: testIds
+        }
+      ]);
     }
 
     if (tests.length === 0) {
       return res.status(404).json({ error: 'No valid tests found' });
     }
-
-    const testPlaceholders = testIds.map(() => '?').join(',');
-    const steps = await testsDb.prepare(
-      `SELECT test_id, id, step_number, description, success_symptom,
-              COALESCE(points, value, 0) AS points,
-              COALESCE(value, points, 0) AS value,
-              COALESCE(on_failure, 'stop') AS on_failure,
-              attachment_path, attachment_name
-       FROM test_steps
-       WHERE test_id IN (${testPlaceholders})
-       ORDER BY test_id, step_number`
-    ).all(...testIds);
 
     const stepsByTest = {};
     for (const step of steps) {
@@ -1223,6 +1300,7 @@ router.post('/:id/steps', authenticateToken, requireDeveloper, async (req, res) 
     `).run(id, nextStepNum, String(description).trim(), successVal, pointsVal, pointsVal, on_failure || 'stop', attachment_path || null, attachment_name || null);
     
     cache.invalidate('stepCount:' + id);
+    cache.invalidatePrefix('stepCount:all_');
     cache.invalidate('totalPoints:' + id);
     res.status(201).json({ id: result.lastInsertRowid, test_id: parseInt(id, 10), step_number: nextStepNum, description: String(description).trim(), success_symptom: successVal, value: pointsVal, points: pointsVal, on_failure: on_failure || 'stop', attachment_path: attachment_path || null, attachment_name: attachment_name || null });
   } catch (error) {
@@ -1317,6 +1395,7 @@ async function updateStepHandler(req, res) {
     `).run(finalStepNumber, finalDescription, finalSuccessSymptom, finalPoints, finalPoints, finalOnFailure, finalAttachmentPath, finalAttachmentName, stepId, testId);
 
     cache.invalidate('stepCount:' + testId);
+    cache.invalidatePrefix('stepCount:all_');
     cache.invalidate('totalPoints:' + testId);
 
     const updatedStep = {
@@ -1364,6 +1443,7 @@ router.delete('/:testId/steps/:stepId', authenticateToken, requireDeveloper, asy
     
     await testsDb.prepare('DELETE FROM test_steps WHERE id = ? AND test_id = ?').run(stepId, testId);
     cache.invalidate('stepCount:' + testId);
+    cache.invalidatePrefix('stepCount:all_');
     cache.invalidate('totalPoints:' + testId);
     res.json({ message: 'Step deleted successfully' });
   } catch (error) {

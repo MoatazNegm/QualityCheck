@@ -40,7 +40,7 @@ function canUserAccessApp(user, appId) {
 }
 
 function getAppId(req) {
-  const raw = req.headers['x-app-id'] || (req.query && req.query.appId) || (req.body && req.body.appId);
+  const raw = (req.query && req.query.appId) || (req.body && req.body.appId) || req.headers['x-app-id'];
 
   // 1. API Keys are permanently pinned to their declared app_id
   if (req.user && req.user.isApiKey && req.user.appId) {

@@ -87,24 +87,23 @@ router.get('/stats', authenticateToken, async (req, res) => {
     const isGlobal = isGlobalAdminUser(req.user);
     const assigned = getUserAssignedApps(req.user);
 
-    const appsList = await testsDb.prepare(`
-      SELECT id, name, description, created_at,
-             COALESCE(is_suspended, 0) as is_suspended,
-             COALESCE(is_deleted, 0) as is_deleted
-      FROM apps
-      WHERE COALESCE(is_deleted, 0) = 0
-    `).all();
+    const [appsList, testsRows, versionsRows, currentVersionsRows, userAppsRows, execRows] = await testsDb.batchRead([
+      {
+        sql: `SELECT id, name, description, created_at,
+                     COALESCE(is_suspended, 0) as is_suspended,
+                     COALESCE(is_deleted, 0) as is_deleted
+              FROM apps
+              WHERE COALESCE(is_deleted, 0) = 0`
+      },
+      { sql: 'SELECT app_id, COUNT(*) as c FROM tests WHERE COALESCE(is_deleted, 0) = 0 GROUP BY app_id' },
+      { sql: 'SELECT app_id, COUNT(*) as c FROM versions GROUP BY app_id' },
+      { sql: 'SELECT app_id, name FROM versions WHERE is_current = 1' },
+      { sql: 'SELECT app_id, COUNT(DISTINCT user_id) as c FROM user_apps GROUP BY app_id' },
+      { sql: 'SELECT app_id, COUNT(*) as c FROM test_results GROUP BY app_id' }
+    ]);
 
     const allowedApps = appsList.filter(a => isGlobal || assigned.includes(a.id));
     if (allowedApps.length === 0) return res.json({});
-
-    const [testsRows, versionsRows, currentVersionsRows, userAppsRows, execRows] = await Promise.all([
-      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM tests WHERE COALESCE(is_deleted, 0) = 0 GROUP BY app_id').all(),
-      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM versions GROUP BY app_id').all(),
-      testsDb.prepare('SELECT app_id, name FROM versions WHERE is_current = 1').all(),
-      testsDb.prepare('SELECT app_id, COUNT(DISTINCT user_id) as c FROM user_apps GROUP BY app_id').all(),
-      testsDb.prepare('SELECT app_id, COUNT(*) as c FROM test_results GROUP BY app_id').all()
-    ]);
 
     const testsMap = Object.fromEntries(testsRows.map(r => [r.app_id, r.c]));
     const versionsMap = Object.fromEntries(versionsRows.map(r => [r.app_id, r.c]));

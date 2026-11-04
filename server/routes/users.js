@@ -53,31 +53,22 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
     const cachedFull = cache.get(fullCacheKey);
     if (cachedFull) return res.json(cachedFull);
 
-    // Concurrently fetch users, keys, apps, and assignments in parallel (Promise.all)
-    const [users, allKeys, allUserApps, allAssignments] = await Promise.all([
-      usersDb.prepare('SELECT id, username, is_admin, is_suspended, user_groups FROM users').all(),
-      testsDb.prepare('SELECT id, name, key_prefix, role, is_active, user_id, COALESCE(app_id, 1) as app_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC').all().catch(kErr => {
-        console.warn('Non-fatal: could not query api_keys for users list:', kErr.message);
-        return [];
-      }),
-      testsDb.prepare(`
-        SELECT ua.user_id, a.id, a.name, a.description
-        FROM user_apps ua
-        JOIN apps a ON ua.app_id = a.id
-        ORDER BY a.id
-      `).all().catch(appErr => {
-        console.warn('Non-fatal: could not query user_apps:', appErr.message);
-        return [];
-      }),
-      testsDb.prepare(`
-        SELECT ta.user_id, ta.test_id, COALESCE(t.app_id, 1) as app_id
-        FROM test_assignments ta
-        JOIN tests t ON ta.test_id = t.id
-        WHERE COALESCE(t.is_deleted, 0) = 0
-      `).all().catch(testErr => {
-        console.warn('Non-fatal: could not query assignments by app:', testErr.message);
-        return [];
-      })
+    // Single Turso HTTP batchRead for users, keys, apps, and assignments
+    const [users, allKeys, allUserApps, allAssignments] = await testsDb.batchRead([
+      { sql: 'SELECT id, username, is_admin, is_suspended, user_groups FROM users' },
+      { sql: 'SELECT id, name, key_prefix, role, is_active, user_id, COALESCE(app_id, 1) as app_id, created_at, last_used_at FROM api_keys ORDER BY created_at DESC' },
+      {
+        sql: `SELECT ua.user_id, a.id, a.name, a.description
+              FROM user_apps ua
+              JOIN apps a ON ua.app_id = a.id
+              ORDER BY a.id`
+      },
+      {
+        sql: `SELECT ta.user_id, ta.test_id, COALESCE(t.app_id, 1) as app_id
+              FROM test_assignments ta
+              JOIN tests t ON ta.test_id = t.id
+              WHERE COALESCE(t.is_deleted, 0) = 0`
+      }
     ]);
 
     const keysByUser = {};
@@ -141,6 +132,14 @@ router.get('/', authenticateToken, requireDeveloper, async (req, res) => {
 // Bulk user summaries (admin/developer only) — replaces N+1 frontend loops
 router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) => {
   try {
+    const appId = getAppId(req);
+    const isAll = appId === 'all';
+    const cleanAppId = isAll ? null : (parseInt(appId, 10) || 1);
+
+    const summaryCacheKey = `users_summaries_${isAll ? 'all' : cleanAppId}`;
+    const cachedSummaries = cache.get(summaryCacheKey);
+    if (cachedSummaries) return res.json(cachedSummaries);
+
     const allUsers = await usersDb.prepare(
       'SELECT id, username, is_admin, is_suspended, user_groups FROM users'
     ).all();
@@ -148,140 +147,94 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
     const userIds = nonAdminUsers.map(u => u.id);
     if (userIds.length === 0) return res.json({});
 
-    const appId = getAppId(req);
-    const isAll = appId === 'all';
-    const cleanAppId = isAll ? null : (parseInt(appId, 10) || 1);
+    // Single Turso HTTP batchRead for all 5 summary queries
+    const [roundRows, doneRows, stepRows, failRows, assignmentRows] = await testsDb.batchRead([
+      isAll
+        ? { sql: 'SELECT user_id, MAX(round_no) as round_no FROM user_rounds GROUP BY user_id' }
+        : { sql: 'SELECT user_id, round_no FROM user_rounds WHERE app_id = ?', args: [cleanAppId] },
+      isAll
+        ? {
+            sql: `SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+                  FROM test_results tr
+                  JOIN tests t ON tr.test_id = t.id
+                  LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = tr.app_id
+                  WHERE COALESCE(t.is_deleted, 0) = 0
+                    AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+                  GROUP BY tr.user_id, tr.test_id`
+          }
+        : {
+            sql: `SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+                  FROM test_results tr
+                  JOIN tests t ON tr.test_id = t.id
+                  LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = ?
+                  WHERE COALESCE(t.is_deleted, 0) = 0
+                    AND tr.app_id = ?
+                    AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+                  GROUP BY tr.user_id, tr.test_id`,
+            args: [cleanAppId, cleanAppId]
+          },
+      { sql: 'SELECT test_id, COUNT(*) AS c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id' },
+      isAll
+        ? {
+            sql: `SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+                  FROM test_results tr
+                  JOIN tests t ON tr.test_id = t.id
+                  JOIN test_steps tstep ON tr.step_id = tstep.id
+                  LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = tr.app_id
+                  WHERE COALESCE(t.is_deleted, 0) = 0
+                    AND tr.result = 'fail' AND tstep.on_failure = 'stop'
+                    AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+                  GROUP BY tr.user_id, tr.test_id`
+          }
+        : {
+            sql: `SELECT tr.user_id, tr.test_id, COUNT(*) AS c
+                  FROM test_results tr
+                  JOIN tests t ON tr.test_id = t.id
+                  JOIN test_steps tstep ON tr.step_id = tstep.id
+                  LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = ?
+                  WHERE COALESCE(t.is_deleted, 0) = 0
+                    AND tr.app_id = ?
+                    AND tr.result = 'fail' AND tstep.on_failure = 'stop'
+                    AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
+                  GROUP BY tr.user_id, tr.test_id`,
+            args: [cleanAppId, cleanAppId]
+          },
+      isAll
+        ? {
+            sql: `SELECT ta.user_id, ta.test_id
+                  FROM test_assignments ta
+                  JOIN tests t ON ta.test_id = t.id
+                  WHERE COALESCE(t.is_deleted, 0) = 0`
+          }
+        : {
+            sql: `SELECT ta.user_id, ta.test_id
+                  FROM test_assignments ta
+                  JOIN tests t ON ta.test_id = t.id
+                  WHERE COALESCE(t.is_deleted, 0) = 0 AND t.app_id = ?`,
+            args: [cleanAppId]
+          }
+    ]);
 
-    // Batch: assigned test counts per user (non-deleted tests, scoped by app)
-    let assignedRows;
-    if (isAll) {
-      assignedRows = await testsDb.prepare(`
-        SELECT ta.user_id, COUNT(*) AS c
-        FROM test_assignments ta
-        JOIN tests t ON ta.test_id = t.id
-        WHERE COALESCE(t.is_deleted, 0) = 0
-        GROUP BY ta.user_id
-      `).all();
-    } else {
-      assignedRows = await testsDb.prepare(`
-        SELECT ta.user_id, COUNT(*) AS c
-        FROM test_assignments ta
-        JOIN tests t ON ta.test_id = t.id
-        WHERE COALESCE(t.is_deleted, 0) = 0 AND t.app_id = ?
-        GROUP BY ta.user_id
-      `).all(cleanAppId);
-    }
-    const assignedMap = Object.fromEntries(assignedRows.map(r => [r.user_id, r.c]));
-
-    // Batch: completed rounds per user for current app scope
-    let roundRows;
-    if (isAll) {
-      roundRows = await testsDb.prepare(`
-        SELECT user_id, MAX(round_no) as round_no
-        FROM user_rounds
-        GROUP BY user_id
-      `).all();
-    } else {
-      roundRows = await testsDb.prepare(`
-        SELECT user_id, round_no
-        FROM user_rounds
-        WHERE app_id = ?
-      `).all(cleanAppId);
-    }
     const roundsMap = Object.fromEntries(roundRows.map(r => [r.user_id, r.round_no]));
-
-    // Batch: done step counts per user+test for each user's current round in current app
-    let doneRows;
-    if (isAll) {
-      doneRows = await testsDb.prepare(`
-        SELECT tr.user_id, tr.test_id, COUNT(*) AS c
-        FROM test_results tr
-        JOIN tests t ON tr.test_id = t.id
-        LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = tr.app_id
-        WHERE COALESCE(t.is_deleted, 0) = 0
-          AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
-        GROUP BY tr.user_id, tr.test_id
-      `).all();
-    } else {
-      doneRows = await testsDb.prepare(`
-        SELECT tr.user_id, tr.test_id, COUNT(*) AS c
-        FROM test_results tr
-        JOIN tests t ON tr.test_id = t.id
-        LEFT JOIN user_rounds ur ON ur.user_id = tr.user_id AND ur.app_id = ?
-        WHERE COALESCE(t.is_deleted, 0) = 0
-          AND tr.app_id = ?
-          AND COALESCE(tr.round_id, 0) = COALESCE(ur.round_no, 0)
-        GROUP BY tr.user_id, tr.test_id
-      `).all(cleanAppId, cleanAppId);
-    }
     const doneMap = {};
     for (const r of doneRows) {
       if (!doneMap[r.user_id]) doneMap[r.user_id] = {};
       doneMap[r.user_id][r.test_id] = r.c;
     }
-
-    // Batch: total step counts per test (excluding section headers)
-    const stepRows = await testsDb.prepare(
-      'SELECT test_id, COUNT(*) AS c FROM test_steps WHERE COALESCE(points, value, 0) != -1 GROUP BY test_id'
-    ).all();
     const stepMap = Object.fromEntries(stepRows.map(r => [r.test_id, r.c]));
-
-    // Batch: hard-stop failure counts per user+test in the current round
-    let failRows;
-    if (isAll) {
-      failRows = await testsDb.prepare(`
-        SELECT ts.user_id, ts.test_id, COUNT(*) AS c
-        FROM test_submissions ts
-        JOIN tests t ON ts.test_id = t.id
-        JOIN test_steps tstep ON ts.step_id = tstep.id
-        LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id AND ur.app_id = ts.app_id
-        WHERE COALESCE(t.is_deleted, 0) = 0
-          AND ts.result = 'fail' AND tstep.on_failure = 'stop'
-          AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
-        GROUP BY ts.user_id, ts.test_id
-      `).all();
-    } else {
-      failRows = await testsDb.prepare(`
-        SELECT ts.user_id, ts.test_id, COUNT(*) AS c
-        FROM test_submissions ts
-        JOIN tests t ON ts.test_id = t.id
-        JOIN test_steps tstep ON ts.step_id = tstep.id
-        LEFT JOIN user_rounds ur ON ur.user_id = ts.user_id AND ur.app_id = ?
-        WHERE COALESCE(t.is_deleted, 0) = 0
-          AND ts.app_id = ?
-          AND ts.result = 'fail' AND tstep.on_failure = 'stop'
-          AND COALESCE(ts.round_id, 0) = COALESCE(ur.round_no, 0)
-        GROUP BY ts.user_id, ts.test_id
-      `).all(cleanAppId, cleanAppId);
-    }
     const failMap = {};
     for (const r of failRows) {
       if (!failMap[r.user_id]) failMap[r.user_id] = {};
       failMap[r.user_id][r.test_id] = r.c;
-    }
-
-    // Batch: assignments per user (non-deleted tests, scoped by app)
-    let assignmentRows;
-    if (isAll) {
-      assignmentRows = await testsDb.prepare(`
-        SELECT ta.user_id, ta.test_id
-        FROM test_assignments ta
-        JOIN tests t ON ta.test_id = t.id
-        WHERE COALESCE(t.is_deleted, 0) = 0
-      `).all();
-    } else {
-      assignmentRows = await testsDb.prepare(`
-        SELECT ta.user_id, ta.test_id
-        FROM test_assignments ta
-        JOIN tests t ON ta.test_id = t.id
-        WHERE COALESCE(t.is_deleted, 0) = 0 AND t.app_id = ?
-      `).all(cleanAppId);
     }
     const userAssignments = {};
     for (const r of assignmentRows) {
       if (!userAssignments[r.user_id]) userAssignments[r.user_id] = [];
       userAssignments[r.user_id].push(r.test_id);
     }
+    const assignedMap = Object.fromEntries(
+      Object.entries(userAssignments).map(([uid, tids]) => [uid, tids.length])
+    );
 
     const summaries = {};
     for (const u of nonAdminUsers) {
@@ -309,6 +262,7 @@ router.get('/summaries', authenticateToken, requireDeveloper, async (req, res) =
       };
     }
 
+    cache.set(summaryCacheKey, summaries, 15000);
     res.json(summaries);
   } catch (error) {
     console.error('Bulk summaries error:', error);
@@ -751,6 +705,7 @@ router.post('/:id/pay-points', authenticateToken, requireAdmin, async (req, res)
     await usersDb.prepare(
       'INSERT INTO point_payments (user_id, points_paid, admin_id) VALUES (?, ?, ?)'
     ).run(userId, points, adminId);
+    cache.invalidatePrefix('points_report:');
     
     res.json({ message: 'Points paid successfully' });
   } catch (error) {

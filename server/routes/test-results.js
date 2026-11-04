@@ -370,6 +370,7 @@ router.post('/:testId/steps/:stepId', authenticateToken, uploadConfigFile, async
     await testsDb.prepare(
       'INSERT INTO points_log (user_id, test_id, step_id, points, version_id, round_id, earned_at, app_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(userId, testId, stepId, pointsAwarded, currentVersionId, roundNo, nowIso, appId);
+    cache.invalidatePrefix('points_report:');
 
     // Auto-end the test and advance the loop if:
     // 1. A hard-stop failure is submitted (on_failure === 'stop' or default 'stop')

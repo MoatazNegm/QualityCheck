@@ -245,6 +245,19 @@ const dbWrapper = {
       await clientWrapper.batch(statements, 'write');
     }
   },
+  async batchRead(statements) {
+    await dbReady;
+    if (!statements || statements.length === 0) return [];
+    const normalized = statements.map(stmt => {
+      if (typeof stmt === 'string') return { sql: stmt, args: [] };
+      return {
+        sql: stmt.sql,
+        args: normalizeParams(stmt.args || [])
+      };
+    });
+    const results = await clientWrapper.batch(normalized, 'read');
+    return results.map(r => r.rows || []);
+  },
   client: clientWrapper,
   isTurso
 };
@@ -447,7 +460,14 @@ async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_test_results_user_test_round ON test_results(user_id, test_id, round_id)',
     'CREATE INDEX IF NOT EXISTS idx_test_results_user_exec ON test_results(user_id, executed_at)',
     'CREATE INDEX IF NOT EXISTS idx_test_results_app_exec ON test_results(app_id, executed_at)',
-    'CREATE INDEX IF NOT EXISTS idx_tests_app_id ON tests(app_id)'
+    'CREATE INDEX IF NOT EXISTS idx_tests_app_id ON tests(app_id)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_app_earned_cov ON points_log(app_id, earned_at, version_id, user_id, test_id, points)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_app_ver_earned_cov ON points_log(app_id, version_id, earned_at, user_id, test_id, points)',
+    'CREATE INDEX IF NOT EXISTS idx_points_log_earned_cov ON points_log(earned_at, app_id, version_id, user_id, test_id, points)',
+    'CREATE INDEX IF NOT EXISTS idx_test_sub_app_exec_cov ON test_submissions(app_id, executed_at, version_id, user_id, test_id, round_id, result, step_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_sub_app_ver_exec_cov ON test_submissions(app_id, version_id, executed_at, user_id, test_id, round_id, result, step_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_sub_exec_cov ON test_submissions(executed_at, app_id, version_id, user_id, test_id, round_id, result, step_id)',
+    'CREATE INDEX IF NOT EXISTS idx_test_steps_cov ON test_steps(test_id, points, value)'
   ];
   await clientWrapper.batch(indexStatements, 'write');
 }

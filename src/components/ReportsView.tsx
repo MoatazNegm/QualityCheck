@@ -152,143 +152,7 @@ const ReportsView: React.FC = () => {
   };
 
   const hasGeneratedReportRef = useRef<boolean>(sessionStorage.getItem('qc_reports_has_run') === 'true');
-
-  // --- App Selection States for Multi-App Reporting ---
-  const [reportAppIds, setReportAppIds] = useState<number[]>([]);
-  const [testReportAppIds, setTestReportAppIds] = useState<number[]>([]);
-  const [passedReportAppIds, setPassedReportAppIds] = useState<number[]>([]);
-  const [failedReportAppIds, setFailedReportAppIds] = useState<number[]>([]);
-  const [pointsReportAppIds, setPointsReportAppIds] = useState<number[]>([]);
-  const [paymentsReportAppIds, setPaymentsReportAppIds] = useState<number[]>([]);
-
-  const [users, setUsers] = useState<User[]>([]);
-  const [tests, setTests] = useState<Test[]>([]);
-  const [versions, setVersions] = useState<Version[]>([]);
-
-  // --- User Report State ---
-  const [reportUserIds, setReportUserIds] = useState<number[]>([]);
-  const [reportUserSearch, setReportUserSearch] = useState('');
-  const [showUserDropdown, setShowUserDropdown] = useState(false);
-
-  const [reportVersionIds, setReportVersionIds] = useState<number[]>([]);
-  const [reportVersionSearch, setReportVersionSearch] = useState('');
-  const [showVersionDropdown, setShowVersionDropdown] = useState(false);
-
-  const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
-  const [reportStartDate, setReportStartDate] = useState('');
-  const [reportEndDate, setReportEndDate] = useState('');
-
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportData, setReportData] = useState<any>(null);
-  const [reportError, setReportError] = useState('');
-  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
-  const [expandedReportSteps, setExpandedReportSteps] = useState<Set<string>>(new Set());
-
-  // --- Test Report State ---
-  const [testReportTestIds, setTestReportTestIds] = useState<number[]>([]);
-  const [testReportTestSearch, setTestReportTestSearch] = useState('');
-  const [showTestDropdown, setShowTestDropdown] = useState(false);
-
-  const [testReportSteps, setTestReportSteps] = useState<any[]>([]);
-  const [testReportSelectedStepId, setTestReportSelectedStepId] = useState<number | null>(null);
-  const [testReportStepSearch, setTestReportStepSearch] = useState('');
-  const [showStepDropdown, setShowStepDropdown] = useState(false);
-
-  const [testReportVersionIds, setTestReportVersionIds] = useState<number[]>([]);
-  const [testReportVersionSearch, setTestReportVersionSearch] = useState('');
-  const [showTestVersionDropdown, setShowTestVersionDropdown] = useState(false);
-
-  const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
-  const [testReportStartDate, setTestReportStartDate] = useState('');
-  const [testReportEndDate, setTestReportEndDate] = useState('');
-
-  const [testReportLoading, setTestReportLoading] = useState(false);
-  const [testReportData, setTestReportData] = useState<any>(null);
-  const [testReportError, setTestReportError] = useState('');
-
-  // --- Passed Steps Report State ---
-  const [passedReportUserIds, setPassedReportUserIds] = useState<number[]>([]);
-  const [passedReportUserSearch, setPassedReportUserSearch] = useState('');
-  const [showPassedUserDropdown, setShowPassedUserDropdown] = useState(false);
-
-  const [passedReportTestIds, setPassedReportTestIds] = useState<number[]>([]);
-  const [passedReportTestSearch, setPassedReportTestSearch] = useState('');
-  const [showPassedTestDropdown, setShowPassedTestDropdown] = useState(false);
-
-  const [passedReportVersionIds, setPassedReportVersionIds] = useState<number[]>([]);
-  const [passedReportVersionSearch, setPassedReportVersionSearch] = useState('');
-  const [showPassedVersionDropdown, setShowPassedVersionDropdown] = useState(false);
-
-  const [passedReportPreset, setPassedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
-  const [passedReportStartDate, setPassedReportStartDate] = useState('');
-  const [passedReportEndDate, setPassedReportEndDate] = useState('');
-
-  const [passedReportLoading, setPassedReportLoading] = useState(false);
-  const [passedReportData, setPassedReportData] = useState<any>(null);
-  const [passedReportError, setPassedReportError] = useState('');
-  const [expandedPassedTests, setExpandedPassedTests] = useState<Set<number>>(new Set());
-
-  // --- Failed Steps Report State ---
-  const [failedReportUserIds, setFailedReportUserIds] = useState<number[]>([]);
-  const [failedReportUserSearch, setFailedReportUserSearch] = useState('');
-  const [showFailedUserDropdown, setShowFailedUserDropdown] = useState(false);
-
-  const [failedReportTestIds, setFailedReportTestIds] = useState<number[]>([]);
-  const [failedReportTestSearch, setFailedReportTestSearch] = useState('');
-  const [showFailedTestDropdown, setShowFailedTestDropdown] = useState(false);
-
-  const [failedReportVersionIds, setFailedReportVersionIds] = useState<number[]>([]);
-  const [failedReportVersionSearch, setFailedReportVersionSearch] = useState('');
-  const [showFailedVersionDropdown, setShowFailedVersionDropdown] = useState(false);
-
-  const [failedReportPreset, setFailedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
-  const [failedReportStartDate, setFailedReportStartDate] = useState('');
-  const [failedReportEndDate, setFailedReportEndDate] = useState('');
-
-  const [failedReportLoading, setFailedReportLoading] = useState(false);
-  const [failedReportData, setFailedReportData] = useState<any>(null);
-  const [failedReportError, setFailedReportError] = useState('');
-  
-  const [expandedFailedStep, setExpandedFailedStep] = useState<number | null>(null);
-
-  // --- Points Report State ---
-  const [pointsReportUserIds, setPointsReportUserIds] = useState<number[]>([]);
-  const [pointsReportUserSearch, setPointsReportUserSearch] = useState('');
-  const [showPointsUserDropdown, setShowPointsUserDropdown] = useState(false);
-
-  const [pointsReportTestIds, setPointsReportTestIds] = useState<number[]>([]);
-  const [pointsReportTestSearch, setPointsReportTestSearch] = useState('');
-  const [showPointsTestDropdown, setShowPointsTestDropdown] = useState(false);
-
-  const [pointsReportVersionIds, setPointsReportVersionIds] = useState<number[]>([]);
-  const [pointsReportVersionSearch, setPointsReportVersionSearch] = useState('');
-  const [showPointsVersionDropdown, setShowPointsVersionDropdown] = useState(false);
-
-  const [pointsReportPreset, setPointsReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
-  const [pointsReportStartDate, setPointsReportStartDate] = useState('');
-  const [pointsReportEndDate, setPointsReportEndDate] = useState('');
-
-  const [pointsReportLoading, setPointsReportLoading] = useState(false);
-  const [pointsReportData, setPointsReportData] = useState<any>(null);
-  const [pointsReportError, setPointsReportError] = useState('');
-  const [expandedWarningUsers, setExpandedWarningUsers] = useState<Record<number, boolean>>({});
-  const toggleUserWarningsExpand = (userId: number) => {
-    setExpandedWarningUsers(prev => ({ ...prev, [userId]: !prev[userId] }));
-  };
-
-  // --- Payments Report State ---
-  const [paymentsReportUserIds, setPaymentsReportUserIds] = useState<number[]>([]);
-  const [paymentsReportUserSearch, setPaymentsReportUserSearch] = useState('');
-  const [showPaymentsUserDropdown, setShowPaymentsUserDropdown] = useState(false);
-  const [paymentsReportLoading, setPaymentsReportLoading] = useState(false);
-  const [paymentsReportData, setPaymentsReportData] = useState<any>(null);
-  const [paymentsReportError, setPaymentsReportError] = useState('');
-
-  // --- User Progress Drill-Down State (Points Report) ---
-  const [expandedPointsUser, setExpandedPointsUser] = useState<number | null>(null);
-  const [userProgressCache, setUserProgressCache] = useState<Record<number, any>>({});
-  const [userProgressLoading, setUserProgressLoading] = useState<number | null>(null);
-  const [expandedTestHistory, setExpandedTestHistory] = useState<Set<string>>(new Set());
+  const lastAutoRunKeyRef = useRef<string>('');
 
   const getDefaultReportDates = (preset: 'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom') => {
     const now = new Date();
@@ -331,19 +195,160 @@ const ReportsView: React.FC = () => {
     };
   };
 
-  useEffect(() => {
-    const dates = getDefaultReportDates('current_month');
-    setReportStartDate(dates.start);
-    setReportEndDate(dates.end);
-    setTestReportStartDate(dates.start);
-    setTestReportEndDate(dates.end);
-    setPassedReportStartDate(dates.start);
-    setPassedReportEndDate(dates.end);
-    setFailedReportStartDate(dates.start);
-    setFailedReportEndDate(dates.end);
-    setPointsReportStartDate(dates.start);
-    setPointsReportEndDate(dates.end);
+  const initialDates = getDefaultReportDates('current_month');
 
+  // --- App Selection States for Multi-App Reporting ---
+  const [reportAppIds, setReportAppIds] = useState<number[]>([]);
+  const [testReportAppIds, setTestReportAppIds] = useState<number[]>([]);
+  const [passedReportAppIds, setPassedReportAppIds] = useState<number[]>([]);
+  const [failedReportAppIds, setFailedReportAppIds] = useState<number[]>([]);
+  const [pointsReportAppIds, setPointsReportAppIds] = useState<number[]>([]);
+  const [paymentsReportAppIds, setPaymentsReportAppIds] = useState<number[]>([]);
+
+  const [users, setUsers] = useState<User[]>([]);
+  const [tests, setTests] = useState<Test[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('qc_reports_cached_tests');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [versions, setVersions] = useState<Version[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('qc_reports_cached_versions');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // --- User Report State ---
+  const [reportUserIds, setReportUserIds] = useState<number[]>([]);
+  const [reportUserSearch, setReportUserSearch] = useState('');
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+
+  const [reportVersionIds, setReportVersionIds] = useState<number[]>([]);
+  const [reportVersionSearch, setReportVersionSearch] = useState('');
+  const [showVersionDropdown, setShowVersionDropdown] = useState(false);
+
+  const [reportPreset, setReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [reportStartDate, setReportStartDate] = useState(initialDates.start);
+  const [reportEndDate, setReportEndDate] = useState(initialDates.end);
+
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportData, setReportData] = useState<any>(null);
+  const [reportError, setReportError] = useState('');
+  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
+  const [expandedReportSteps, setExpandedReportSteps] = useState<Set<string>>(new Set());
+
+  // --- Test Report State ---
+  const [testReportTestIds, setTestReportTestIds] = useState<number[]>([]);
+  const [testReportTestSearch, setTestReportTestSearch] = useState('');
+  const [showTestDropdown, setShowTestDropdown] = useState(false);
+
+  const [testReportSteps, setTestReportSteps] = useState<any[]>([]);
+  const [testReportSelectedStepId, setTestReportSelectedStepId] = useState<number | null>(null);
+  const [testReportStepSearch, setTestReportStepSearch] = useState('');
+  const [showStepDropdown, setShowStepDropdown] = useState(false);
+
+  const [testReportVersionIds, setTestReportVersionIds] = useState<number[]>([]);
+  const [testReportVersionSearch, setTestReportVersionSearch] = useState('');
+  const [showTestVersionDropdown, setShowTestVersionDropdown] = useState(false);
+
+  const [testReportPreset, setTestReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [testReportStartDate, setTestReportStartDate] = useState(initialDates.start);
+  const [testReportEndDate, setTestReportEndDate] = useState(initialDates.end);
+
+  const [testReportLoading, setTestReportLoading] = useState(false);
+  const [testReportData, setTestReportData] = useState<any>(null);
+  const [testReportError, setTestReportError] = useState('');
+
+  // --- Passed Steps Report State ---
+  const [passedReportUserIds, setPassedReportUserIds] = useState<number[]>([]);
+  const [passedReportUserSearch, setPassedReportUserSearch] = useState('');
+  const [showPassedUserDropdown, setShowPassedUserDropdown] = useState(false);
+
+  const [passedReportTestIds, setPassedReportTestIds] = useState<number[]>([]);
+  const [passedReportTestSearch, setPassedReportTestSearch] = useState('');
+  const [showPassedTestDropdown, setShowPassedTestDropdown] = useState(false);
+
+  const [passedReportVersionIds, setPassedReportVersionIds] = useState<number[]>([]);
+  const [passedReportVersionSearch, setPassedReportVersionSearch] = useState('');
+  const [showPassedVersionDropdown, setShowPassedVersionDropdown] = useState(false);
+
+  const [passedReportPreset, setPassedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [passedReportStartDate, setPassedReportStartDate] = useState(initialDates.start);
+  const [passedReportEndDate, setPassedReportEndDate] = useState(initialDates.end);
+
+  const [passedReportLoading, setPassedReportLoading] = useState(false);
+  const [passedReportData, setPassedReportData] = useState<any>(null);
+  const [passedReportError, setPassedReportError] = useState('');
+  const [expandedPassedTests, setExpandedPassedTests] = useState<Set<number>>(new Set());
+
+  // --- Failed Steps Report State ---
+  const [failedReportUserIds, setFailedReportUserIds] = useState<number[]>([]);
+  const [failedReportUserSearch, setFailedReportUserSearch] = useState('');
+  const [showFailedUserDropdown, setShowFailedUserDropdown] = useState(false);
+
+  const [failedReportTestIds, setFailedReportTestIds] = useState<number[]>([]);
+  const [failedReportTestSearch, setFailedReportTestSearch] = useState('');
+  const [showFailedTestDropdown, setShowFailedTestDropdown] = useState(false);
+
+  const [failedReportVersionIds, setFailedReportVersionIds] = useState<number[]>([]);
+  const [failedReportVersionSearch, setFailedReportVersionSearch] = useState('');
+  const [showFailedVersionDropdown, setShowFailedVersionDropdown] = useState(false);
+
+  const [failedReportPreset, setFailedReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [failedReportStartDate, setFailedReportStartDate] = useState(initialDates.start);
+  const [failedReportEndDate, setFailedReportEndDate] = useState(initialDates.end);
+
+  const [failedReportLoading, setFailedReportLoading] = useState(false);
+  const [failedReportData, setFailedReportData] = useState<any>(null);
+  const [failedReportError, setFailedReportError] = useState('');
+  
+  const [expandedFailedStep, setExpandedFailedStep] = useState<number | null>(null);
+
+  // --- Points Report State ---
+  const [pointsReportUserIds, setPointsReportUserIds] = useState<number[]>([]);
+  const [pointsReportUserSearch, setPointsReportUserSearch] = useState('');
+  const [showPointsUserDropdown, setShowPointsUserDropdown] = useState(false);
+
+  const [pointsReportTestIds, setPointsReportTestIds] = useState<number[]>([]);
+  const [pointsReportTestSearch, setPointsReportTestSearch] = useState('');
+  const [showPointsTestDropdown, setShowPointsTestDropdown] = useState(false);
+
+  const [pointsReportVersionIds, setPointsReportVersionIds] = useState<number[]>([]);
+  const [pointsReportVersionSearch, setPointsReportVersionSearch] = useState('');
+  const [showPointsVersionDropdown, setShowPointsVersionDropdown] = useState(false);
+
+  const [pointsReportPreset, setPointsReportPreset] = useState<'current_month' | 'last_month' | 'current_year' | 'last_year' | 'custom'>('current_month');
+  const [pointsReportStartDate, setPointsReportStartDate] = useState(initialDates.start);
+  const [pointsReportEndDate, setPointsReportEndDate] = useState(initialDates.end);
+
+  const [pointsReportLoading, setPointsReportLoading] = useState(false);
+  const [pointsReportData, setPointsReportData] = useState<any>(null);
+  const [pointsReportError, setPointsReportError] = useState('');
+  const [expandedWarningUsers, setExpandedWarningUsers] = useState<Record<number, boolean>>({});
+  const toggleUserWarningsExpand = (userId: number) => {
+    setExpandedWarningUsers(prev => ({ ...prev, [userId]: !prev[userId] }));
+  };
+
+  // --- Payments Report State ---
+  const [paymentsReportUserIds, setPaymentsReportUserIds] = useState<number[]>([]);
+  const [paymentsReportUserSearch, setPaymentsReportUserSearch] = useState('');
+  const [showPaymentsUserDropdown, setShowPaymentsUserDropdown] = useState(false);
+  const [paymentsReportLoading, setPaymentsReportLoading] = useState(false);
+  const [paymentsReportData, setPaymentsReportData] = useState<any>(null);
+  const [paymentsReportError, setPaymentsReportError] = useState('');
+
+  // --- User Progress Drill-Down State (Points Report) ---
+  const [expandedPointsUser, setExpandedPointsUser] = useState<number | null>(null);
+  const [userProgressCache, setUserProgressCache] = useState<Record<number, any>>({});
+  const [userProgressLoading, setUserProgressLoading] = useState<number | null>(null);
+  const [expandedTestHistory, setExpandedTestHistory] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
     fetchVersions();
     fetchTests();
     if (isFullAccess) {
@@ -386,6 +391,22 @@ const ReportsView: React.FC = () => {
     return result;
   };
 
+  const isAllAppTestsSelected = (selectedTestIds: number[], selectedAppIds: number[], allTestsList: Test[] = tests): boolean => {
+    if (!selectedTestIds || selectedTestIds.length === 0) return true;
+    const scopedActive = (selectedAppIds.length === 0 || selectedAppIds.length === apps.length)
+      ? allTestsList.filter(t => !t.is_deleted)
+      : allTestsList.filter(t => !t.is_deleted && selectedAppIds.includes(Number(t.app_id || 1)));
+    if (scopedActive.length === 0) return false;
+    const selectedSet = new Set(selectedTestIds);
+    return scopedActive.length <= selectedSet.size && scopedActive.every(t => selectedSet.has(t.id));
+  };
+
+  const isAllUsersSelected = (selectedUserIds: number[]): boolean => {
+    if (!isFullAccess) return false;
+    if (!selectedUserIds || selectedUserIds.length === 0) return true;
+    return users.length > 0 && selectedUserIds.length >= users.length;
+  };
+
   useEffect(() => {
     if (apps.length > 0) {
       const defaultIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
@@ -406,14 +427,10 @@ const ReportsView: React.FC = () => {
       setPointsReportTestIds(appActiveTests);
       setTestReportTestIds(appActiveTests);
 
-      // Reset step search & selected step for test report
+      // Reset step search & selected step for test report (steps loaded lazily on dropdown focus)
       setTestReportSelectedStepId(null);
       setTestReportStepSearch('');
-      if (appActiveTests.length > 0) {
-        fetchTestReportSteps(appActiveTests);
-      } else {
-        setTestReportSteps([]);
-      }
+      setTestReportSteps([]);
 
       // Reset expand / drill-down caches
       setUserProgressCache({});
@@ -441,26 +458,30 @@ const ReportsView: React.FC = () => {
         setPointsReportVersionIds(currVersionIds);
         setFailedReportVersionIds(currVersionIds);
 
-        // If the user previously ran/viewed a report, automatically run the SAME report for the newly selected app!
+        // If the user previously ran/viewed a report, automatically run the SAME report for the newly selected app once!
         if (hasGeneratedReportRef.current) {
-          if (reportsSubTab === 'points') {
-            fetchPointsReport(defaultIds, currVersionIds, appActiveTests);
-          } else if (reportsSubTab === 'failed') {
-            fetchFailedReport(defaultIds, currVersionIds, appActiveTests);
-          } else if (reportsSubTab === 'passed') {
-            fetchPassedReport(defaultIds, currVersionIds, appActiveTests);
-          } else if (reportsSubTab === 'test') {
-            fetchTestReport(defaultIds, currVersionIds, appActiveTests, null);
-          } else if (reportsSubTab === 'user') {
-            fetchUserReport(defaultIds, currVersionIds);
-          } else if (reportsSubTab === 'payments') {
-            fetchPaymentsReport(defaultIds);
+          const autoKey = `${reportsSubTab}:${defaultIds.join(',')}:${currVersionIds.join(',')}`;
+          if (lastAutoRunKeyRef.current !== autoKey) {
+            lastAutoRunKeyRef.current = autoKey;
+            if (reportsSubTab === 'points') {
+              fetchPointsReport(defaultIds, currVersionIds, appActiveTests);
+            } else if (reportsSubTab === 'failed') {
+              fetchFailedReport(defaultIds, currVersionIds, appActiveTests);
+            } else if (reportsSubTab === 'passed') {
+              fetchPassedReport(defaultIds, currVersionIds, appActiveTests);
+            } else if (reportsSubTab === 'test') {
+              fetchTestReport(defaultIds, currVersionIds, appActiveTests, null);
+            } else if (reportsSubTab === 'user') {
+              fetchUserReport(defaultIds, currVersionIds);
+            } else if (reportsSubTab === 'payments') {
+              fetchPaymentsReport(defaultIds);
+            }
           }
         }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apps, currentApp, isAdminPanelMode]);
+  }, [apps, currentApp, isAdminPanelMode, versions.length]);
 
   const fetchVersions = async () => {
     try {
@@ -468,35 +489,9 @@ const ReportsView: React.FC = () => {
       if (res.ok) {
         const data: Version[] = await res.json();
         setVersions(data);
-        const defaultAppIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
-        const currVersionIds = getCurrentVersionIdsForApps(defaultAppIds, data);
-        if (currVersionIds.length > 0) {
-          setReportVersionIds(currVersionIds);
-          setTestReportVersionIds(currVersionIds);
-          setPassedReportVersionIds(currVersionIds);
-          setPointsReportVersionIds(currVersionIds);
-          setFailedReportVersionIds(currVersionIds);
-
-          if (hasGeneratedReportRef.current) {
-            const activeTestIds = (!isAdminPanelMode && currentApp)
-              ? tests.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
-              : tests.filter(t => !t.is_deleted).map(t => t.id);
-
-            if (reportsSubTab === 'points') {
-              fetchPointsReport(defaultAppIds, currVersionIds, activeTestIds);
-            } else if (reportsSubTab === 'failed') {
-              fetchFailedReport(defaultAppIds, currVersionIds, activeTestIds);
-            } else if (reportsSubTab === 'passed') {
-              fetchPassedReport(defaultAppIds, currVersionIds, activeTestIds);
-            } else if (reportsSubTab === 'test') {
-              fetchTestReport(defaultAppIds, currVersionIds, activeTestIds, null);
-            } else if (reportsSubTab === 'user') {
-              fetchUserReport(defaultAppIds, currVersionIds);
-            } else if (reportsSubTab === 'payments') {
-              fetchPaymentsReport(defaultAppIds);
-            }
-          }
-        }
+        try {
+          sessionStorage.setItem('qc_reports_cached_versions', JSON.stringify(data));
+        } catch {}
       }
     } catch {
       // ignore
@@ -505,33 +500,20 @@ const ReportsView: React.FC = () => {
 
   const fetchTests = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/tests?appId=all`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/tests?appId=all&minimal=true`, { headers: authHeaders });
       if (res.ok) {
         const data: Test[] = await res.json();
         setTests(data);
+        try {
+          sessionStorage.setItem('qc_reports_cached_tests', JSON.stringify(data));
+        } catch {}
         const activeTestIds = (!isAdminPanelMode && currentApp)
           ? data.filter(t => !t.is_deleted && Number(t.app_id || 1) === Number(currentApp.id)).map(t => t.id)
           : data.filter(t => !t.is_deleted).map(t => t.id);
-        setPassedReportTestIds(activeTestIds);
-        setFailedReportTestIds(activeTestIds);
-        setPointsReportTestIds(activeTestIds);
-        setTestReportTestIds(activeTestIds);
-
-        fetchTestReportSteps(activeTestIds);
-
-        if (hasGeneratedReportRef.current && versions.length > 0) {
-          const defaultAppIds = !isAdminPanelMode && currentApp ? [currentApp.id] : apps.map(a => a.id);
-          const currVersionIds = getCurrentVersionIdsForApps(defaultAppIds, versions);
-          if (reportsSubTab === 'points') {
-            fetchPointsReport(defaultAppIds, currVersionIds, activeTestIds);
-          } else if (reportsSubTab === 'failed') {
-            fetchFailedReport(defaultAppIds, currVersionIds, activeTestIds);
-          } else if (reportsSubTab === 'passed') {
-            fetchPassedReport(defaultAppIds, currVersionIds, activeTestIds);
-          } else if (reportsSubTab === 'test') {
-            fetchTestReport(defaultAppIds, currVersionIds, activeTestIds, null);
-          }
-        }
+        setPassedReportTestIds(prev => prev.length === 0 ? activeTestIds : prev);
+        setFailedReportTestIds(prev => prev.length === 0 ? activeTestIds : prev);
+        setPointsReportTestIds(prev => prev.length === 0 ? activeTestIds : prev);
+        setTestReportTestIds(prev => prev.length === 0 ? activeTestIds : prev);
       }
     } catch {
       // ignore
@@ -622,7 +604,7 @@ const ReportsView: React.FC = () => {
   // User Report
   const fetchUserReport = async (overrideAppIds?: any, overrideVersionIds?: any) => {
     const targetUserIds = isFullAccess ? reportUserIds : (user?.id ? [user.id] : []);
-    if (targetUserIds.length === 0 || !reportStartDate || !reportEndDate) return;
+    if ((!isFullAccess && targetUserIds.length === 0) || !reportStartDate || !reportEndDate) return;
     setReportLoading(true);
     setReportError('');
     setReportData(null);
@@ -630,7 +612,7 @@ const ReportsView: React.FC = () => {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : reportAppIds;
       const versionIdsToUse = Array.isArray(overrideVersionIds) ? overrideVersionIds : reportVersionIds;
       const url = new URL(`${API_BASE}/api/reports/user-report`, window.location.origin);
-      url.searchParams.set('userId', targetUserIds.join(','));
+      url.searchParams.set('userId', isAllUsersSelected(targetUserIds) ? 'all' : targetUserIds.join(','));
       url.searchParams.set('startDate', reportStartDate);
       url.searchParams.set('endDate', reportEndDate);
       if (versionIdsToUse.length > 0) url.searchParams.set('versionIds', versionIdsToUse.join(','));
@@ -687,26 +669,27 @@ const ReportsView: React.FC = () => {
     });
   };
 
-  // Test Report
-  const fetchTestReportSteps = async (overrideTestIds?: number[]) => {
+  // Test Report — uses bulk /api/tests/steps endpoint lazily instead of N+1 /api/tests/:id loops
+  const fetchTestReportSteps = async (overrideTestIds?: number[], overrideAppIds?: number[]) => {
     try {
-      const targetTests = Array.isArray(overrideTestIds)
-        ? overrideTestIds
-        : (testReportTestIds.length > 0 ? testReportTestIds : tests.map(t => t.id));
-      const results = await Promise.all(
-        targetTests.map(tid =>
-          fetch(`${API_BASE}/api/tests/${tid}`, { headers: authHeaders })
-            .then(r => r.ok ? r.json() : null)
-        )
-      );
-      const list = results
-        .filter(Boolean)
-        .map((t: any) => ({
-          testId: t.id,
-          testName: t.name,
-          steps: t.steps || []
-        }));
-      setTestReportSteps(list);
+      const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : testReportAppIds;
+      const targetTests = Array.isArray(overrideTestIds) ? overrideTestIds : testReportTestIds;
+      const url = new URL(`${API_BASE}/api/tests/steps`, window.location.origin);
+      if (isAllAppTestsSelected(targetTests, appIdsToUse)) {
+        url.searchParams.set('testIds', 'all');
+        if (appIdsToUse.length === 1) {
+          url.searchParams.set('appId', String(appIdsToUse[0]));
+        } else {
+          url.searchParams.set('appId', 'all');
+        }
+      } else {
+        url.searchParams.set('testIds', targetTests.join(','));
+      }
+      const res = await fetch(url.toString(), { headers: authHeaders });
+      if (res.ok) {
+        const list = await res.json();
+        setTestReportSteps(Array.isArray(list) ? list : []);
+      }
     } catch (err) {
       console.error('Failed to fetch test report steps:', err);
     }
@@ -724,10 +707,10 @@ const ReportsView: React.FC = () => {
       const stepIdToUse = overrideStepId !== undefined ? overrideStepId : testReportSelectedStepId;
 
       const url = new URL(`${API_BASE}/api/reports/test-report`, window.location.origin);
-      if (testIdsToUse.length > 0) {
-        url.searchParams.set('testId', testIdsToUse.join(','));
-      } else {
+      if (isAllAppTestsSelected(testIdsToUse, appIdsToUse)) {
         url.searchParams.set('testId', 'all');
+      } else {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       }
       url.searchParams.set('startDate', testReportStartDate);
       url.searchParams.set('endDate', testReportEndDate);
@@ -771,15 +754,15 @@ const ReportsView: React.FC = () => {
 
       const url = new URL(`${API_BASE}/api/reports/passed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? passedReportUserIds : (user?.id ? [user.id] : []);
-      if (targetUserIds.length > 0) {
-        url.searchParams.set('userId', targetUserIds.join(','));
-      } else {
+      if (isAllUsersSelected(targetUserIds)) {
         url.searchParams.set('userId', 'all');
-      }
-      if (testIdsToUse.length > 0) {
-        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
+        url.searchParams.set('userId', targetUserIds.join(','));
+      }
+      if (isAllAppTestsSelected(testIdsToUse, appIdsToUse)) {
         url.searchParams.set('testId', 'all');
+      } else {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       }
       url.searchParams.set('startDate', passedReportStartDate);
       url.searchParams.set('endDate', passedReportEndDate);
@@ -821,15 +804,15 @@ const ReportsView: React.FC = () => {
 
       const url = new URL(`${API_BASE}/api/reports/failed-report`, window.location.origin);
       const targetUserIds = isFullAccess ? failedReportUserIds : (user?.id ? [user.id] : []);
-      if (targetUserIds.length > 0) {
-        url.searchParams.set('userId', targetUserIds.join(','));
-      } else {
+      if (isAllUsersSelected(targetUserIds)) {
         url.searchParams.set('userId', 'all');
-      }
-      if (testIdsToUse.length > 0) {
-        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
+        url.searchParams.set('userId', targetUserIds.join(','));
+      }
+      if (isAllAppTestsSelected(testIdsToUse, appIdsToUse)) {
         url.searchParams.set('testId', 'all');
+      } else {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       }
       url.searchParams.set('startDate', failedReportStartDate);
       url.searchParams.set('endDate', failedReportEndDate);
@@ -867,10 +850,10 @@ const ReportsView: React.FC = () => {
     try {
       const appIdsToUse = Array.isArray(overrideAppIds) ? overrideAppIds : paymentsReportAppIds;
       const url = new URL(`${API_BASE}/api/reports/points-payments`, window.location.origin);
-      if (paymentsReportUserIds.length > 0) {
-        url.searchParams.set('userId', paymentsReportUserIds.join(','));
-      } else {
+      if (isAllUsersSelected(paymentsReportUserIds)) {
         url.searchParams.set('userId', 'all');
+      } else {
+        url.searchParams.set('userId', paymentsReportUserIds.join(','));
       }
       if (appIdsToUse.length > 0 && appIdsToUse.length < apps.length) {
         url.searchParams.set('appIds', appIdsToUse.join(','));
@@ -912,15 +895,15 @@ const ReportsView: React.FC = () => {
 
       const url = new URL(`${API_BASE}/api/reports/points`, window.location.origin);
       const targetUserIds = isFullAccess ? pointsReportUserIds : (user?.id ? [user.id] : []);
-      if (targetUserIds.length > 0) {
-        url.searchParams.set('userId', targetUserIds.join(','));
-      } else {
+      if (isAllUsersSelected(targetUserIds)) {
         url.searchParams.set('userId', 'all');
-      }
-      if (testIdsToUse.length > 0) {
-        url.searchParams.set('testId', testIdsToUse.join(','));
       } else {
+        url.searchParams.set('userId', targetUserIds.join(','));
+      }
+      if (isAllAppTestsSelected(testIdsToUse, appIdsToUse)) {
         url.searchParams.set('testId', 'all');
+      } else {
+        url.searchParams.set('testId', testIdsToUse.join(','));
       }
       if (versionIdsToUse.length > 0) {
         url.searchParams.set('versionIds', versionIdsToUse.join(','));
@@ -965,9 +948,15 @@ const ReportsView: React.FC = () => {
       url.searchParams.set('startDate', pointsReportStartDate);
       url.searchParams.set('endDate', pointsReportEndDate);
       if (pointsReportVersionIds.length > 0) url.searchParams.set('versionIds', pointsReportVersionIds.join(','));
-      if (pointsReportTestIds.length > 0) url.searchParams.set('testId', pointsReportTestIds.join(','));
+      if (!isAllAppTestsSelected(pointsReportTestIds, pointsReportAppIds)) {
+        url.searchParams.set('testId', pointsReportTestIds.join(','));
+      } else {
+        url.searchParams.set('testId', 'all');
+      }
       if (pointsReportAppIds.length > 0 && pointsReportAppIds.length < apps.length) {
         url.searchParams.set('appIds', pointsReportAppIds.join(','));
+      } else if (pointsReportAppIds.length === 1) {
+        url.searchParams.set('appIds', String(pointsReportAppIds[0]));
       } else {
         url.searchParams.set('appIds', 'all');
       }
@@ -1444,7 +1433,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder={testReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                  value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? (testReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showTestDropdown ? testReportTestSearch : (testReportTestIds.length > 0 ? (isAllAppTestsSelected(testReportTestIds, testReportAppIds) ? 'All Tests' : testReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setTestReportTestSearch(e.target.value)}
                   onFocus={() => { setShowTestDropdown(true); setTestReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowTestDropdown(false), 150)}
@@ -1454,7 +1443,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={testReportTestIds.length === 0 || testReportTestIds.length === tests.filter(t => !t.is_deleted).length}
+                        checked={isAllAppTestsSelected(testReportTestIds, testReportAppIds)}
                         onChange={() => {
                           setTestReportTestIds([]);
                           setTestReportData(null);
@@ -1540,7 +1529,7 @@ const ReportsView: React.FC = () => {
                     : tests.filter(t => !t.is_deleted && ids.includes(Number(t.app_id || 1))).map(t => t.id);
                   setTestReportTestIds(newTests);
                   setTestReportSelectedStepId(null);
-                  fetchTestReportSteps(newTests);
+                  setTestReportSteps([]);
                   if (hasGeneratedReportRef.current && ids.length > 0) {
                     fetchTestReport(ids, newVersions, newTests, null);
                   }
@@ -1821,7 +1810,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder={passedReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                  value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? (passedReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showPassedTestDropdown ? passedReportTestSearch : (passedReportTestIds.length > 0 ? (isAllAppTestsSelected(passedReportTestIds, passedReportAppIds) ? 'All Tests' : passedReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setPassedReportTestSearch(e.target.value)}
                   onFocus={() => { setShowPassedTestDropdown(true); setPassedReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowPassedTestDropdown(false), 150)}
@@ -1831,7 +1820,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={passedReportTestIds.length === 0 || passedReportTestIds.length === tests.filter(t => !t.is_deleted).length}
+                        checked={isAllAppTestsSelected(passedReportTestIds, passedReportAppIds)}
                         onChange={() => {
                           setPassedReportTestIds([]);
                           setPassedReportData(null);
@@ -2196,7 +2185,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder="Search tests..."
-                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (failedReportTestIds.length === tests.filter(t => !t.is_deleted).length ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : failedReportTestSearch)}
+                  value={showFailedTestDropdown ? failedReportTestSearch : (failedReportTestIds.length > 0 ? (isAllAppTestsSelected(failedReportTestIds, failedReportAppIds) ? 'All Tests' : failedReportTestIds.map(id => tests.find(x => x.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setFailedReportTestSearch(e.target.value)}
                   onFocus={() => { setShowFailedTestDropdown(true); setFailedReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowFailedTestDropdown(false), 150)}
@@ -2206,7 +2195,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={failedReportTestIds.length === tests.filter(t => !t.is_deleted).length && tests.filter(t => !t.is_deleted).length > 0}
+                        checked={isAllAppTestsSelected(failedReportTestIds, failedReportAppIds)}
                         onChange={() => {
                           if (failedReportTestIds.length === tests.filter(t => !t.is_deleted).length) setFailedReportTestIds([]);
                           else setFailedReportTestIds(tests.filter(t => !t.is_deleted).map(t => t.id));
@@ -2569,7 +2558,7 @@ const ReportsView: React.FC = () => {
                   type="text"
                   className="user-input"
                   placeholder={pointsReportTestIds.length === 0 ? 'All Tests' : 'Search tests...'}
-                  value={showPointsTestDropdown ? pointsReportTestSearch : (pointsReportTestIds.length > 0 ? (pointsReportTestIds.length === tests.length ? 'All Tests' : pointsReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
+                  value={showPointsTestDropdown ? pointsReportTestSearch : (pointsReportTestIds.length > 0 ? (isAllAppTestsSelected(pointsReportTestIds, pointsReportAppIds) ? 'All Tests' : pointsReportTestIds.map(id => tests.find(t => t.id === id)?.name).filter(Boolean).join(', ')) : 'All Tests')}
                   onChange={e => setPointsReportTestSearch(e.target.value)}
                   onFocus={() => { setShowPointsTestDropdown(true); setPointsReportTestSearch(''); }}
                   onBlur={() => setTimeout(() => setShowPointsTestDropdown(false), 150)}
@@ -2579,7 +2568,7 @@ const ReportsView: React.FC = () => {
                     <label className="searchable-option" onMouseDown={e => e.preventDefault()}>
                       <input
                         type="checkbox"
-                        checked={pointsReportTestIds.length === 0 || pointsReportTestIds.length === tests.length}
+                        checked={isAllAppTestsSelected(pointsReportTestIds, pointsReportAppIds)}
                         onChange={() => {
                           setPointsReportTestIds([]);
                           setPointsReportData(null);
